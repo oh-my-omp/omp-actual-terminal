@@ -448,7 +448,16 @@ async function loadOmpShellPath(host: ExtensionAPI): Promise<() => string | unde
 		typeof runtime !== "object" || runtime === null || !("settings" in runtime)) {
 		throw new Error("omp-unified-exec: host lacks shellPath setting or pi.settings scope");
 	}
-	const get = handle.get.bind(handle);
+	return shellPathReader(handle.get.bind(handle), runtime);
+}
+
+/**
+ * The reader outlives the activation that built it: a parked subagent's
+ * terminal runtime keeps it. It is built here, outside the async loader,
+ * whose whole scope (the activation's `host`, and through it the
+ * AgentSession) a closure created inside it would keep alive.
+ */
+function shellPathReader(get: (settings: unknown) => unknown, runtime: { readonly settings: unknown }): () => string | undefined {
 	return () => {
 		const value: unknown = get(runtime.settings);
 		if (value === undefined) return undefined;

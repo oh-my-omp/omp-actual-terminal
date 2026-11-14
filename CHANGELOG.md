@@ -22,6 +22,7 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Fixed
 
+- Released a parked subagent's AgentSession: the `shellPath` reader kept by its parked terminal runtime was built inside an async loader whose scope held the activation's `host`, so every finished subagent's whole conversation stayed in memory for the life of the omp process (#121)
 - Made the held-open session note on Windows omit the POSIX `setsid` detach recipe and name only `kill_session`
 - Shortened home-directory paths in the terminal HUD using the platform separator, so paths under home display as `~\...` on Windows
 
