@@ -4,6 +4,8 @@ All notable changes to this project. **Newest entries go on top.**
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-15
+
 ### Breaking Changes
 
 - Refused explicit `cmd` shells on Windows before spawning a process
