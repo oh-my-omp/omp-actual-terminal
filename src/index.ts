@@ -653,6 +653,8 @@ async function runWriteStdin(
 		let writeFailure: string | null = null;
 		if (writeBytes) {
 			const ok = session.write(writeBytes);
+			// Synchronously after the write, before any exit it causes is reported.
+			if (ok) ctx.lifecycle.noteInput(session.id, writeBytes);
 			if (!ok && !session.hasExited) {
 				// Still running but the PTY no longer accepts input (terminal closed).
 				writeFailure = "PTY write failed: the terminal no longer accepts input; bytes were not delivered";
@@ -1049,7 +1051,6 @@ interface RuntimeOptions {
 function createRuntime(opts: RuntimeOptions): ExtensionCtx {
 	const { agentHost } = opts;
 	const notices = new NoticeDispatcher({
-		// Sent only while the agent is stopped, so it starts one model turn.
 		send: (message) => deliverNotice(ctx, agentHost, message),
 		gate: () => (ctx.host.kind === "attached" ? ctx.host.gate : undefined),
 		finished: () => agentHost !== undefined && ctx.agent !== undefined && agentHost.isAdopted(ctx.agent),
@@ -1252,13 +1253,24 @@ export function activate(
 			}
 		},
 	};
+	// omp's `deliverAs: "aside"`, absent from the Pi dependency's declarations.
+	const sendOmpMessage = (pi as ExtensionAPI & {
+		sendMessage(
+			message: { customType: string; content: string; display: boolean; details: unknown },
+			options: { deliverAs: "aside" },
+		): void;
+	}).sendMessage;
 	// This activation's delivery: present only while a runtime is attached to it.
 	const attachment: RuntimeHost = {
 		kind: "attached",
 		send: (message) => {
-			pi.sendMessage(
+			// Like todo-more's reminders: an aside joins a running agent at its next step
+			// boundary without interrupting it, and wakes an idle one with an
+			// agent-initiated turn instead of waiting for the user's next prompt.
+			sendOmpMessage.call(
+				pi,
 				{ customType: "unified-exec-notice", content: message.content, display: true, details: message.details },
-				{ triggerTurn: true, deliverAs: "followUp" },
+				{ deliverAs: "aside" },
 			);
 		},
 		gate,
@@ -1314,8 +1326,8 @@ export function activate(
 		ctx.lifecycle.commitToolReads(event.toolCallId, event.isError === true);
 		ctx.coordinator.handleToolExecutionEnd(event.toolCallId, event.isError === true);
 	});
-	// The run lifecycle the dispatcher delivers by: notices wait while a run is
-	// in progress and go out, merged, once it settles for good.
+	// The run lifecycle the dispatcher delivers by: notices go into a run in
+	// progress, and a run that settles for good opens the stop decision.
 	pi.on("agent_start", async () => {
 		ctx.notices.agentStarted();
 	});

@@ -204,7 +204,7 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		assert.equal(due!.session_id, sid);
 		assert.equal(due!.title, "held job");
 		assert.match(h.sent.at(-1)!.message.content, new RegExp(`session_id=${sid} title="held job"`));
-		assert.deepEqual(h.sent.at(-1)!.options, { triggerTurn: true, deliverAs: "followUp" });
+		assert.deepEqual(h.sent.at(-1)!.options, { deliverAs: "aside" });
 		assert.equal((await h.listed(sid))?.lifecycle?.phase, "grace");
 
 		const before = h.sent.length;
@@ -334,6 +334,28 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		assert.ok(await waitFor(async () => await h.listed(sid) === undefined));
 		await settle();
 		assert.deepEqual(h.sent, []);
+	});
+
+	it("a return after the agent's own Ctrl-C is a normal ending, not an abnormal return", async () => {
+		const h = makeHarness();
+		await h.emit("session_start");
+		const { sid } = await startBackground(h, "sleep 300", "interrupted");
+		await h.call("write_stdin", { session_id: sid, chars: "\u0003", yield_time_ms: 250 });
+		assert.ok(await waitFor(async () => (await h.listed(sid))?.running === false), "Ctrl-C ended the command");
+		await settle();
+		assert.equal(h.notices("abnormal_return").length, 0);
+		assert.equal((await h.listed(sid))?.lifecycle?.returned, "normally");
+	});
+
+	it("input after an interrupt the program survived lets a later failure count as abnormal", async () => {
+		const h = makeHarness();
+		await h.emit("session_start");
+		const { sid } = await startBackground(h, "trap '' INT; read line; exit 3", "survives interrupt");
+		await h.call("write_stdin", { session_id: sid, chars: "\u0003", yield_time_ms: 250 });
+		assert.equal((await h.listed(sid))?.running, true, "the program ignored the interrupt");
+		await h.call("write_stdin", { session_id: sid, chars: "go\r", yield_time_ms: 250 });
+		assert.ok(await waitFor(() => h.notices("abnormal_return").length === 1));
+		assert.match(h.notices("abnormal_return")[0]!.reason, /exit_code=3/);
 	});
 
 	it("with notice.graceReclaim on, one sweep's reclaims share one reclaimed follow-up; the setting is read live", async () => {

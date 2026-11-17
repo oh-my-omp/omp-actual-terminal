@@ -6,8 +6,9 @@
  * of `NoticeBody`. One formatter renders them, so each terminal is named by
  * its session id and the title given to exec_command, followed by a short
  * reason per notice. One dispatcher merges whatever is pending into a single
- * follow-up that starts a turn, and retries a failed send at the next safe
- * boundary.
+ * message, delivered as an aside: into a run in progress at its next step
+ * boundary, or as an agent-initiated turn while the agent is idle. It retries
+ * a failed send at the next safe boundary.
  */
 
 import { formatElapsedShort, formatElapsedShortUi } from "../src/format-time.ts";
@@ -436,12 +437,12 @@ function buildNoticeMessageForLocale(notices: readonly TerminalNotice[], localiz
 	}
 	const instruction = actionable
 		? t(
-			"Do not reply to the user about this notice: act on it with tools, then continue the original task.",
-			"不要向用户回复此通知：用工具处理它，然后继续原任务。",
+			"Handle it with tools where it bears on your work, then continue the current task; it needs no reply to the user.",
+			"在与当前工作相关时用工具处理它，然后继续当前任务；无需就此回复用户。",
 		)
 		: t(
-			"Do not reply to the user about this notice: no action is needed, end the turn without a message.",
-			"不要向用户回复此通知：无需操作，直接结束本轮且不要发送消息。",
+			"No action is needed; continue the current task. It needs no reply to the user.",
+			"无需操作，继续当前任务；无需就此回复用户。",
 		);
 	const content = fillTemplate<NoticeTemplateField>(template, {
 		summary,
@@ -575,7 +576,7 @@ interface Pending {
 }
 
 export interface NoticeDispatcherOptions {
-	/** Deliver one follow-up that starts a turn (pi.sendMessage wrapper). May throw or reject. */
+	/** Deliver one message as an aside (pi.sendMessage wrapper). May throw or reject. */
 	send: (message: NoticeMessage) => void | Promise<void>;
 	/** The current stop decisions; none delivers every notice with the default template. */
 	gate?: () => NoticeGate | undefined;
@@ -611,10 +612,11 @@ type HostPhase =
 
 /**
  * The one delivery path for terminal notices. While a run is in progress
- * notices only wait: omp keeps queued follow-ups out of reach, so sending them
- * mid-run would let each start its own turn after the stop. When the run
- * settles, whatever is pending goes out as one follow-up. Before the first
- * delivery after a stop with a final response, the gate decides whether that
+ * whatever is pending goes out after the debounce, and the host injects it at
+ * the run's next step boundary, so the agent reads it while working instead of
+ * in a turn of its own after its final answer. While the agent is stopped,
+ * pending notices go out as one message. Before the first delivery after a
+ * stop with a final response, the gate decides whether that
  * response finished the work; if so, every returned terminal is reclaimed, the
  * notices about terminals the lifecycle no longer owns are dropped, and the
  * agent counts as finished until its next run starts. A finished agent (done
@@ -661,10 +663,11 @@ export class NoticeDispatcher {
 		});
 	}
 
-	/** omp's `agent_start`: notices wait until the run settles, and a decision in progress no longer applies. */
+	/** omp's `agent_start`: pending notices go into the run, and a decision in progress no longer applies. */
 	agentStarted(): void {
 		this.abandonDecision();
 		this.phase = { kind: "running", response: undefined };
+		if (this.pending.size) this.schedule();
 	}
 
 	/** omp's `session_stop`: the main agent's final response of this run. */
@@ -717,13 +720,18 @@ export class NoticeDispatcher {
 		}
 	}
 
-	/** Deliver everything pending if the host is stopped. Safe from any boundary; a send or decision in flight defers the rest. */
+	/** Deliver everything pending. Safe from any boundary; a send or decision in flight defers the rest. */
 	flush(): void {
-		if (this.stopped || this.inFlight || this.phase.kind !== "stopped") return;
+		if (this.stopped || this.inFlight) return;
 		const gate = this.opts.gate?.();
 		const config = gate?.config() ?? DEFAULT_STOP_CONFIG;
 		this.dropWhere((entry) => !entry.current() || (config.mode === "off" && isLifecycleNotice(entry.notice.body.kind)));
 		if (this.pending.size === 0) return;
+		// A working agent reads them at its next step boundary; stop decisions belong to stops.
+		if (this.phase.kind === "running") {
+			this.send(config.noticeTemplate);
+			return;
+		}
 		const stop = this.phase.stop;
 		switch (stop.kind) {
 			case "deciding":
@@ -772,7 +780,7 @@ export class NoticeDispatcher {
 				// A terminal problem still wakes the agent after its terminal was collected.
 				this.dropWhere((entry) => !gate.tracked(entry.notice.identity.sessionId) && !isTerminalProblem(entry.notice.body.kind));
 			}
-			// A run that started meanwhile delivers the rest at its own stop.
+			// A run that started meanwhile took over delivery (agentStarted scheduled it).
 			if (generation !== this.generation) return;
 			this.phase = { kind: "stopped", stop: verdict.kind === "done" ? { kind: "done" } : { kind: "settled" } };
 			this.flush();

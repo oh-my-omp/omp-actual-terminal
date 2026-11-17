@@ -181,7 +181,8 @@ describe("exec_command on_exit", () => {
 			{ session_id: sid, title: "Test command", kind: "exit_wake" },
 		]);
 		assert.equal(message.display, true);
-		assert.deepEqual(options, { triggerTurn: true, deliverAs: "followUp" });
+		// An aside, which omp turns into an agent-initiated turn for an idle agent.
+		assert.deepEqual(options, { deliverAs: "aside" });
 		assert.match(message.content, new RegExp(`session_id=${sid}`));
 		assert.match(message.content, /exit_code=0/);
 		assert.ok(!message.content.includes("BYE"), "wake must not contain raw stdout");

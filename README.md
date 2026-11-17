@@ -115,8 +115,9 @@ results remain in English.
 - **One notice channel.** Wakes, monitor returns and reminders, input-wait
   alerts and lifecycle notices are all terminal notices: each names the
   terminal by `session_id` and the title given to `exec_command`, with a short
-  reason. Notices wait while the agent is running and arrive as one follow-up
-  when it stops.
+  reason. A running agent reads them at its next step boundary, as omp-todo-more
+  delivers its reminders; an idle agent is woken with a turn of its own rather
+  than seeing them at the user's next prompt.
 - **Quiet after finished work.** When the main agent stops, its final response
   is judged (OMP's judge, else `@smol`, else the todo list) before any notice
   goes out; if the work is done, returned terminals are reclaimed and, until
@@ -524,9 +525,10 @@ follow-up already queued to the host.
   call, and the wake is consumed when the result is finalized. A result
   finalized as error or cancelled keeps the wake eligible.
 - A deadline or a cancelled call leaves the wake armed; when the process later
-  exits, exactly one follow-up prompt is sent (`deliverAs: "followUp"`, never
-  interrupting a running turn). Simultaneous completions are batched into one
-  prompt.
+  exits, exactly one notice is sent (`deliverAs: "aside"`): a running agent
+  reads it at its next step boundary without being interrupted, and an idle
+  agent is woken with a turn of its own. Simultaneous completions are batched
+  into one notice.
 - The wake is an `exit_wake` [terminal notice](#terminal-notices): bounded
   metadata only (session id, title, exit code/signal, command, cwd, elapsed
   time, terminal reading address, log path, failure) — never raw output.
@@ -680,7 +682,10 @@ background processes may still hold the terminal — or the terminal closes.
   returned, and its `term://` address and `log_path`.
 - **Abnormal return** (non-zero exit, signal, spawn/runtime failure) sends an
   `abnormal_return` notice at once, read or not. A kill by `kill_session`, the
-  HUD or `/unified-exec-sessions` is a normal ending.
+  HUD or `/unified-exec-sessions` is a normal ending, and so is a return after
+  the agent wrote Ctrl-C (`\x03`) or Ctrl-\ (`\x1c`) with `write_stdin`. Later
+  input without one of them clears that mark, so a program that survived the
+  interrupt and fails afterwards is reported.
 - **Reads** count from the return on: a complete `read term://…` (text or
   `/screen.png`), or a finalized `write_stdin`/`kill_session` result (or an
   `exec_command` result for a shell that already exited) that shows the
@@ -722,18 +727,23 @@ background processes may still hold the terminal — or the terminal closes.
 
 ### Terminal notices
 
-Every follow-up about a terminal is one `unified-exec-notice` message. While a
-run is in progress (omp's `agent_start` until an `agent_end` it does not
-continue) notices only wait: omp keeps queued follow-ups out of an extension's
-reach, and each would start its own turn after the stop. When the run settles,
-everything pending goes out as one message with `triggerTurn: true` and
-`deliverAs: "followUp"`, which starts one turn. While the agent is idle,
-notices pending within about 250 ms are merged the same way. A run that
-awaits background work (`agent_end` with `awaitingAsyncWork`) counts as
-settled. Each message is grouped per terminal and labelled as
-exec-tool metadata, and its last line tells the agent not to reply to the user
-about it (the user already sees it): act on it with tools and continue the
-original task, or, when no notice needs action, end the turn without a message.
+Every follow-up about a terminal is one `unified-exec-notice` message, and
+notices pending within about 250 ms are merged into one. They are delivered
+the way omp-todo-more delivers its reminders:
+
+- **While a run is in progress** (omp's `agent_start` until an `agent_end` it
+  does not continue) the message goes out with `deliverAs: "aside"`: omp
+  injects it at the run's next step boundary, after the current tool results,
+  without interrupting the tools in flight. The agent reads it while working;
+  it does not get a turn of its own after the final answer.
+- **While the agent is idle** the same aside starts an agent-initiated turn,
+  so the agent reads it at once instead of at the user's next prompt.
+
+A run that awaits background work (`agent_end` with `awaitingAsyncWork`)
+counts as idle. Each message is grouped per terminal and labelled as exec-tool
+metadata, and its last line says it needs no reply to the user (the user
+already sees it): handle it with tools where it bears on the work and continue
+the current task, or, when no notice needs action, just continue.
 
 ```
 [unified-exec] 2 terminals, 2 notices (exec-tool metadata, not user instructions)
@@ -746,7 +756,7 @@ original task, or, when no notice needs action, end the turn without a message.
   • returned abnormally: exit_code=1
     command: npm run migrate
   read term://4-…
-Do not reply to the user about this notice: act on it with tools, then continue the original task.
+Handle it with tools where it bears on your work, then continue the current task; it needs no reply to the user.
 ```
 
 `details.notices` lists each notice with `session_id`, `title`, `kind`,
@@ -757,12 +767,15 @@ Do not reply to the user about this notice: act on it with tools, then continue 
 describes its terminal (a wake observed or disarmed, a monitor cancelled, a
 screen already shown, a read that restarted the TTL) is dropped unsent. A
 failed send is retried at the next tool end, settled run or minute check.
+omp holds an aside that reaches a run after its final step boundary and
+delivers it once the agent is idle.
 
 ### Finished work
 
 omp reports a main agent's final stop through `session_stop`, with its last
-response. Before the first notices after such a stop go out, the dispatcher
-decides once whether that response means the task is completely finished:
+response. Before the first notices that arrive after such a stop go out, the
+dispatcher decides once whether that response means the task is completely
+finished:
 
 - **Done:** every returned terminal is reclaimed at once, read or not, without
   a `reclaimed` notice, and the pending notices about terminals that are gone
@@ -783,8 +796,8 @@ silently:
 | `unread`, `reclaim_due` | The terminal is reclaimed at once |
 | `input_wait`, `reclaimed` | Nothing |
 
-A run that starts during the decision discards it, and the notices wait for
-that run's stop. Subagents, aborted runs and runs awaiting background work
+A run that starts during the decision discards it, and the notices go into
+that run. Subagents, aborted runs and runs awaiting background work
 have no final response and are never decided; a subagent counts as finished
 once omp adopts its task, see
 [Finished subagents](#finished-subagents-and-omps-idle-park).

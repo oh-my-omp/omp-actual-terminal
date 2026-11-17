@@ -49,7 +49,7 @@ omp plugin install https://github.com/oh-my-omp/omp-unified-exec#release --force
 - **输出就是终端上看到的内容。** 每个会话都经过无头终端模拟器。运行中的结果返回当前屏幕、自上次调用以来滚出的未见历史与光标位置，而不是叠加每次重绘；退出结果只返回最终活动屏，其余保留行通过 `terminal_url` 读取。模拟器会像真实终端一样回应光标位置、设备属性与默认颜色查询，因此等待回应或选择配色的程序表现与真实终端一致。
 - **输出有上限，完整内容可找回。** 模型看到的每个结果都从尾部截取，最多 50 KiB / 2000 行，并去掉终端控制序列；每个会话的完整原始输出都写入 `log_path`。
 - **终端生命周期。** 后台终端的命令返回后，终端仍保留在列表里，直到被回收。正常返回且已没有任何进程的终端，保留 5 分钟后静默回收，读没读过都一样；其 `term://` 和日志仍可读。异常返回立即提醒；对异常返回的终端、或正常返回但仍有进程的终端，返回或最近一次读取 30 分钟后，从未读过的收到一条读取提醒，读过的收到一条即将回收提醒，并有 5 分钟反悔期，期满仍未再读就结束其剩余进程并回收；除非打开插件设置 `notice.graceReclaim`，回收不另发通知。见[终端生命周期](#terminal-lifecycle)。
-- **统一的通知通道。** 完成唤醒、monitor 的返回与提醒、等待输入提醒和生命周期通知都是终端通知：每条用 `session_id` 和传给 `exec_command` 的标题指明终端，并附一句简短原因。agent 运行期间通知只等待，停下时合并成一条后续消息送达。
+- **统一的通知通道。** 完成唤醒、monitor 的返回与提醒、等待输入提醒和生命周期通知都是终端通知：每条用 `session_id` 和传给 `exec_command` 的标题指明终端，并附一句简短原因。运行中的 agent 在下一个步骤边界读到通知，与 omp-todo-more 投递提醒的方式相同；空闲的 agent 被唤醒、开始一轮，而不是等到用户下一次发言才看到。
 - **工作完成后保持安静。** 主 agent 停下时，任何通知发出之前先判定它的最终回复（OMP 的 judge，否则 `@smol`，否则 Todo 列表）；工作已完成时，已返回的终端被回收，并且直到下一次运行开始，只有终端出问题（`abnormal_return`）才触发新的轮次。已完成的子 agent 遵循同一规则。见[完成的工作](#finished-work)。
 - **可选的完成唤醒。** `on_exit: "wake"` 让后台进程在无人观察时退出后唤醒一次 agent；`set_on_exit` 可以取消。
 - **等待匹配输出。** `monitor` 不消费输出地观察已有会话，在匹配批次、judge 模型判定满足所述意图的新屏幕或结束时唤醒模型；默认最多成功返回十次。monitor 20 分钟没有返回时，会提醒 agent 一次去检查会话。
@@ -302,7 +302,7 @@ write_stdin chars_b64="G3s6wgo="  → exact 5 decoded bytes
 > 终端的完成要么通过一个已定稿的工具结果送达，**要么**触发一条合成的模型提示——绝不会两者都有。
 
 - 在 `write_stdin` 观察期间发生的退出由该调用返回，结果定稿时消耗唤醒。结果以错误或取消定稿时，唤醒仍然有效。
-- 到期或被取消的调用保留唤醒；进程之后退出时，恰好发送一条后续提示（`deliverAs: "followUp"`，不会打断正在进行的轮次）。同时发生的多个完成会合并成一条提示。
+- 到期或被取消的调用保留唤醒；进程之后退出时，恰好发送一条通知（`deliverAs: "aside"`）：运行中的 agent 在下一个步骤边界读到它，不被打断；空闲的 agent 被唤醒，开始一轮。同时发生的多个完成会合并成一条通知。
 - 唤醒是一条 `exit_wake` [终端通知](#terminal-notices)，只包含有限的元数据（会话 id、标题、退出码/信号、命令、cwd、耗时、终端读取地址、日志路径、失败信息）——绝不包含原始输出。
 - `kill_session`、`/unified-exec-sessions` 命令、对存活进程的 LRU 淘汰以及 `session_shutdown` 都会取消唤醒；kill 失败则恢复唤醒。自然退出、尚未通知就被淘汰的唤醒会话会保留一条有上限的墓碑记录，唤醒仍会送达。
 
@@ -393,7 +393,7 @@ whiptail/dialog 前端到了 PTY 上只是普通的绘制（备用屏、隐藏�
 从交出 `session_id` 的那次结果起，到回收为止，终端归终端生命周期管理。命令**返回**指 shell 退出（后台进程可能仍持有终端），或终端关闭。
 
 - **正常返回且已没有任何进程**（终端已关闭，进程组也已清空）：终端**保留 5 分钟**后静默回收，读没读过都一样，不发 `unread`、`reclaim_due` 或 `reclaimed` 通知；读取不会延长这 5 分钟。后台任务比 shell 活得久时，从发现它们全部结束的那次检查起算。之后用这个 `session_id` 调用工具（`write_stdin`、`monitor`、`set_on_exit`、`kill_session`）时，回答会说明它已被回收、如何返回，并给出其 `term://` 地址和 `log_path`。
-- **异常返回**（非零退出、信号、启动/运行时失败）立即发送一条 `abnormal_return` 通知，读没读过都发。`kill_session`、HUD 或 `/unified-exec-sessions` 的 kill 算正常结束。
+- **异常返回**（非零退出、信号、启动/运行时失败）立即发送一条 `abnormal_return` 通知，读没读过都发。`kill_session`、HUD 或 `/unified-exec-sessions` 的 kill 算正常结束；agent 用 `write_stdin` 写入 Ctrl-C（`\x03`）或 Ctrl-\（`\x1c`）之后的返回也算正常结束。之后不含这两个字符的输入会清除这个标记，所以扛过中断、之后才失败的程序仍会被报告。
 - **读取**从返回起计：一次完整的 `read term://…`（文本或 `/screen.png`），或一次已定稿、展示了已返回终端的 `write_stdin`/`kill_session` 结果（shell 已退出时的 `exec_command` 结果也算）。出错或取消的结果不算。`list_sessions`、`monitor` 的 End 和唤醒只报告状态，不算读取。
 - 异常返回的终端，或正常返回但仍有进程的终端，在返回或最近一次读取**30 分钟**后：
   - 从未读过：发一条 `unread` 通知；检查会一直保留终端到被读（只有[完成的工作](#finished-work)会回收未读终端；已完成的 agent 的终端不发提醒，直接回收）；
@@ -409,7 +409,12 @@ whiptail/dialog 前端到了 PTY 上只是普通的绘制（备用屏、隐藏�
 
 ### 终端通知
 
-每条有关终端的后续消息都是一条 `unified-exec-notice`。一次运行进行期间（omp 的 `agent_start` 到一次它不再继续的 `agent_end`）通知只等待：omp 不让扩展触及已排队的后续消息，而每条排队消息都会在停下后各自触发一轮。运行结束时，待发的全部通知以 `triggerTurn: true`、`deliverAs: "followUp"` 合并成一条发出，触发一轮。agent 空闲时，约 250 ms 内待发的通知同样合并。等待后台工作的运行（带 `awaitingAsyncWork` 的 `agent_end`）也算已结束。消息按终端分组，标明是 exec 工具的元数据，最后一行要求 agent 不要就此回复用户（用户已经看得到它）：用工具处理后继续原任务；没有通知需要处理时，不发消息直接结束本轮。
+每条有关终端的后续消息都是一条 `unified-exec-notice`，约 250 ms 内待发的通知合并成一条。投递方式与 omp-todo-more 投递提醒相同：
+
+- **一次运行进行期间**（omp 的 `agent_start` 到一次它不再继续的 `agent_end`），消息以 `deliverAs: "aside"` 发出：omp 在这次运行的下一个步骤边界、当前工具结果之后注入它，不打断正在执行的工具。agent 在工作中读到它，不会在最终回复之后为它另起一轮。
+- **agent 空闲时**，同样的 aside 开始一轮由 agent 发起的回合，agent 立即读到它，而不是等到用户下一次发言。
+
+等待后台工作的运行（带 `awaitingAsyncWork` 的 `agent_end`）算作空闲。消息按终端分组，标明是 exec 工具的元数据，最后一行说明它无需回复用户（用户已经看得到它）：与工作相关时用工具处理，然后继续当前任务；没有通知需要处理时直接继续。
 
 ```
 [unified-exec] 2 terminals, 2 notices (exec-tool metadata, not user instructions)
@@ -422,16 +427,16 @@ whiptail/dialog 前端到了 PTY 上只是普通的绘制（备用屏、隐藏�
   • returned abnormally: exit_code=1
     command: npm run migrate
   read term://4-…
-Do not reply to the user about this notice: act on it with tools, then continue the original task.
+Handle it with tools where it bears on your work, then continue the current task; it needs no reply to the user.
 ```
 
-`details.notices` 逐条列出 `session_id`、`title`、`kind`、`reason`、`terminal_url`、`log_path` 和带类型的 `body`。种类：`exit_wake`、`abnormal_return`、`monitor_match`、`monitor_judge_match`、`monitor_judge_failed`、`monitor_end`、`monitor_silent`、`input_wait`、`unread`、`reclaim_due`、`reclaimed`。不再描述其终端的通知（唤醒已被观察或取消、monitor 已取消、屏幕已展示过、一次读取已重启 TTL）不发送直接丢弃。发送失败时在下一次工具结束、运行结束或每分钟检查时重试。
+`details.notices` 逐条列出 `session_id`、`title`、`kind`、`reason`、`terminal_url`、`log_path` 和带类型的 `body`。种类：`exit_wake`、`abnormal_return`、`monitor_match`、`monitor_judge_match`、`monitor_judge_failed`、`monitor_end`、`monitor_silent`、`input_wait`、`unread`、`reclaim_due`、`reclaimed`。不再描述其终端的通知（唤醒已被观察或取消、monitor 已取消、屏幕已展示过、一次读取已重启 TTL）不发送直接丢弃。发送失败时在下一次工具结束、运行结束或每分钟检查时重试。在运行最后一个步骤边界之后才到达的 aside 由 omp 保留，agent 空闲后再送达。
 
 <a id="finished-work"></a>
 
 ### 完成的工作
 
-omp 用 `session_stop` 报告主 agent 的最终停止，并带上它的最后一条回复。这次停止之后的第一批通知发出之前，分发器判定一次这条回复是否表示任务已完全完成：
+omp 用 `session_stop` 报告主 agent 的最终停止，并带上它的最后一条回复。这次停止之后到达的第一批通知发出之前，分发器判定一次这条回复是否表示任务已完全完成：
 
 - **已完成：**立即回收全部已返回的终端，读没读过都回收，不发 `reclaimed` 通知；待发通知中关于已消失终端的那些被丢弃，终端问题除外。运行中的终端保留，agent 在下一次运行开始（或会话切换、分支）之前都算已完成。
 - **未完成，或无法判定：**全部通知照常送达。
@@ -445,7 +450,7 @@ omp 用 `session_stop` 报告主 agent 的最终停止，并带上它的最后�
 | `unread`、`reclaim_due` | 终端立即回收 |
 | `input_wait`、`reclaimed` | 无 |
 
-判定期间开始的运行会作废这次判定，通知等到那次运行停下。子 agent、被中止的运行和等待后台工作的运行没有最终回复，从不判定；子 agent 在 omp 收养它的任务后即算已完成，见[已完成的子 agent](#finished-subagents-and-omps-idle-park)。
+判定期间开始的运行会作废这次判定，通知送入那次运行。子 agent、被中止的运行和等待后台工作的运行没有最终回复，从不判定；子 agent 在 omp 收养它的任务后即算已完成，见[已完成的子 agent](#finished-subagents-and-omps-idle-park)。
 
 omomp 中 `omp-unified-exec` 段的 `stop` 选择判定方式：
 

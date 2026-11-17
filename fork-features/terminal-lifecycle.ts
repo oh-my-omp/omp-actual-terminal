@@ -10,7 +10,8 @@
  *     look needs. A normal return whose processes end later lingers from the
  *     moment the lifecycle sees them gone; reads do not extend the linger;
  *   - an abnormal return (non-zero exit, signal, failure) is reported at once;
- *     kills by the agent or a human are normal endings;
+ *     kills by the agent or a human, and returns after the agent's own
+ *     interrupt (Ctrl-C or Ctrl-\ written with write_stdin), are normal endings;
  *   - for every other returned terminal, TTL after the return or the last
  *     read, the minute sweep reminds the agent: a terminal never read gets
  *     one read reminder and is kept until read; a read terminal gets a
@@ -73,7 +74,25 @@ export interface LifecycleSession {
 	processesRemain(): boolean;
 }
 
-type Ending = "natural" | "killed";
+/**
+ * What the agent or a human did to end the command: a kill, or an interrupt
+ * the agent wrote as input that later input has not followed. Either makes
+ * the coming return a normal ending.
+ */
+interface Ending {
+	readonly killed: boolean;
+	readonly interrupted: boolean;
+}
+
+const NATURAL: Ending = { killed: false, interrupted: false };
+
+/** Ctrl-C (ETX, SIGINT) and Ctrl-\ (FS, SIGQUIT): input that asks the foreground program to end. */
+const INTERRUPT_BYTES: readonly number[] = [0x03, 0x1c];
+
+/** Whether written input carries an interrupt control character. */
+export function carriesInterrupt(bytes: Uint8Array): boolean {
+	return INTERRUPT_BYTES.some((byte) => bytes.includes(byte));
+}
 
 type ReadState = { readonly kind: "unread" } | { readonly kind: "read"; readonly at: number };
 
@@ -126,9 +145,9 @@ export function identityOf(session: LifecycleSession): TerminalIdentity {
 	return { sessionId: session.id, title: session.title, terminalUrl: session.terminalUrl, logPath: session.logPath };
 }
 
-/** Pure: how a command returned. Kills are deliberate and therefore normal. */
+/** Pure: how a command returned. Kills and the agent's interrupts are deliberate and therefore normal. */
 export function classifyReturn(exit: ShellExit, failureMessage: string | null, ending: Ending): TerminalOutcome {
-	if (ending === "killed") return { kind: "normal" };
+	if (ending.killed || ending.interrupted) return { kind: "normal" };
 	const failure = failureMessage ?? exit.failureMessage;
 	if (failure) return { kind: "abnormal", reason: `failure: ${failure}` };
 	if (exit.signal) return { kind: "abnormal", reason: `signal=${exit.signal}` };
@@ -164,7 +183,7 @@ export class TerminalLifecycle {
 	/** Begin owning a terminal; call when exec_command commits to returning its session_id. */
 	track(session: LifecycleSession): void {
 		if (this.stopped || this.tracked.has(session.id)) return;
-		const entry: Tracked = { session, life: { kind: "running", ending: "natural" }, unsubscribe: [] };
+		const entry: Tracked = { session, life: { kind: "running", ending: NATURAL }, unsubscribe: [] };
 		this.tracked.set(session.id, entry);
 		entry.unsubscribe.push(
 			session.onShellExit((exit) => this.returned(entry, exit)),
@@ -194,13 +213,25 @@ export class TerminalLifecycle {
 	/** A kill is about to be sent: unless the command already returned, it ends normally. */
 	noteKill(sessionId: number): void {
 		const entry = this.tracked.get(sessionId);
-		if (entry?.life.kind === "running") entry.life = { kind: "running", ending: "killed" };
+		if (entry?.life.kind === "running") entry.life = { kind: "running", ending: { ...entry.life.ending, killed: true } };
 	}
 
-	/** The kill did not land: a later return is judged on its own. */
+	/** The kill did not land: a later return is judged without it. */
 	killFailed(sessionId: number): void {
 		const entry = this.tracked.get(sessionId);
-		if (entry?.life.kind === "running") entry.life = { kind: "running", ending: "natural" };
+		if (entry?.life.kind === "running") entry.life = { kind: "running", ending: { ...entry.life.ending, killed: false } };
+	}
+
+	/**
+	 * The agent's input reached a running terminal. An interrupt makes the
+	 * coming return a normal ending; input without one means the program went
+	 * on after any earlier interrupt, so a later return is judged on its own.
+	 */
+	noteInput(sessionId: number, bytes: Uint8Array): void {
+		const entry = this.tracked.get(sessionId);
+		if (entry?.life.kind === "running") {
+			entry.life = { kind: "running", ending: { ...entry.life.ending, interrupted: carriesInterrupt(bytes) } };
+		}
 	}
 
 	/**

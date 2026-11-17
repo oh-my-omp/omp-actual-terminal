@@ -64,19 +64,29 @@ function harness(config: StopConfig = DEFAULT_STOP_CONFIG): Harness {
 }
 
 describe("notice delivery around runs", () => {
-	it("holds notices while a run is in progress and merges them into one follow-up when it settles", async () => {
+	it("delivers notices into a run in progress, merged, without a stop decision", async () => {
 		const h = harness();
 		h.notices.agentStarted();
-		void h.notices.submit(match(1));
-		void h.notices.submit(match(2));
+		h.notices.recordResponse("working");
+		const first = h.notices.submit(match(1));
+		const second = h.notices.submit(match(2));
 		h.notices.flush();
-		assert.equal(h.sent.length, 0);
-		h.notices.agentStopped("final");
+		assert.deepEqual([await first, await second], ["delivered", "delivered"] satisfies NoticeOutcome[]);
 		assert.equal(h.sent.length, 1);
 		assert.equal(h.sent[0].details.notices.length, 2);
+		assert.equal(h.inputs.length, 0, "stop decisions belong to stops");
+		h.notices.agentStopped("final");
+		assert.equal(h.inputs.length, 0, "nothing pending, nothing to decide");
 	});
 
-	it("keeps holding across agent_end that omp continues, and never decides a wait for background work", async () => {
+	it("tells the agent a batch needing no action needs neither action nor a reply", () => {
+		const h = harness();
+		void h.notices.submit(notice(1, { kind: "reclaim_due", outcome: { kind: "normal" }, lastReadAgoMs: 1_800_000, graceMs: 300_000, ttlMs: 1_800_000 }));
+		h.notices.flush();
+		assert.match(h.sent[0].content, /No action is needed; continue the current task\. It needs no reply to the user\.$/);
+	});
+
+	it("never decides a stop that waits for background work", async () => {
 		const h = harness();
 		h.notices.agentStarted();
 		h.notices.recordResponse("waiting for the subagent");
@@ -153,7 +163,7 @@ describe("notice delivery around runs", () => {
 		}
 	});
 
-	it("a run starting during the decision discards its verdict; the notices wait for the next stop", async () => {
+	it("a run starting during the decision discards its verdict and takes the notices", async () => {
 		const h = harness();
 		h.tracked.add(1);
 		h.returned.add(1);
@@ -163,11 +173,10 @@ describe("notice delivery around runs", () => {
 		h.notices.agentStopped("final");
 		h.notices.agentStarted();
 		h.resolveDetect({ kind: "done", detector: "judge" });
-		h.notices.recordResponse("Still working.");
-		h.notices.agentStopped("final");
-		assert.equal(h.inputs.at(-1)?.lastResponse, "Still working.");
-		h.resolveDetect({ kind: "not_done", detector: "judge" });
+		await Promise.resolve();
+		h.notices.flush();
 		assert.equal(await delivered, "delivered");
+		assert.equal(h.inputs.length, 1);
 		assert.equal(h.collects, 0, "the discarded done verdict reclaimed nothing");
 	});
 
@@ -187,7 +196,7 @@ describe("notice delivery around runs", () => {
 		const h = harness({ ...DEFAULT_STOP_CONFIG, noticeTemplate: "{notice_count} for {terminal_count}: {instruction}" });
 		void h.notices.submit(match(1));
 		h.notices.flush();
-		assert.match(h.sent[0].content, /^1 for 1: Do not reply to the user/);
+		assert.match(h.sent[0].content, /^1 for 1: Handle it with tools where it bears on your work/);
 	});
 
 	it("a finished (adopted) agent is woken only by a terminal problem, which carries the rest of the batch", async () => {

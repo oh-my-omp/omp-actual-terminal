@@ -12,6 +12,7 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Changed
 
+- Delivered terminal notices as omp asides: a running agent reads them at its next step boundary instead of in a turn of its own after its final answer, and an idle agent is woken by an agent-initiated turn; the notice's last line now says it needs no reply to the user instead of telling the agent to end its turn
 - Used omp's pi-shell as the Windows default shell and `bash` on other platforms
 - Resolved the default shell from the explicit argument, `shellPath`, `SHELL`, then the platform default, treating a blank argument as no choice
 - Used `-Command` for PowerShell/pwsh and `-c` for other shells
@@ -24,6 +25,7 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Fixed
 
+- Counted a return after the agent wrote Ctrl-C or Ctrl-\ with `write_stdin` as a normal ending, so an interrupt the agent sent no longer raises `abnormal_return`; later input without one clears the mark
 - Released a parked subagent's AgentSession: the `shellPath` reader kept by its parked terminal runtime was built inside an async loader whose scope held the activation's `host`, so every finished subagent's whole conversation stayed in memory for the life of the omp process (#121)
 - Made the held-open session note on Windows omit the POSIX `setsid` detach recipe and name only `kill_session`
 - Shortened home-directory paths in the terminal HUD using the platform separator, so paths under home display as `~\...` on Windows
