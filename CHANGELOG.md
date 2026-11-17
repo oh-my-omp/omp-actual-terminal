@@ -4,6 +4,8 @@ All notable changes to this project. **Newest entries go on top.**
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-11-18
+
 ### Changed
 
 - Delivered terminal notices as omp asides: a running agent reads them at its next step boundary instead of in a turn of its own after its final answer, and an idle agent is woken by an agent-initiated turn; the notice's last line now says it needs no reply to the user instead of telling the agent to end its turn
