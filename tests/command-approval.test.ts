@@ -2,10 +2,10 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
-	approveCommand, getBashApprovalPatternRules, type ApprovalHelpers, type BashApprovalPatternRule,
-	type CommandApproval, type CommandApprovalHost,
+	approveBoundCommand, approveCommand, getBashApprovalPatternRules, type ApprovalHelpers, type BashApprovalPatternRule,
+	type BashPatternViews, type CommandApproval, type CommandApprovalHost,
 } from "../fork-features/command-approval.ts";
-import { bindSession, bindingContext, recheckBinding, type BoundSession } from "../fork-features/session-binding.ts";
+import { bindSession, bindingContext, recheckBinding, type BoundSession, type HostSettings } from "../fork-features/session-binding.ts";
 import { activate } from "../src/index.ts";
 import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";
 
@@ -22,6 +22,21 @@ const helpers: ApprovalHelpers = {
 		return [{ text: "true", argv: ["true"] }, { text: "echo x", argv: ["echo", "x"] }];
 	},
 	truncateForPrompt: (command) => command.slice(0, 40),
+};
+
+/** One view only: the session's rules are also the operator view, as when no operator layer exists. */
+const single = (rules: readonly BashApprovalPatternRule[]): BashPatternViews => ({ session: rules, authority: rules });
+
+// Splits on the separators the approval tests use; real tokenizer parity runs in real omp.
+const segmentHelpers: ApprovalHelpers = {
+	criticalPatterns: [/rm -rf/, /git reset/],
+	tokenizeShellSegments: (command) => command.split(/&&|\|\||;|\|/u)
+		.map((segment) => segment.trim().split(/\s+/u).filter((word) => word.length > 0))
+		.filter((words) => words.length > 0),
+	extractLiteralAndChainSegments: (command) => command.split("&&").map((text) => ({
+		text: text.trim(), argv: text.trim().split(/\s+/u),
+	})),
+	truncateForPrompt: (command) => command,
 };
 
 interface RegisteredTool {
@@ -70,14 +85,14 @@ describe("command approval port", () => {
 
 	it("keeps first-match semantics rather than strictest-rule sorting", () => {
 		for (const first of ["allow", "prompt", "deny"] as const) {
-			const decision = approveCommand("true", [{ match: "true", approval: first }, { match: "*", approval: "deny" }], undefined, helpers);
+			const decision = approveCommand("true", single([{ match: "true", approval: first }, { match: "*", approval: "deny" }]), undefined, helpers);
 			assert.equal(typeof decision === "object" && "policy" in decision ? decision.policy : decision, first);
 		}
 	});
 
 	it("does not carry a standalone allow across shell control", () => {
 		const literalHelpers = { ...helpers, tokenizeShellSegments: () => [["true"], ["echo", "x"]] };
-		assert.equal(approveCommand("true && echo x", [{ match: "true", approval: "allow" }], undefined, literalHelpers), "exec");
+		assert.equal(approveCommand("true && echo x", single([{ match: "true", approval: "allow" }]), undefined, literalHelpers), "exec");
 	});
 
 	it("aggregates whole-chain restrictions while preserving segment first matches", () => {
@@ -86,29 +101,104 @@ describe("command approval port", () => {
 			{ match: "true && echo x", approval: "deny" },
 			{ match: "true", approval: "allow" }, { match: "echo x", approval: "allow" },
 		];
-		assert.deepEqual(approveCommand("true && echo x", rules, "/bin/zsh", helpers), {
+		assert.deepEqual(approveCommand("true && echo x", single(rules), "/bin/zsh", helpers), {
 			tier: "exec", override: true, policy: "deny", reason: "Blocked by bash pattern: true && echo x",
 		});
-		assert.equal(approveCommand("true && echo x", rules.slice(2, 3), "/bin/zsh", helpers), "exec");
-		assert.deepEqual(approveCommand("true && echo x", rules.slice(2), "/bin/zsh", helpers), { tier: "write", policy: "allow" });
-		assert.deepEqual(approveCommand("true && echo x", [rules[0], ...rules.slice(2)], "/bin/zsh", helpers), {
+		assert.equal(approveCommand("true && echo x", single(rules.slice(2, 3)), "/bin/zsh", helpers), "exec");
+		assert.deepEqual(approveCommand("true && echo x", single(rules.slice(2)), "/bin/zsh", helpers), { tier: "write", policy: "allow" });
+		assert.deepEqual(approveCommand("true && echo x", single([rules[0], ...rules.slice(2)]), "/bin/zsh", helpers), {
 			tier: "exec", override: true, policy: "prompt", reason: "Prompt required by bash pattern: true && echo x",
 		});
-		assert.deepEqual(approveCommand("true && echo x", [...rules.slice(2), { match: "true", approval: "deny" }], "/bin/zsh", helpers), { tier: "write", policy: "allow" });
+		assert.deepEqual(approveCommand("true && echo x", single([...rules.slice(2), { match: "true", approval: "deny" }]), "/bin/zsh", helpers), { tier: "write", policy: "allow" });
 	});
 
-	it("preserves deny and critical precedence", () => {
-		assert.deepEqual(approveCommand("rm -rf /", [{ match: "*", approval: "deny" }], undefined, helpers), {
+	it("preserves deny and critical precedence, with an explicit prompt ahead of critical", () => {
+		assert.deepEqual(approveCommand("rm -rf /", single([{ match: "*", approval: "deny" }]), undefined, helpers), {
 			tier: "exec", override: true, policy: "deny", reason: "Blocked by bash pattern: *",
 		});
-		assert.deepEqual(approveCommand("rm -rf /", [{ match: "*", approval: "prompt" }], undefined, helpers), {
+		assert.deepEqual(approveCommand("rm -rf /", single([{ match: "*", approval: "prompt" }]), undefined, helpers), {
+			tier: "exec", override: true, policy: "prompt", reason: "Prompt required by bash pattern: *",
+		});
+		assert.deepEqual(approveCommand("rm -rf /", single([]), undefined, helpers), {
 			tier: "exec", override: true, reason: "Critical pattern detected",
+		});
+	});
+});
+
+describe("command approval host precedence", () => {
+	const allowNpm: BashApprovalPatternRule = { match: "npm publish *", approval: "allow" };
+
+	it("lets no project allow lift an operator deny or prompt, compound or not", () => {
+		const deny = { match: "npm publish *", approval: "deny" } as const;
+		const prompt = { match: "npm publish *", approval: "prompt" } as const;
+		assert.deepEqual(approveCommand("npm publish pkg", { session: [allowNpm], authority: [deny] }, undefined, segmentHelpers), {
+			tier: "exec", override: true, policy: "deny", reason: "Blocked by bash pattern: npm publish *",
+		});
+		assert.deepEqual(approveCommand("npm publish pkg", { session: [allowNpm], authority: [prompt] }, undefined, segmentHelpers), {
+			tier: "exec", override: true, policy: "prompt", reason: "Prompt required by bash pattern: npm publish *",
+		});
+		assert.deepEqual(approveCommand("cd x && npm publish pkg", { session: [allowNpm], authority: [deny] }, "/bin/zsh", segmentHelpers), {
+			tier: "exec", override: true, policy: "deny", reason: "Blocked by bash pattern: npm publish *",
+		});
+	});
+
+	it("keeps a project allow effective when no operator layer restricts the command", () => {
+		assert.deepEqual(approveCommand("npm publish pkg", { session: [allowNpm], authority: [] }, undefined, segmentHelpers), { tier: "write", policy: "allow" });
+		assert.equal(approveCommand("npm publish pkg", { session: [], authority: [] }, undefined, segmentHelpers), "exec");
+	});
+
+	it("lets a later segment deny beat an earlier segment prompt on a line with shell control", () => {
+		assert.deepEqual(approveCommand("cd x && rm -rf y", single([
+			{ match: "cd *", approval: "prompt" }, { match: "rm -rf *", approval: "deny" },
+		]), undefined, segmentHelpers), {
+			tier: "exec", override: true, policy: "deny", reason: "Blocked by bash pattern: rm -rf *",
+		});
+	});
+
+	it("judges an explicit prompt rule before a critical pattern", () => {
+		assert.deepEqual(approveCommand("git reset --hard", single([{ match: "git reset *", approval: "prompt" }]), undefined, segmentHelpers), {
+			tier: "exec", override: true, policy: "prompt", reason: "Prompt required by bash pattern: git reset *",
+		});
+	});
+
+	it("matches restriction rules after leading environment assignments", () => {
+		assert.deepEqual(approveCommand("FOO=1 npm publish pkg", single([{ match: "npm publish *", approval: "deny" }]), undefined, segmentHelpers), {
+			tier: "exec", override: true, policy: "deny", reason: "Blocked by bash pattern: npm publish *",
+		});
+	});
+
+	it("reads the operator layers from the bound session's grantAuthority view", () => {
+		const operator: HostSettings = { getShellConfig: () => ({ shell: "/bin/bash" }) };
+		const session: HostSettings = { getShellConfig: () => ({ shell: "/bin/bash" }), grantAuthority: () => operator };
+		const rulesBySettings = new Map<HostSettings, readonly BashApprovalPatternRule[]>([
+			[session, [allowNpm]], [operator, [{ match: "npm publish *", approval: "deny" }]],
+		]);
+		const host: CommandApprovalHost = {
+			registeredSession: () => undefined,
+			approvalRules: (settings) => rulesBySettings.get(settings) ?? [],
+			allowCompoundCommands: () => false,
+			helpers: segmentHelpers,
+		};
+		assert.deepEqual(approveBoundCommand(host, { kind: "bound", agentId: "main", session: { settings: session, sessionManager: {} } }, { cmd: "npm publish pkg" }), {
+			tier: "exec", override: true, policy: "deny", reason: "Blocked by bash pattern: npm publish *",
 		});
 	});
 });
 
 describe("approval session binding via activate", () => {
 	it("pending and Unbound do not read settings, including dangerous commands", async () => {
+		// The formatted text is person-facing; pin the language so the assertions are about approval.
+		const savedLanguage = process.env.OMOMP_LANG;
+		process.env.OMOMP_LANG = "en";
+		try {
+			await runPendingAndUnbound();
+		} finally {
+			if (savedLanguage === undefined) delete process.env.OMOMP_LANG;
+			else process.env.OMOMP_LANG = savedLanguage;
+		}
+	});
+
+	async function runPendingAndUnbound() {
 		const host: CommandApprovalHost = {
 			registeredSession: () => undefined,
 			approvalRules() { throw new Error("must not read rules"); },
@@ -126,7 +216,7 @@ describe("approval session binding via activate", () => {
 		}
 		assert.deepEqual(h.tool.formatApprovalDetails!({ cmd: "rm -rf /definitely-not-here-uexec" }), ["Command: rm -rf /definitely-not-here-uexec"]);
 		assert.deepEqual(h.tool.formatApprovalDetails!({}), ["Command: (missing)"]);
-	});
+	}
 
 	it("binds once, reads live settings, and only rechecks identity on switches/branches", async () => {
 		const manager = {};
