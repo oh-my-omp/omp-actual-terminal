@@ -3,7 +3,7 @@
  * wake metadata. Keep wall-clock math in callers; these only format ms → text.
  */
 
-import { tr } from "./i18n.ts";
+import { tr } from "../fork-features/omomp-shared/i18n.ts";
 
 /** Widget / session lists: floored seconds → `45s`, `2m05s`, `2h40m`. */
 export function formatElapsed(ms: number): string {

@@ -1,4 +1,4 @@
-import type { Language } from "../src/i18n.ts";
+import type { Language } from "./omomp-shared/i18n.ts";
 
 /** Owned diagnostics carry facts until the human notification boundary. */
 export type StopConfigReason =
@@ -17,7 +17,7 @@ export type ModelFailure =
 
 export type StopReason =
 	| { readonly kind: "todo_unavailable" }
-	| { readonly kind: "todo_no_counts" }
+	| { readonly kind: "todo_malformed"; readonly detail: string }
 	| { readonly kind: "todo_empty" }
 	| { readonly kind: "off" }
 	| { readonly kind: "no_session" }
@@ -66,7 +66,7 @@ export function renderStopReason(reason: StopReason, language: Language): string
 	const zh = language === "zh";
 	switch (reason.kind) {
 		case "todo_unavailable": return zh ? "待办列表不可用" : "todo list unavailable";
-		case "todo_no_counts": return zh ? "omp-todo-more 回复中没有 counts" : "omp-todo-more reply has no counts";
+		case "todo_malformed": return zh ? `omp-todo-more 回复格式错误：${reason.detail}` : `malformed omp-todo-more reply: ${reason.detail}`;
 		case "todo_empty": return zh ? "待办列表为空" : "todo list is empty";
 		case "off": return zh ? "完成检测已关闭" : "stop detection is off";
 		case "no_session": return zh ? "没有绑定的 omp 会话" : "no bound omp session";

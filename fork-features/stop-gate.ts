@@ -14,6 +14,7 @@
  * resolves one, else todo. A chosen detector that is unavailable or fails
  * gives no decision, and the notices are delivered as usual.
  */
+import type { TodoReadResult } from "./omomp-shared/todo-read.ts";
 import { fillTemplate, type JudgePromptField, type StopConfig } from "./stop-config.ts";
 import type { StopInput, StopVerdict } from "./terminal-notice.ts";
 import type { ModelFailure } from "./stop-reasons.ts";
@@ -129,70 +130,46 @@ export function detectorSession(session: unknown): DetectorSession | undefined {
 
 // ---- todo ----------------------------------------------------------------------
 
-type TodoCounts = Readonly<Record<"pending" | "in_progress" | "completed" | "abandoned" | "blocked", number>>;
-
-type TodoRead =
-	| {
-			readonly kind: "ok";
-			readonly objective: string | undefined;
-			readonly openItems: readonly { readonly phase: string; readonly title: string }[];
-			/** Undefined from an omp-todo-more that predates the counts. */
-			readonly counts: TodoCounts | undefined;
-	  }
-	| { readonly kind: "unavailable" };
-
-function parseCounts(value: unknown): TodoCounts | undefined {
-	if (typeof value !== "object" || value === null) return undefined;
-	const read = (key: keyof TodoCounts): number | undefined => {
-		const n: unknown = Reflect.get(value, key);
-		return typeof n === "number" && Number.isInteger(n) && n >= 0 ? n : undefined;
-	};
-	const pending = read("pending");
-	const inProgress = read("in_progress");
-	const completed = read("completed");
-	const abandoned = read("abandoned");
-	const blocked = read("blocked");
-	if (pending === undefined || inProgress === undefined || completed === undefined || abandoned === undefined || blocked === undefined) return undefined;
-	return { pending, in_progress: inProgress, completed, abandoned, blocked };
-}
-
-/** Parse an `omp-todo-more:read` reply; anything malformed is unavailable, never an empty list. */
-export function parseTodoRead(value: unknown): TodoRead {
-	if (typeof value !== "object" || value === null || Reflect.get(value, "kind") !== "ok") return { kind: "unavailable" };
-	const openItems: unknown = Reflect.get(value, "openItems");
-	if (!Array.isArray(openItems)) return { kind: "unavailable" };
-	const items: { phase: string; title: string }[] = [];
-	for (const item of openItems as unknown[]) {
-		if (typeof item !== "object" || item === null) return { kind: "unavailable" };
-		const phase: unknown = Reflect.get(item, "phase");
-		const title: unknown = Reflect.get(item, "title");
-		if (typeof phase !== "string" || typeof title !== "string") return { kind: "unavailable" };
-		items.push({ phase, title });
-	}
-	const goal: unknown = Reflect.get(value, "goal");
-	const objective: unknown = typeof goal === "object" && goal !== null ? Reflect.get(goal, "objective") : undefined;
-	return { kind: "ok", objective: typeof objective === "string" ? objective : undefined, openItems: items, counts: parseCounts(Reflect.get(value, "counts")) };
-}
-
 /** Done when the list has items and every one is completed or abandoned; blocked items keep it open. */
-export function todoVerdict(todo: TodoRead): StopVerdict {
-	if (todo.kind === "unavailable") return { kind: "undecided", cause: "unavailable", reason: { kind: "todo_unavailable" } };
-	if (todo.counts === undefined) return { kind: "undecided", cause: "unavailable", reason: { kind: "todo_no_counts" } };
-	const { pending, in_progress, completed, abandoned, blocked } = todo.counts;
-	if (pending + in_progress + completed + abandoned + blocked === 0) return { kind: "undecided", cause: "unavailable", reason: { kind: "todo_empty" } };
-	return { kind: pending + in_progress + blocked === 0 ? "done" : "not_done", detector: "todo" };
+export function todoVerdict(todo: TodoReadResult): StopVerdict {
+	switch (todo.kind) {
+		case "unavailable":
+		case "no_reply":
+			return { kind: "undecided", cause: "unavailable", reason: { kind: "todo_unavailable" } };
+		case "malformed":
+			return { kind: "undecided", cause: "unavailable", reason: { kind: "todo_malformed", detail: todo.reason } };
+		case "ok": {
+			const { pending, in_progress, completed, abandoned, blocked } = todo.counts;
+			if (pending + in_progress + completed + abandoned + blocked === 0) {
+				return { kind: "undecided", cause: "unavailable", reason: { kind: "todo_empty" } };
+			}
+			return { kind: pending + in_progress + blocked === 0 ? "done" : "not_done", detector: "todo" };
+		}
+	}
 }
 
-function todoText(todo: TodoRead): string {
-	if (todo.kind === "unavailable") return "(unavailable)";
-	const lines: string[] = [];
-	if (todo.objective !== undefined) lines.push(`objective: ${todo.objective}`);
-	if (todo.counts !== undefined) {
-		const c = todo.counts;
-		lines.push(`items: ${c.completed} completed, ${c.abandoned} abandoned, ${c.blocked} blocked, ${c.in_progress} in progress, ${c.pending} pending`);
+function todoText(todo: TodoReadResult): string {
+	switch (todo.kind) {
+		case "unavailable":
+		case "no_reply":
+			return "(unavailable)";
+		case "malformed":
+			return `(malformed reply: ${todo.reason})`;
+		case "ok": {
+			const lines: string[] = [];
+			if (todo.goal !== null) {
+				lines.push(`objective: ${todo.goal.objective}`);
+				lines.push(`measure: ${todo.goal.measure}`);
+				lines.push(`done when: ${todo.goal.doneWhen}`);
+			}
+			const c = todo.counts;
+			lines.push(`items: ${c.completed} completed, ${c.abandoned} abandoned, ${c.blocked} blocked, ${c.in_progress} in progress, ${c.pending} pending`);
+			for (const item of todo.openItems) {
+				lines.push(`open: ${item.phase}: ${item.title}${item.explanation === null ? "" : ` — ${item.explanation}`}`);
+			}
+			return lines.join("\n");
+		}
 	}
-	for (const item of todo.openItems) lines.push(`open: ${item.phase}: ${item.title}`);
-	return lines.length > 0 ? lines.join("\n") : "(no todo list)";
 }
 
 // ---- judge and llm ----------------------------------------------------------
@@ -281,13 +258,13 @@ export interface StopDetectorDeps {
 	/** The bound AgentSession, or undefined while unbound. */
 	readonly session: () => unknown;
 	/** One synchronous `omp-todo-more:read` request for the main agent. */
-	readonly readTodo: () => unknown;
+	readonly readTodo: () => TodoReadResult;
 }
 
 /** Decide one stop with the configured detector. Never throws for an expected failure; it returns `undecided`. */
 export async function detectStop(deps: StopDetectorDeps, config: StopConfig, input: StopInput, signal: AbortSignal): Promise<StopVerdict> {
 	if (config.mode === "off") return { kind: "undecided", cause: "unavailable", reason: { kind: "off" } };
-	const todo = parseTodoRead(deps.readTodo());
+	const todo = deps.readTodo();
 	const prompt = fillTemplate<JudgePromptField>(config.judgePrompt, { last_response: input.lastResponse, notices: input.notices, todo: todoText(todo) });
 	if (config.mode === "todo") return todoVerdict(todo);
 	const session = detectorSession(deps.session());

@@ -1,7 +1,13 @@
 import { sanitizeOutputText } from "../src/output-safety.ts";
+import { registerInternalScheme } from "./omomp-shared/internal-url.ts";
 import { writeTerminalImage } from "./terminal-image.ts";
 import { getTerminalResource, noteTerminalRead, parseTerminalTarget, readTerminal, terminalText } from "./terminal-resource.ts";
+import type { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
 
+// The brand marks every handler this plugin registered, including versions
+// before the shared copy: such a handler carries only this brand, so the shared
+// copy would treat it as foreign. It is this plugin's own, and an in-process
+// reload after an upgrade releases it before registering.
 const handlerBrand = Symbol.for("omp-unified-exec.term-handler");
 
 interface TerminalUrlHandler {
@@ -12,23 +18,28 @@ interface TerminalUrlHandler {
 	locate(url: URL): Promise<string | null>;
 }
 
-interface TerminalUrlRouter {
-	register(handler: TerminalUrlHandler): void;
-	getHandler(scheme: string): unknown;
+const ROUTER_MEMBERS = ["register", "isBuiltin", "unregister", "getHandler", "specs"] as const;
+
+/** The router members the shared copy reads; a missing one fails plugin loading with a requalify hint. */
+function isInternalUrlRouter(value: unknown): value is InternalUrlRouter {
+	if (typeof value !== "object" || value === null) return false;
+	for (const member of ROUTER_MEMBERS) {
+		if (!(member in value) || typeof Reflect.get(value, member) !== "function") return false;
+	}
+	return true;
 }
 
-/** The router owns registration; reload refreshes our one handler object in place. */
+/** The router owns registration; the shared copy arbitrates ownership and sorts non-built-in schemes by name. */
 export async function initializeTerminalUrls(): Promise<void> {
 	// This host-only subpath does not exist in the Node/Pi development runtime.
 	const module = await import("@oh-my-pi/pi-coding-agent/internal-urls");
-	const Router = module.InternalUrlRouter as { instance?: unknown } | undefined;
-	if (!Router || typeof Router.instance !== "function") {
+	const Router: unknown = module.InternalUrlRouter;
+	if (typeof Router !== "function" || !("instance" in Router) || typeof Router.instance !== "function") {
 		throw new Error("omp-unified-exec: internal-urls lacks InternalUrlRouter.instance; requalify term:// integration");
 	}
 	const router: unknown = Router.instance();
-	if (typeof router !== "object" || router === null || !("register" in router) || typeof router.register !== "function" ||
-		!("getHandler" in router) || typeof router.getHandler !== "function") {
-		throw new Error("omp-unified-exec: InternalUrlRouter lacks register/getHandler; requalify term:// integration");
+	if (!isInternalUrlRouter(router)) {
+		throw new Error("omp-unified-exec: InternalUrlRouter lacks register/isBuiltin/getHandler/unregister/specs; requalify term:// integration");
 	}
 	const handler: TerminalUrlHandler = {
 		[handlerBrand]: true,
@@ -52,19 +63,19 @@ export async function initializeTerminalUrls(): Promise<void> {
 			return image;
 		},
 	};
-	const host = router as TerminalUrlRouter;
-	const existing = host.getHandler("term");
-	if (existing !== undefined) {
-		if (typeof existing !== "object" || existing === null || !(handlerBrand in existing) || existing[handlerBrand] !== true) {
-			throw new Error("omp-unified-exec: term:// belongs to another handler; restart omp after upgrading the plugin");
-		}
-		// Every key is supplied, including locate. No stale module closure survives
-		// reload; the router reads spec and methods from this object per request.
-		Object.assign(existing, handler);
-	} else {
-		host.register(handler);
-		if (host.getHandler("term") !== handler) {
-			throw new Error("omp-unified-exec: InternalUrlRouter did not retain term handler identity");
-		}
+	const existing: unknown = router.getHandler("term");
+	if (typeof existing === "object" && existing !== null && Reflect.get(existing, handlerBrand) === true) router.unregister("term");
+	const outcome = registerInternalScheme(router, "omp-unified-exec/term", handler);
+	switch (outcome.kind) {
+		case "registered":
+			if (router.getHandler("term") !== handler) {
+				throw new Error("omp-unified-exec: InternalUrlRouter did not retain term handler identity");
+			}
+			return;
+		case "builtin":
+		case "held":
+			throw new Error(
+				`omp-unified-exec: term:// belongs to another handler (${outcome.reason}); restart omp after upgrading the plugin`,
+			);
 	}
 }
