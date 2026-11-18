@@ -6,20 +6,18 @@
  * The HUD now uses omp's own roles and Tern's built-in styles only, and the
  * old stylesheet still selects omp's shared `belowEditor` container, moving
  * other extensions' widgets. The extension created that plugin, so it ends
- * it: omp awaits this during package install validation and ordinary
- * loading, before activation, as it awaited the installer.
+ * it: omp awaits this during install validation and ordinary loading, before
+ * activation, as it awaited the installer.
  *
  * Tern owns its plugin directory, registration and reload; every change goes
  * through its CLI, and only the plugin id `omp-unified-exec` is touched.
  */
-import { execFile } from "node:child_process";
-
 import { sanitizeOutputText } from "../src/output-safety.ts";
-import { findOnPath } from "../src/shell.ts";
+import { findTern, type TernPluginCli } from "./omomp-shared/tern-plugin.ts";
 
 /** The id the earlier versions' `plugin.toml` declared. */
 export const TERN_PLUGIN_ID = "omp-unified-exec";
-// Each change reloads Tern's daemon, whose documented wait is up to 60 seconds.
+// Each mutation reloads Tern's daemon, whose documented wait is up to 60 seconds.
 const CLI_TIMEOUT_MS = 75_000;
 const MAX_DIAGNOSTIC_CHARS = 4096;
 /** Tern's answer to `remove` for a plugin registered with `link`. */
@@ -27,18 +25,9 @@ const LINKED = `tern plugin: ${TERN_PLUGIN_ID} is linked; use unlink`;
 
 export type RemovalStage = "inspect" | "remove" | "unlink" | "verify";
 
-interface CommandFailure {
-	readonly command: readonly string[];
-	readonly exitCode: string | number | null;
-	readonly signal: string | null;
-	readonly stdout: string;
-	readonly stderr: string;
-	readonly message: string;
-}
-
 export type RemovalFailure =
-	| { readonly kind: "command"; readonly stage: RemovalStage; readonly details: CommandFailure }
-	| { readonly kind: "inspection"; readonly stage: "inspect" | "verify"; readonly message: string }
+	/** A `tern plugin` call or its JSON answer failed; `message` carries the stage detail. */
+	| { readonly kind: "tern"; readonly stage: RemovalStage; readonly message: string }
 	| { readonly kind: "verification"; readonly message: string };
 
 export type RemovalOutcome =
@@ -50,55 +39,11 @@ export type RemovalOutcome =
 	| { readonly kind: "removed"; readonly via: "remove" | "unlink" }
 	| { readonly kind: "failed"; readonly failure: RemovalFailure };
 
-/** Pure: the plugin ids of a `tern plugin list --json` answer. */
-export function parsePluginIds(json: string): string[] {
-	const value: unknown = JSON.parse(json);
-	if (typeof value !== "object" || value === null || !("plugins" in value) || !Array.isArray(value.plugins)) {
-		throw new Error("tern plugin list --json: no plugins array");
-	}
-	return value.plugins.flatMap((entry: unknown): string[] =>
-		typeof entry === "object" && entry !== null && "id" in entry && typeof entry.id === "string" ? [entry.id] : []);
-}
-
-type CliResult =
-	| { readonly kind: "success"; readonly stdout: string }
-	| { readonly kind: "failure"; readonly details: CommandFailure };
-
-/** Argument-vector spawning, awaited by the factory; never a shell command. */
-function ternPlugin(tern: string, args: readonly string[], env: NodeJS.ProcessEnv): Promise<CliResult> {
-	const { promise, resolve } = Promise.withResolvers<CliResult>();
-	execFile(tern, ["plugin", ...args], { env, timeout: CLI_TIMEOUT_MS, encoding: "utf8" }, (error, stdout, stderr) => {
-		if (!error) {
-			resolve({ kind: "success", stdout });
-			return;
-		}
-		resolve({
-			kind: "failure",
-			details: {
-				command: [tern, "plugin", ...args],
-				exitCode: error.code ?? null,
-				signal: error.signal ?? null,
-				stdout,
-				stderr,
-				message: error.message,
-			},
-		});
-	});
-	return promise;
-}
-
-function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
-
-async function listed(tern: string, env: NodeJS.ProcessEnv, stage: "inspect" | "verify"): Promise<boolean | RemovalOutcome> {
-	const catalog = await ternPlugin(tern, ["list", "--json"], env);
-	if (catalog.kind === "failure") return { kind: "failed", failure: { kind: "command", stage, details: catalog.details } };
-	try {
-		return parsePluginIds(catalog.stdout).includes(TERN_PLUGIN_ID);
-	} catch (error) {
-		return { kind: "failed", failure: { kind: "inspection", stage, message: errorMessage(error) } };
-	}
+/** Whether Tern's catalog lists our plugin; a list call or parse failure is a `failed` outcome at `stage`. */
+async function listed(cli: TernPluginCli, stage: "inspect" | "verify"): Promise<boolean | RemovalOutcome> {
+	const catalog = await cli.list();
+	if (!catalog.ok) return { kind: "failed", failure: { kind: "tern", stage, message: catalog.error.message } };
+	return catalog.value.some((plugin) => plugin.id === TERN_PLUGIN_ID);
 }
 
 /**
@@ -107,22 +52,25 @@ async function listed(tern: string, env: NodeJS.ProcessEnv, stage: "inspect" | "
  * must then no longer list it.
  */
 export async function removeTernPlugin(env: NodeJS.ProcessEnv): Promise<RemovalOutcome> {
-	const tern = findOnPath("tern", env);
-	if (!tern) return { kind: "unavailable" };
-	const before = await listed(tern, env, "inspect");
+	const found = findTern({ env, timeoutMs: CLI_TIMEOUT_MS });
+	if (found.kind === "not_installed") return { kind: "unavailable" };
+	const cli = found.cli;
+	const before = await listed(cli, "inspect");
 	if (typeof before !== "boolean") return before;
 	if (!before) return { kind: "absent" };
 
 	let via: "remove" | "unlink" = "remove";
-	const removed = await ternPlugin(tern, ["remove", TERN_PLUGIN_ID, "--json"], env);
-	if (removed.kind === "failure") {
-		if (removed.details.stderr.trim() !== LINKED) return { kind: "failed", failure: { kind: "command", stage: "remove", details: removed.details } };
+	const removed = await cli.remove(TERN_PLUGIN_ID);
+	if (!removed.ok) {
+		if (!removed.error.message.includes(LINKED)) {
+			return { kind: "failed", failure: { kind: "tern", stage: "remove", message: removed.error.message } };
+		}
 		via = "unlink";
-		const unlinked = await ternPlugin(tern, ["unlink", TERN_PLUGIN_ID, "--json"], env);
-		if (unlinked.kind === "failure") return { kind: "failed", failure: { kind: "command", stage: "unlink", details: unlinked.details } };
+		const unlinked = await cli.unlink(TERN_PLUGIN_ID);
+		if (!unlinked.ok) return { kind: "failed", failure: { kind: "tern", stage: "unlink", message: unlinked.error.message } };
 	}
 
-	const after = await listed(tern, env, "verify");
+	const after = await listed(cli, "verify");
 	if (typeof after !== "boolean") return after;
 	if (after) return { kind: "failed", failure: { kind: "verification", message: `Tern still lists ${TERN_PLUGIN_ID} after ${via}` } };
 	return { kind: "removed", via };
@@ -135,13 +83,7 @@ function diagnostic(text: string): string {
 
 function formatFailure(failure: RemovalFailure): string {
 	switch (failure.kind) {
-		case "command": {
-			const details = failure.details;
-			return `omp-unified-exec: removing the old Tern plugin failed at ${failure.stage}\n` +
-				`command: ${JSON.stringify(details.command)}\nexit: ${details.exitCode}; signal: ${details.signal}\n` +
-				`stdout: ${diagnostic(details.stdout)}\nstderr: ${diagnostic(details.stderr || details.message)}`;
-		}
-		case "inspection":
+		case "tern":
 			return `omp-unified-exec: removing the old Tern plugin failed at ${failure.stage}: ${diagnostic(failure.message)}`;
 		case "verification":
 			return `omp-unified-exec: removing the old Tern plugin failed: ${diagnostic(failure.message)}`;

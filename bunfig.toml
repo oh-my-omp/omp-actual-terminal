@@ -1,0 +1,6 @@
+# `bun test` preloads a mock for the host modules the shared copies in
+# fork-features/omomp-shared/ import statically (`@oh-my-pi/*` resolves to omp
+# internals only inside a real omp). This section applies to `bun test` only;
+# `bun run`/`bun build` and the installed extension never see it.
+[test]
+preload = ["./tests/mock-omp-host.mjs"]

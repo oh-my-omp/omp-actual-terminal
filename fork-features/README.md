@@ -17,7 +17,8 @@ both register `exec_command` and the other unified-exec tools.
 |---|---|---|---|
 | Package name `omp-unified-exec` | `package.json` (`name`, `repository`, `homepage`) | omp names the plugin after the package | Fork-only |
 | Tool-owned documentation topics for all six PTY tools | `fork-features/exec-command-docs.ts`, `fork-features/topics/*.md`, `src/index.ts`, `package.json` `files` | Each definition satisfies `ToolDefinition<typeof parameters>` intersected with `docTopics()`. Full descriptions end with `xd://<tool>/<topic>` pointers; packaged plain Markdown retains detailed input, output, lifecycle, wake, monitor, termination and inventory guidance. Presentation spreads preserve every provider, without an external topic registry. | Fork-only |
-| Environment-only UI i18n (`OMOMP_LANG`, then locale environment fallback), including structured stop/config diagnostics | `src/i18n.ts`, `src/index.ts`, `fork-features/stop-reasons.ts`, `fork-features/stop-config.ts`, `fork-features/stop-gate.ts`, `fork-features/omp-presentation.ts`, `fork-features/tern-terminal-hud.ts`, `fork-features/terminal-notice.ts`, both READMEs | UI language uses only the live environment. Stop/config reasons carry tagged facts to the notification boundary, which renders owned prose; field names and external payloads stay data, and dedupe identity is locale-independent. Model/protocol text stays stable. | Fork-only |
+| Environment-only UI i18n (`OMOMP_LANG`, then locale environment fallback), including structured stop/config diagnostics | `fork-features/omomp-shared/i18n.ts`, `src/index.ts`, `fork-features/stop-reasons.ts`, `fork-features/stop-config.ts`, `fork-features/stop-gate.ts`, `fork-features/omp-presentation.ts`, `fork-features/tern-terminal-hud.ts`, `fork-features/terminal-notice.ts`, both READMEs | UI language uses only the live environment. Stop/config reasons carry tagged facts to the notification boundary, which renders owned prose; field names and external payloads stay data, and dedupe identity is locale-independent. Model/protocol text stays stable. | Fork-only |
+| Shared-code copies from oh-my-omp/shared: `i18n.ts` (UI language), `todo-read.ts` (`omp-todo-more:read` protocol for the stop gate), `internal-url.ts` (`term://` scheme registration and non-builtin scheme ordering), `tern-plugin.ts` (`tern` lookup and `plugin list`/`remove`/`unlink` for the old-plugin removal) | `fork-features/omomp-shared/`, `omomp-shared.json`, `.github/workflows/omomp-check.yml`, `package.json` `files`, `fork-features/omp-tools.d.ts` (typed ambient members the copies need), `bunfig.toml` + `tests/mock-omp-host.mjs` | The copies are byte-identical; `omomp-shared.json` declares them and the `omomp-check` workflow's `copies` mode compares them against shared main on every PR and push to main. The copies statically import `@oh-my-pi/*`, which resolves only inside omp: `omp-tools.d.ts` supplies their types for `tsc`, and the `bun test` preload mocks `z` and `ptree` (the only members used) so the removal tests exercise the copy against the fixture `tern`. Never edit a copy; shared main owns them and its sync workflow opens PRs that refresh them. Upstream never touches `fork-features/`, `omomp-shared.json` or `bunfig.toml`, so none of this conflicts. | Fork-only |
 | README rewritten for the fork, in English and Chinese: recorded Tern demos, omp install, Tern terminal HUD, omp presentation, fork layout; upstream's npm, badges and maintenance notice removed | `README.md`, `README.zh-CN.md`, `docs/assets/demo.{gif,mp4}`, `docs/assets/demo-lazygit.{gif,mp4}` | The fork's behaviour and installation diverged from upstream's README (npm package, Pi-only presentation), so it misled omp users | Fork-only |
 | Only omp is supported: non-omp hosts are rejected at the extension factory before activation | `fork-features/omp-presentation.ts`, `src/index.ts`, `tests/omp-presentation.test.ts`; `package.json` `omp.extensions` | `ExtensionAPI.arktype` identifies omp. The named `activate` export is the direct tool-core test seam, not another supported host entry point. | Fork-only |
 | Bun-only native PTY backend and test runner | `src/pty.ts`, `fork-features/omp-presentation.ts`, `tests/pty-load.test.ts`, `tests/bun-pty-runtime.mjs`, `package.json`, `.github/workflows/ci.yml` | omp is a compiled Bun executable. Every session uses `Bun.Terminal` (Bun 1.4+), supplying `openpty` on Linux/macOS and ConPTY on Windows. The factory requires `Bun.spawn` and `Bun.Terminal` before loading omp modules or activating; Bun's native test runner exercises the full suite on all three platforms, plus source/compiled runtime fixtures. | Fork-only |
@@ -59,6 +60,11 @@ retained as compatibility shims.
   workflow files back in does not re-enable them.
 - `Sync upstream` (`.github/workflows/sync-upstream.yml`) merges `upstream/main`
   into `main` daily through PRs gated on `CI`.
+- `omomp-check` (`.github/workflows/omomp-check.yml`) calls
+  `oh-my-omp/.github`'s reusable check workflow in `copies` mode on every PR
+  and push to `main`: it compares the copies declared in `omomp-shared.json`
+  against oh-my-omp/shared main. Repository tests and typechecking stay in
+  `ci.yml`, which keeps upstream's runner layout.
 - `omomp-release` (`.github/workflows/omomp-release.yml`) is the omomp caller
   file: a daily run at 02:00 GMT+9 (`cron: "0 17 * * *"`) and
   `workflow_dispatch` call
@@ -204,9 +210,10 @@ path in `ExecSession` (`src/session.ts`) arrive as content conflicts; keep
 port only upstream facts about writing the log.
 
 On omp upgrades, requalify `@oh-my-pi/pi-coding-agent/internal-urls`:
-`InternalUrlRouter.instance().register(handler)` must share the production
-`read` router; `getHandler("term")` must return the same mutable object, with
-spec and methods consulted per request. The final handler uses
+`InternalUrlRouter.instance()` must share the production
+`read` router; after `registerInternalScheme` (the `internal-url.ts` copy)
+reports `registered`, `getHandler("term")` must return the handler object just
+registered, whose spec and methods the router consults per request. The final handler uses
 `{backing: "file", selectors: "lines", immutable: false}`: `locate()` returns
 a path only for `/screen.png`, null for text. Read all retained rows, `/screen`,
 the bare read inside `tmux` (it must equal `/screen`),

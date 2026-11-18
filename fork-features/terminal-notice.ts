@@ -12,7 +12,7 @@
  */
 
 import { formatElapsedShort, formatElapsedShortUi } from "../src/format-time.ts";
-import { tr } from "../src/i18n.ts";
+import { tr } from "./omomp-shared/i18n.ts";
 import { sanitizeOutputText } from "../src/output-safety.ts";
 import { DEFAULT_NOTICE_TEMPLATE, DEFAULT_STOP_CONFIG, fillTemplate, type NoticeTemplateField, type StopConfig } from "./stop-config.ts";
 import type { StopReason } from "./stop-reasons.ts";
