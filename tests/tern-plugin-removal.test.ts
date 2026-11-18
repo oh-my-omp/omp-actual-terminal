@@ -114,9 +114,10 @@ describe("removing the Tern plugin earlier versions installed", () => {
 	it("rejects loading with Tern's diagnostics when remove fails for another reason, without unlinking", async (t) => {
 		const h = makeTern(t, "copy", { failure: "remove", failureMessage: "tern plugin: permission denied" });
 		const failure = failed(await removeTernPlugin(h.env));
-		assert.ok(failure.kind === "command");
+		assert.ok(failure.kind === "tern");
 		assert.equal(failure.stage, "remove");
-		assert.equal(failure.details.exitCode, 23);
+		assert.match(failure.message, /exited 23/);
+		assert.match(failure.message, /permission denied/);
 		assert.equal(h.calls.some((args) => args[1] === "unlink"), false);
 		assert.equal(existsSync(h.copy), true);
 		await assert.rejects(retireTernPlugin(h.env), (error: unknown) =>
@@ -126,7 +127,7 @@ describe("removing the Tern plugin earlier versions installed", () => {
 	it("reports a failed unlink at its stage", async (t) => {
 		const h = makeTern(t, "link", { failure: "unlink" });
 		const failure = failed(await removeTernPlugin(h.env));
-		assert.ok(failure.kind === "command");
+		assert.ok(failure.kind === "tern");
 		assert.equal(failure.stage, "unlink");
 		assert.equal(existsSync(h.link), true);
 	});

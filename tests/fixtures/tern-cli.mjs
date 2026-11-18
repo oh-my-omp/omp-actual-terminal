@@ -26,7 +26,13 @@ const operation = args[1];
 if (config.failure === operation) fail(config.failureMessage ?? "tern plugin: " + operation + " unavailable", 23);
 if (operation === "list" && args.length === 3 && args[2] === "--json") {
   if (config.catalogReply !== undefined) process.stdout.write(config.catalogReply);
-  else reply({ plugins: [{ id: "another-plugin" }, ...(installed() ? [{ id }] : [])], problems: [] });
+  else reply({
+    plugins: [
+      { id: "another-plugin", version: "1.0.0", css: "", status: "ready" },
+      ...(installed() ? [{ id, version: "0.14.7", css: "terminals.css", status: "ready" }] : []),
+    ],
+    problems: [],
+  });
 } else if (operation === "remove" && args.length === 4 && args[2] === id && args[3] === "--json") {
   if (fs.existsSync(link)) fail("tern plugin: " + id + " is linked; use unlink");
   if (!fs.existsSync(copy)) fail("tern plugin: no plugin " + id + " in " + root);

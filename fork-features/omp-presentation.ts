@@ -11,7 +11,7 @@
 import type { ExtensionAPI, ToolDefinition, TruncationResult } from "@earendil-works/pi-coding-agent";
 
 import { sanitizeOutputText } from "../src/output-safety.ts";
-import { tr } from "../src/i18n.ts";
+import { tr } from "./omomp-shared/i18n.ts";
 import { requireBunRuntime } from "../src/pty.ts";
 import type { SessionStore } from "../src/session-store.ts";
 import type { TerminalAppearance } from "../src/terminal-screen.ts";
@@ -24,8 +24,12 @@ import { loadStopHost, type StopHost } from "./stop-gate.ts";
 import type { LifecycleClock } from "./terminal-lifecycle.ts";
 import { scheduleLogArchive } from "./log-archive.ts";
 import { loadTernHudHost, mountTerminalHud } from "./tern-terminal-hud.ts";
-import { retireTernPlugin } from "./tern-plugin-removal.ts";
 import { initializeTerminalUrls } from "./terminal-url.ts";
+import type * as TernPluginRemoval from "./tern-plugin-removal.ts";
+
+// See the load site in the factory below: a literal specifier lets bundlers
+// inline the module and hoist its host-only imports into module loading.
+const TERN_PLUGIN_REMOVAL_MODULE = "./tern-plugin-removal.ts";
 
 // ---------------- omp bash renderer contract ----------------
 
@@ -507,7 +511,13 @@ export function withHostPresentation(
 			presentOnOmp(host), loadTernHudHost(), loadOmpAppearance(), loadOmpShellPath(host), loadCommandApprovalHost(),
 			loadGithubCacheInvalidation(), loadStopHost(), loadPluginSettingsReader(), loadAgentHost(), loadShellHost(),
 		]).then(async ([pi, hud, appearance, shellPath, approvalHost, invalidateGithubCache, stopHost, pluginSettings, agentHost, shellHost]) => {
-			await retireTernPlugin();
+			// tern-plugin-removal statically imports host modules
+			// (@oh-my-pi/pi-utils' ptree) that resolve only inside omp. The specifier
+			// is non-literal so bundlers leave it deferred: inlining it would hoist
+			// those imports into the bundle and fail module loading before the
+			// host-admission checks above can reject a foreign host.
+			const removal: typeof TernPluginRemoval = await import(TERN_PLUGIN_REMOVAL_MODULE);
+			await removal.retireTernPlugin();
 			await initializeTerminalUrls();
 			const activated = activate(pi, appearance, shellPath, approvalHost, invalidateGithubCache, {}, stopHost, pluginSettings, agentHost, shellHost);
 			mountTerminalHud(pi, activated.store, hud, activated.kill);

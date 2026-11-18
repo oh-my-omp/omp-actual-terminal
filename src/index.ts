@@ -69,7 +69,8 @@ import { buildNoticeDisplayMessage, MAX_TITLE_CHARS, NoticeDispatcher, type Noti
 import { type CollectResult, NO_OUTPUT } from "./collect.ts";
 import { CompletionCoordinator, type OnExitPolicy, sanitizeMeta } from "./completion.ts";
 import { formatElapsed, formatElapsedUi, nowUtcIso } from "./format-time.ts";
-import { language, tr } from "./i18n.ts";
+import { language, tr } from "../fork-features/omomp-shared/i18n.ts";
+import { readTodos } from "../fork-features/omomp-shared/todo-read.ts";
 import { waitForExitOrDeadline } from "./long-wait.ts";
 import { sleep } from "./notify.ts";
 import { sanitizeOutputText } from "./output-safety.ts";
@@ -1219,12 +1220,7 @@ export function activate(
 		detect: (config, input, signal) => detectStop({
 			host: stopHost,
 			session: () => (binding.kind === "bound" ? binding.session : undefined),
-			readTodo: () => {
-				if (agentId === undefined) return undefined;
-				let reply: unknown;
-				pi.events.emit("omp-todo-more:read", { agentId, reply: (value: unknown) => { reply = value; } });
-				return reply;
-			},
+			readTodo: () => (agentId === undefined ? { kind: "no_reply" } : readTodos(pi.events, agentId)),
 		}, config, input, signal),
 		collect: async () => {
 			await ctx.lifecycle.collectReturned();

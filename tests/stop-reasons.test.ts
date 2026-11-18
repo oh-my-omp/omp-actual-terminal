@@ -18,7 +18,7 @@ const configCases: readonly [StopConfigReason, string, string][] = [
 ];
 const stopCases: readonly [StopReason, string, string][] = [
 	[{ kind: "todo_unavailable" }, "todo list unavailable", "待办列表不可用"],
-	[{ kind: "todo_no_counts" }, "omp-todo-more reply has no counts", "omp-todo-more 回复中没有 counts"],
+	[{ kind: "todo_malformed", detail: "counts" }, "malformed omp-todo-more reply: counts", "omp-todo-more 回复格式错误：counts"],
 	[{ kind: "todo_empty" }, "todo list is empty", "待办列表为空"],
 	[{ kind: "off" }, "stop detection is off", "完成检测已关闭"],
 	[{ kind: "no_session" }, "no bound omp session", "没有绑定的 omp 会话"],

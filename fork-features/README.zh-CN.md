@@ -12,7 +12,8 @@
 |---|---|---|---|
 | 包名 `omp-unified-exec` | `package.json`（`name`、`repository`、`homepage`） | omp 以包名命名插件 | 仅 fork |
 | 六个 PTY 工具各自拥有的文档 topic | `fork-features/exec-command-docs.ts`、`fork-features/topics/*.md`、`src/index.ts`、`package.json` 的 `files` | 每个定义用 `ToolDefinition<typeof parameters>` 与 `docTopics()` 的交叉类型检查。完整说明末尾列出 `xd://<tool>/<topic>` 指针；随包发布的纯 Markdown 保留输入、输出、生命周期、唤醒、monitor、结束与列表的详细指导。呈现 spread 保留所有 provider，不依赖外部 topic 注册表。 | 仅 fork |
-| 仅使用环境变量的界面 i18n（`OMOMP_LANG`，然后是 locale 回退），包括结构化的 stop/配置诊断 | `src/i18n.ts`、`src/index.ts`、`fork-features/stop-reasons.ts`、`fork-features/stop-config.ts`、`fork-features/stop-gate.ts`、`fork-features/omp-presentation.ts`、`fork-features/tern-terminal-hud.ts`、`fork-features/terminal-notice.ts`、两个 README | 界面语言只读取实时环境变量。stop/配置原因以带标签的事实传到通知边界，再生成插件自己的文字；字段名与外部载荷保留为数据，去重身份不随语言变化。模型/协议文本保持稳定。 | 仅 fork |
+| 仅使用环境变量的界面 i18n（`OMOMP_LANG`，然后是 locale 回退），包括结构化的 stop/配置诊断 | `fork-features/omomp-shared/i18n.ts`、`src/index.ts`、`fork-features/stop-reasons.ts`、`fork-features/stop-config.ts`、`fork-features/stop-gate.ts`、`fork-features/omp-presentation.ts`、`fork-features/tern-terminal-hud.ts`、`fork-features/terminal-notice.ts`、两个 README | 界面语言只读取实时环境变量。stop/配置原因以带标签的事实传到通知边界，再生成插件自己的文字；字段名与外部载荷保留为数据，去重身份不随语言变化。模型/协议文本保持稳定。 | 仅 fork |
+| oh-my-omp/shared 公共代码副本：`i18n.ts`（界面语言）、`todo-read.ts`（stop gate 用的 `omp-todo-more:read` 协议）、`internal-url.ts`（`term://` scheme 注册与非内置 scheme 排序）、`tern-plugin.ts`（旧版插件注销用的 `tern` 查找与 `plugin list`/`remove`/`unlink`） | `fork-features/omomp-shared/`、`omomp-shared.json`、`.github/workflows/omomp-check.yml`、`package.json` 的 `files`、`fork-features/omp-tools.d.ts`（副本需要的带类型 ambient 声明）、`bunfig.toml` + `tests/mock-omp-host.mjs` | 副本与 shared 逐字节一致：`omomp-shared.json` 声明它们，`omomp-check` workflow 以 `copies` 模式在每个 PR 和 main push 上与 shared main 比对。副本静态 import `@oh-my-pi/*`，该包名只在 omp 内部可解析：`omp-tools.d.ts` 为 `tsc` 提供类型，`bun test` 的 preload mock 出 `z` 和 `ptree`（副本实际用到的成员），使注销测试经副本跑在 fixture `tern` 上。永远不改副本；shared main 拥有它们，其同步 workflow 会开 PR 刷新副本。上游不动 `fork-features/`、`omomp-shared.json` 或 `bunfig.toml`，不会冲突。 | 仅 fork |
 | 为 fork 重写的中英文 README：Tern 录屏演示、omp 安装、Tern 终端 HUD、omp 呈现、fork 结构；移除上游的 npm、徽章和维护公告 | `README.md`、`README.zh-CN.md`、`docs/assets/demo.{gif,mp4}`、`docs/assets/demo-lazygit.{gif,mp4}` | fork 的行为和安装方式已经偏离上游 README（npm 包、仅 Pi 的呈现），继续沿用会误导 omp 用户 | 仅 fork |
 | 只支持 omp：非 omp 宿主在扩展 factory 阶段、激活之前被拒绝 | `fork-features/omp-presentation.ts`、`src/index.ts`、`tests/omp-presentation.test.ts`；`package.json` 的 `omp.extensions` | `ExtensionAPI.arktype` 用于识别 omp。具名导出 `activate` 是直接测试工具核心的接缝，不是另一个受支持的宿主入口。 | 仅 fork |
 | 仅 Bun 的原生 PTY 后端与测试运行器 | `src/pty.ts`、`fork-features/omp-presentation.ts`、`tests/pty-load.test.ts`、`tests/bun-pty-runtime.mjs`、`package.json`、`.github/workflows/ci.yml` | omp 是编译后的 Bun 可执行文件。每个会话都使用 `Bun.Terminal`（Bun 1.4+），在 Linux/macOS 上提供 `openpty`，在 Windows 上提供 ConPTY。factory 在加载 omp 模块或激活前要求 `Bun.spawn` 和 `Bun.Terminal`；Bun 原生测试运行器在三平台运行完整套件，并运行源码/编译版 runtime fixture。 | 仅 fork |
@@ -48,6 +49,7 @@
 
 - `Publish to npm` 和 `Interaction limit reminder` 已用 `gh workflow disable` 禁用：fork 不向 npm 发布任何内容，提醒跟踪的是上游自己的互动限制。这是仓库状态，所以把 workflow 文件同步回来也不会重新启用它们。
 - `Sync upstream`（`.github/workflows/sync-upstream.yml`）每天通过以 `CI` 为门禁的 PR 把 `upstream/main` 合并进 `main`。
+- `omomp-check`（`.github/workflows/omomp-check.yml`）在每个 PR 和 main push 上以 `copies` 模式调用 `oh-my-omp/.github` 的可复用检查 workflow：把 `omomp-shared.json` 声明的副本与 oh-my-omp/shared main 逐字节比对。仓库自身的测试和类型检查留在 `ci.yml`，保留上游的运行器布局。
 - `omomp-release`（`.github/workflows/omomp-release.yml`）是 omomp 的调用文件：每天 GMT+9 02:00 一次（`cron: "0 17 * * *"`）以及 `workflow_dispatch` 调用 `oh-my-omp/.github/.github/workflows/omomp-release.yml@main`，传 `version-files: package-lock.json`。一次运行把 `CHANGELOG.md` 顶部的 `## [Unreleased]` 提升为 `## [X.Y.Z] - YYYY-MM-DD`，在其上新开一个空的 `## [Unreleased]`，升级 `package.json` 和 `package-lock.json` 的两个版本字段，在 `main` 上提交 `chore: release X.Y.Z`，并在一次原子推送中同时移动 `main`、tag `vX.Y.Z` 和 `release` 分支。合并进入 `main` 不改版本号、也不发布；版本号不手动修改。`## [Unreleased]` 下没有顶层列表项时，运行报告 `nothing-to-release`，不推送任何 ref。
 
 ## 预期的同步冲突
@@ -89,8 +91,9 @@ stop/配置诊断改动必须把结构化原因保留到面向人的通知生成
 会话日志的命名与归档归 fork 所有。上游对 `ExecSession`（`src/session.ts`）中日志路径的改动会以内容冲突的形式到来。解决方法：保留 `fork-features/log-archive.ts` 中的 `sessionLogName` 与 `trackOpenLog`，只搬入上游关于写日志的事实。
 
 omp 升级后，要重新验证 `@oh-my-pi/pi-coding-agent/internal-urls`：
-`InternalUrlRouter.instance().register(handler)` 必须与生产 `read` 共用路由；
-`getHandler("term")` 必须返回同一个可变对象，每次请求读取其 spec 与方法。
+`InternalUrlRouter.instance()` 必须与生产 `read` 共用路由；
+`registerInternalScheme`（`internal-url.ts` 副本）返回 `registered` 后，
+`getHandler("term")` 必须返回刚注册的处理器对象，路由每次请求读取其 spec 与方法。
 最终处理器使用 `{backing: "file", selectors: "lines", immutable: false}`：
 `locate()` 仅为 `/screen.png` 返回文件路径，文本路径返回 null。
 通过真实 `read` 验证全部保留行、`/screen`、`tmux` 内的裸读取（须与 `/screen` 相同）、正负页码、head/tail、

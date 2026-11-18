@@ -32,7 +32,7 @@ import { matchesKey, type Component } from "@earendil-works/pi-tui";
 
 import { formatElapsedUi } from "../src/format-time.ts";
 import { sanitizeOutputText } from "../src/output-safety.ts";
-import { tr } from "../src/i18n.ts";
+import { tr } from "./omomp-shared/i18n.ts";
 import type { ExecSession } from "../src/session.ts";
 import type { SessionStore } from "../src/session-store.ts";
 import type { StyledScreen } from "../src/terminal-screen.ts";
