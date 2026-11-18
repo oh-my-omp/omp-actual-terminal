@@ -4,6 +4,8 @@ All notable changes to this project. **Newest entries go on top.**
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-11-19
+
 ### Changed
 
 - Updated the shared copy of `i18n.ts` to oh-my-omp/shared@33dbe00.
