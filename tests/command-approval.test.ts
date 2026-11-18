@@ -17,6 +17,7 @@ const helpers: ApprovalHelpers = {
 		assert.ok(["true", "echo x", "rm -rf /", "ls"].includes(command), command);
 		return [command.split(" ")];
 	},
+	isShellEnvironmentAssignment: (word) => /^[A-Za-z_][A-Za-z0-9_]*\+?=/u.test(word),
 	extractLiteralAndChainSegments(command) {
 		assert.equal(command, "true && echo x");
 		return [{ text: "true", argv: ["true"] }, { text: "echo x", argv: ["echo", "x"] }];
@@ -33,6 +34,7 @@ const segmentHelpers: ApprovalHelpers = {
 	tokenizeShellSegments: (command) => command.split(/&&|\|\||;|\|/u)
 		.map((segment) => segment.trim().split(/\s+/u).filter((word) => word.length > 0))
 		.filter((words) => words.length > 0),
+	isShellEnvironmentAssignment: (word) => /^[A-Za-z_][A-Za-z0-9_]*\+?=/u.test(word),
 	extractLiteralAndChainSegments: (command) => command.split("&&").map((text) => ({
 		text: text.trim(), argv: text.trim().split(/\s+/u),
 	})),

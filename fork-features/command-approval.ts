@@ -1,11 +1,11 @@
 /**
- * @upstream can1357/oh-my-pi v18.22.0 (3e8cff3b7ce1), packages/coding-agent/src/tools/bash.ts:
+ * @upstream can1357/oh-my-pi v18.22.2 (e1ae2cc998ef), packages/coding-agent/src/tools/bash.ts:
  * `BashTool.approval`, `#patternPolicies` (operator view from `Settings.grantAuthority()`),
  * `getBashApprovalPatternRules`, `bashCommandSegments`, `bashApprovalRuleMatches`,
- * `findNonCompoundBashRestrictionRule`, `findBashApprovalPatternRule` and `resolveBashPatternDecision`;
- * the `NAME=`/`NAME+=` prefix test of `isShellEnvironmentAssignment` in packages/coding-agent/src/tools/shell-tokenize.ts.
- * The host exports none of these judgements: `BashTool.approval` needs a full ToolSession and
- * reads `ctx.toolNames` for `bash.interceptor`, which this port does not inherit. It is copied, not called.
+ * `findNonCompoundBashRestrictionRule`, `findBashApprovalPatternRule` and `resolveBashPatternDecision`.
+ * The host exports none of these pattern judgements: `BashTool.approval` needs a full ToolSession and
+ * reads `ctx.toolNames` for `bash.interceptor`, which this port does not inherit. They are copied, not called;
+ * the shell judgements the host does export (tokenizer, `isShellEnvironmentAssignment`) are injected.
  * Not ported: `bash.allowedEnvVars` and per-rule `env` allow lists. They relax only `allow`
  * matching, so their absence makes this port stricter than the host, never looser.
  * Differences: the command is exec_command's raw `cmd`; settings are parsed at
@@ -42,18 +42,17 @@ export interface LiteralShellCommandSegment {
 export interface ApprovalHelpers {
 	readonly criticalPatterns: readonly RegExp[];
 	readonly tokenizeShellSegments: (command: string) => readonly (readonly string[])[];
+	readonly isShellEnvironmentAssignment: (word: string) => boolean;
 	readonly extractLiteralAndChainSegments: (command: string) => readonly LiteralShellCommandSegment[] | null;
 	readonly truncateForPrompt: (command: string) => string;
 }
 
-type Tokenize = ApprovalHelpers["tokenizeShellSegments"];
+type Segmenting = Pick<ApprovalHelpers, "tokenizeShellSegments" | "isShellEnvironmentAssignment">;
 const BASH_APPROVAL_SHELL_CONTROL_CHARS: Readonly<Record<string, true>> = {
 	"\n": true, "\r": true, ";": true, "&": true, "|": true, "<": true,
 	">": true, "`": true, $: true, "(": true, ")": true,
 };
 const BASH_APPROVAL_REINTERPRETED_ARGUMENT_RE = /(?:^|[ \t])(?:-[^-]*[ce]|--(?:command|eval))(?:[= \t]|$)/u;
-// `NAME=` or `NAME+=` prefix: upstream `isShellEnvironmentAssignment`, inlined as its only use.
-const SHELL_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/u;
 
 function hasBashApprovalShellControl(command: string): boolean {
 	let quote: "'" | '"' | undefined;
@@ -118,30 +117,30 @@ function commandMatchesBashApprovalPattern(command: string, pattern: string): bo
  * Each segment as a candidate, plus the same segment without its leading `NAME=value`
  * assignments, so `FOO=1 npm publish x` is still matched by a rule for `npm publish *`.
  */
-function bashCommandSegments(command: string, tokenize: Tokenize): string[] {
+function bashCommandSegments(command: string, segmenting: Segmenting): string[] {
 	const candidates: string[] = [];
-	for (const words of tokenize(command)) {
+	for (const words of segmenting.tokenizeShellSegments(command)) {
 		if (words.length === 0) continue;
 		candidates.push(words.join(" "));
 		let firstCmdIndex = 0;
-		while (firstCmdIndex < words.length && SHELL_ASSIGNMENT.test(words[firstCmdIndex])) firstCmdIndex++;
+		while (firstCmdIndex < words.length && segmenting.isShellEnvironmentAssignment(words[firstCmdIndex])) firstCmdIndex++;
 		if (firstCmdIndex > 0 && firstCmdIndex < words.length) candidates.push(words.slice(firstCmdIndex).join(" "));
 	}
 	return candidates;
 }
-function commandSegmentMatchesBashApprovalPattern(command: string, pattern: string, tokenize: Tokenize): boolean {
+function commandSegmentMatchesBashApprovalPattern(command: string, pattern: string, segmenting: Segmenting): boolean {
 	const regex = bashApprovalPatternToRegExp(pattern);
 	const normalized = normalizeBashApprovalPattern(command);
 	if (normalized.length === 0) return false;
 	if (regex.test(normalized)) return true;
-	return bashCommandSegments(command, tokenize).some((segment) => regex.test(segment));
+	return bashCommandSegments(command, segmenting).some((segment) => regex.test(segment));
 }
-function bashApprovalRuleMatches(command: string, rule: BashApprovalPatternRule, tokenize: Tokenize): boolean {
+function bashApprovalRuleMatches(command: string, rule: BashApprovalPatternRule, segmenting: Segmenting): boolean {
 	if (rule.approval === "allow") {
 		if (hasBashApprovalShellControl(command)) return false;
 		return commandMatchesBashApprovalPattern(command, rule.match);
 	}
-	return commandSegmentMatchesBashApprovalPattern(command, rule.match, tokenize);
+	return commandSegmentMatchesBashApprovalPattern(command, rule.match, segmenting);
 }
 
 /**
@@ -151,9 +150,9 @@ function bashApprovalRuleMatches(command: string, rule: BashApprovalPatternRule,
 function findNonCompoundBashRestrictionRule(
 	command: string,
 	rules: readonly BashApprovalPatternRule[],
-	tokenize: Tokenize,
+	segmenting: Segmenting,
 ): BashApprovalPatternRule | undefined {
-	const segments = bashCommandSegments(command, tokenize);
+	const segments = bashCommandSegments(command, segmenting);
 	let promptRule: BashApprovalPatternRule | undefined;
 	for (const rule of rules) {
 		if (
@@ -176,10 +175,10 @@ function findNonCompoundBashRestrictionRule(
 function findBashApprovalPatternRule(
 	command: string,
 	rules: readonly BashApprovalPatternRule[],
-	tokenize: Tokenize,
+	segmenting: Segmenting,
 ): BashApprovalPatternRule | undefined {
-	if (hasBashApprovalShellControl(command)) return findNonCompoundBashRestrictionRule(command, rules, tokenize);
-	return rules.find((rule) => bashApprovalRuleMatches(command, rule, tokenize));
+	if (hasBashApprovalShellControl(command)) return findNonCompoundBashRestrictionRule(command, rules, segmenting);
+	return rules.find((rule) => bashApprovalRuleMatches(command, rule, segmenting));
 }
 
 type PatternDecision =
@@ -193,7 +192,7 @@ function resolveBashPatternDecision(
 	command: string,
 	compoundSegments: readonly LiteralShellCommandSegment[] | null,
 	rules: readonly BashApprovalPatternRule[],
-	tokenize: Tokenize,
+	segmenting: Segmenting,
 ): PatternDecision {
 	if (compoundSegments) {
 		let promptRule: BashApprovalPatternRule | undefined;
@@ -201,7 +200,7 @@ function resolveBashPatternDecision(
 			if (
 				rule.approval !== "allow" &&
 				commandMatchesBashApprovalPattern(command, rule.match) &&
-				!compoundSegments.some((segment) => commandSegmentMatchesBashApprovalPattern(segment.text, rule.match, tokenize))
+				!compoundSegments.some((segment) => commandSegmentMatchesBashApprovalPattern(segment.text, rule.match, segmenting))
 			) {
 				if (rule.approval === "deny") return { kind: "deny", rule };
 				promptRule ??= rule;
@@ -209,7 +208,7 @@ function resolveBashPatternDecision(
 		}
 		let hasUnmatchedSegment = false;
 		for (const segment of compoundSegments) {
-			const segmentRule = findBashApprovalPatternRule(segment.text, rules, tokenize);
+			const segmentRule = findBashApprovalPatternRule(segment.text, rules, segmenting);
 			if (segmentRule?.approval === "deny") return { kind: "deny", rule: segmentRule };
 			if (segmentRule?.approval === "prompt") promptRule ??= segmentRule;
 			if (!segmentRule) hasUnmatchedSegment = true;
@@ -217,7 +216,7 @@ function resolveBashPatternDecision(
 		if (promptRule) return { kind: "prompt", rule: promptRule };
 		return hasUnmatchedSegment ? { kind: "unmatched" } : { kind: "allow" };
 	}
-	const patternRule = findBashApprovalPatternRule(command, rules, tokenize);
+	const patternRule = findBashApprovalPatternRule(command, rules, segmenting);
 	if (patternRule?.approval === "deny") return { kind: "deny", rule: patternRule };
 	if (patternRule?.approval === "prompt") return { kind: "prompt", rule: patternRule };
 	if (patternRule?.approval === "allow") return { kind: "allow" };
@@ -234,12 +233,11 @@ export function approveCommand(
 	shell: string | undefined,
 	helpers: ApprovalHelpers,
 ): CommandApproval {
-	const tokenize = helpers.tokenizeShellSegments;
 	const compoundSegments = shell && isPosixShell(shell) ? helpers.extractLiteralAndChainSegments(command) : null;
-	const decision = resolveBashPatternDecision(command, compoundSegments, views.session, tokenize);
+	const decision = resolveBashPatternDecision(command, compoundSegments, views.session, helpers);
 	const authorityDecision = views.authority === views.session
 		? decision
-		: resolveBashPatternDecision(command, compoundSegments, views.authority, tokenize);
+		: resolveBashPatternDecision(command, compoundSegments, views.authority, helpers);
 	const denied = authorityDecision.kind === "deny" ? authorityDecision : decision.kind === "deny" ? decision : undefined;
 	if (denied) {
 		return { tier: "exec", override: true, policy: "deny", reason: `Blocked by bash pattern: ${denied.rule.match}` };
@@ -339,6 +337,7 @@ export async function loadCommandApprovalHost(): Promise<CommandApprovalHost> {
 		helpers: {
 			criticalPatterns,
 			tokenizeShellSegments: exportedFunction(tokenizer, "tokenizeShellSegments", "tools/shell-tokenize") as ApprovalHelpers["tokenizeShellSegments"],
+			isShellEnvironmentAssignment: exportedFunction(tokenizer, "isShellEnvironmentAssignment", "tools/shell-tokenize") as ApprovalHelpers["isShellEnvironmentAssignment"],
 			extractLiteralAndChainSegments: exportedFunction(tokenizer, "extractLiteralAndChainSegments", "tools/shell-tokenize") as ApprovalHelpers["extractLiteralAndChainSegments"],
 			truncateForPrompt: exportedFunction(approvalModule, "truncateForPrompt", "tools/approval") as ApprovalHelpers["truncateForPrompt"],
 		},
