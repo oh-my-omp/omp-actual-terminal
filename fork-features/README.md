@@ -303,16 +303,24 @@ tools, the system prompt's `xd://` device section must list none of them, and
 omp must still read no `promptSnippet`/`promptGuidelines`.
 
 Command approval is ported from
-[`can1357/oh-my-pi@57b56631ee009098a78d9badf91afc3a48eef32e`](https://github.com/can1357/oh-my-pi/blob/57b56631ee009098a78d9badf91afc3a48eef32e/packages/coding-agent/src/tools/bash.ts),
+[`can1357/oh-my-pi` v18.22.2 (`e1ae2cc998ef`)](https://github.com/can1357/oh-my-pi/blob/v18.22.2/packages/coding-agent/src/tools/bash.ts),
 `packages/coding-agent/src/tools/bash.ts` (internal rule helpers and
-`BashTool.approval` / `formatApprovalDetails`). Differences are argument name
-`cmd`, explicit bound-session settings, injected host helpers, and typed
-boundary parsing; rule ordering and every compound/critical branch are retained.
+`BashTool.approval`). The host exports none of these pattern judgements, so the
+port is copied, not called: `BashTool.approval` needs a full ToolSession and
+would inherit `bash.interceptor`. The shell judgements the host does export are
+injected, including the `NAME=` prefix test `isShellEnvironmentAssignment`.
+Differences are argument name `cmd`, explicit bound-session settings (the
+session's own `bash.patterns` and the operator layers from `grantAuthority()`),
+injected host helpers, and typed boundary parsing. Operator `deny` and `prompt`
+rules are not lifted by project `allow` rules, and rule ordering and every
+compound/critical branch follow v18.22.2. `bash.allowedEnvVars` and per-rule
+`env` allow lists are not ported, so an allow that depends on a leading env
+assignment asks for approval instead of passing.
 The POSIX-shell predicate is copied from `packages/utils/src/procmgr.ts` into
 `src/shell.ts`, where `exec.initFile` uses it too.
 Factory loading imports root `AgentRegistry` / `CRITICAL_BASH_PATTERNS`,
 `exec/settings`'s `cfgBashPatterns` / `cfgBashAllowCompoundCommands`,
-`tools/shell-tokenize`'s `tokenizeShellSegments` /
+`tools/shell-tokenize`'s `tokenizeShellSegments` / `isShellEnvironmentAssignment` /
 `extractLiteralAndChainSegments`, and `tools/approval`'s `truncateForPrompt`.
 Missing exports reject plugin loading; synchronous approval imports nothing.
 

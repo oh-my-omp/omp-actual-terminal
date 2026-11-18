@@ -127,15 +127,20 @@ omp 升级后要重新验证 shell 桥接：`@oh-my-pi/pi-coding-agent/config/re
 omp 升级后要重新验证顶层挂载：在真实 `omp --mode rpc` 会话中，`get_state` 的 `dumpTools`（只含顶层定义）必须列出全部六个工具，system prompt 的 `xd://` 设备段不得列出其中任何一个，omp 必须仍然不读取 `promptSnippet`/`promptGuidelines`。
 
 命令审批移植自
-[`can1357/oh-my-pi@57b56631ee009098a78d9badf91afc3a48eef32e`](https://github.com/can1357/oh-my-pi/blob/57b56631ee009098a78d9badf91afc3a48eef32e/packages/coding-agent/src/tools/bash.ts)
-的 `packages/coding-agent/src/tools/bash.ts`（内部规则辅助函数、
-`BashTool.approval` / `formatApprovalDetails`）。差异是参数名 `cmd`、
-显式的绑定会话 settings、注入的宿主辅助函数和带类型的边界解析；
-保留规则顺序以及全部 compound/critical 分支。
+[`can1357/oh-my-pi` v18.22.2（`e1ae2cc998ef`）](https://github.com/can1357/oh-my-pi/blob/v18.22.2/packages/coding-agent/src/tools/bash.ts)
+的 `packages/coding-agent/src/tools/bash.ts`（内部规则辅助函数与
+`BashTool.approval`）。宿主没有导出这些 pattern 判定，所以移植是复制而非调用：
+`BashTool.approval` 需要完整的 ToolSession，且会继承 `bash.interceptor`。宿主已导出的 shell 判定
+改为注入，包括 `NAME=` 前缀判定 `isShellEnvironmentAssignment`。
+差异是参数名 `cmd`、显式的绑定会话 settings（会话自身的 `bash.patterns` 与
+`grantAuthority()` 给出的操作员层）、注入的宿主辅助函数和带类型的边界解析。
+操作员的 `deny` 与 `prompt` 规则不会被项目层的 `allow` 解除；规则顺序以及全部
+compound/critical 分支与 v18.22.2 一致。`bash.allowedEnvVars` 和逐规则的 `env`
+allow 列表没有移植，因此依赖前导环境变量赋值的 allow 会转为要求确认，而不是直接通过。
 POSIX shell 判据复制自 `packages/utils/src/procmgr.ts`，放在 `src/shell.ts`，`exec.initFile` 也使用它。
 factory 加载根导出 `AgentRegistry` / `CRITICAL_BASH_PATTERNS`、
 `exec/settings` 的 `cfgBashPatterns` / `cfgBashAllowCompoundCommands`、
-`tools/shell-tokenize` 的 `tokenizeShellSegments` /
+`tools/shell-tokenize` 的 `tokenizeShellSegments` / `isShellEnvironmentAssignment` /
 `extractLiteralAndChainSegments`，以及 `tools/approval` 的 `truncateForPrompt`。
 缺少导出就拒绝插件加载；同步审批不做 import。
 
