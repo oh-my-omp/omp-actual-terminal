@@ -267,8 +267,10 @@ approval logic as its built-in `bash`: ordered `bash.patterns` rules
 patterns. A deny prevents execution; confirmation details show
 `Command: <command>` (truncated only for display). An allow for `true` does
 not allow `true && echo x` unless compound approval is enabled and every
-segment is allowed. omp's approval mode still applies: in `yolo`, explicit
-deny/prompt policies apply, but critical-pattern overrides alone do not ask.
+segment is allowed. Project settings can tighten the operator's `bash.patterns`
+but never lift an operator `deny` or `prompt`. omp's approval mode still applies:
+in `yolo`, explicit deny/prompt policies apply, but critical-pattern overrides
+alone do not ask.
 
 Rules are read live from the calling session, including a child agent's
 own settings overlay. The first `session_start` binds that session by agent

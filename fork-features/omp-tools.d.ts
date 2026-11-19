@@ -136,6 +136,7 @@ declare module "@oh-my-pi/pi-coding-agent/exec/settings" {
 
 declare module "@oh-my-pi/pi-coding-agent/tools/shell-tokenize" {
 	export const tokenizeShellSegments: unknown;
+	export const isShellEnvironmentAssignment: unknown;
 	export const extractLiteralAndChainSegments: unknown;
 }
 
