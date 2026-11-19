@@ -1,17 +1,3 @@
-/**
- * @upstream can1357/oh-my-pi v18.22.2 (e1ae2cc998ef), packages/coding-agent/src/tools/bash.ts:
- * `BashTool.approval`, `#patternPolicies` (operator view from `Settings.grantAuthority()`),
- * `getBashApprovalPatternRules`, `bashCommandSegments`, `bashApprovalRuleMatches`,
- * `findNonCompoundBashRestrictionRule`, `findBashApprovalPatternRule` and `resolveBashPatternDecision`.
- * The host exports none of these pattern judgements: `BashTool.approval` needs a full ToolSession and
- * reads `ctx.toolNames` for `bash.interceptor`, which this port does not inherit. They are copied, not called;
- * the shell judgements the host does export (tokenizer, `isShellEnvironmentAssignment`) are injected.
- * Not ported: `bash.allowedEnvVars` and per-rule `env` allow lists. They relax only `allow`
- * matching, so their absence makes this port stricter than the host, never looser.
- * Differences: the command is exec_command's raw `cmd`; settings are parsed at
- * the bound-session adapter; host tokenizer/critical patterns are injected.
- * The unavailable utils/procmgr `isPosixShell` predicate is copied verbatim into src/shell.ts.
- */
 import { isPosixShell } from "../src/shell.ts";
 import type { HostBindingState, HostSettings, SessionRegistry } from "./session-binding.ts";
 
@@ -26,10 +12,6 @@ export type CommandApproval =
 	| { readonly tier: "exec"; readonly override: true; readonly reason: "Critical pattern detected" }
 	| { readonly tier: "exec"; readonly override: true; readonly policy: "deny" | "prompt"; readonly reason: string };
 
-/**
- * The two `bash.patterns` views of one call: the bound session's own rules, and the operator
- * layers alone. Project layers may tighten the operator's rules but never loosen them.
- */
 export interface BashPatternViews {
 	readonly session: readonly BashApprovalPatternRule[];
 	readonly authority: readonly BashApprovalPatternRule[];
@@ -96,7 +78,6 @@ function normalizeBashPatternApproval(value: unknown): BashPatternApproval | und
 	return normalized === "allow" || normalized === "deny" || normalized === "prompt" ? normalized : undefined;
 }
 
-/** Parse the host setting once at this call's boundary, including upstream's invalid-rule filtering. */
 export function getBashApprovalPatternRules(value: unknown): readonly BashApprovalPatternRule[] {
 	if (!Array.isArray(value)) return [];
 	const items: readonly unknown[] = value;
@@ -113,10 +94,6 @@ function commandMatchesBashApprovalPattern(command: string, pattern: string): bo
 	return normalized.length > 0 && bashApprovalPatternToRegExp(pattern).test(normalized);
 }
 
-/**
- * Each segment as a candidate, plus the same segment without its leading `NAME=value`
- * assignments, so `FOO=1 npm publish x` is still matched by a rule for `npm publish *`.
- */
 function bashCommandSegments(command: string, segmenting: Segmenting): string[] {
 	const candidates: string[] = [];
 	for (const words of segmenting.tokenizeShellSegments(command)) {
@@ -143,10 +120,6 @@ function bashApprovalRuleMatches(command: string, rule: BashApprovalPatternRule,
 	return commandSegmentMatchesBashApprovalPattern(command, rule.match, segmenting);
 }
 
-/**
- * A command with shell control: a `deny` on the whole line or any segment wins, otherwise the first
- * `prompt`. Segments are judged in declaration order, so a later `deny` beats an earlier `prompt`.
- */
 function findNonCompoundBashRestrictionRule(
 	command: string,
 	rules: readonly BashApprovalPatternRule[],
@@ -187,7 +160,6 @@ type PatternDecision =
 	| { readonly kind: "allow" }
 	| { readonly kind: "unmatched" };
 
-/** One `bash.patterns` view judged against the command, on the compound or the first-match path. */
 function resolveBashPatternDecision(
 	command: string,
 	compoundSegments: readonly LiteralShellCommandSegment[] | null,
@@ -223,10 +195,6 @@ function resolveBashPatternDecision(
 	return { kind: "unmatched" };
 }
 
-/**
- * The built-in BashTool approval precedence, with already-bound inputs: an operator-or-session
- * deny, then a prompt from either view, then critical patterns, then allow from the session view.
- */
 export function approveCommand(
 	command: string,
 	views: BashPatternViews,
@@ -260,7 +228,6 @@ export function approveCommand(
 	return "exec";
 }
 
-/** Parse the raw tool argument; malformed inputs match built-in approval's empty/missing behavior. */
 export function approvalCommand(args: unknown, fallback: string): string {
 	return typeof args === "object" && args !== null && "cmd" in args && typeof args.cmd === "string" ? args.cmd : fallback;
 }
@@ -304,7 +271,6 @@ function settingReader(module: unknown, name: string): (settings: HostSettings) 
 	return (settings) => get.call(setting, settings);
 }
 
-/** Factory-only imports: missing host contracts reject loading, never degrade approval. */
 export async function loadCommandApprovalHost(): Promise<CommandApprovalHost> {
 	const [root, settings, tokenizer, approvalModule] = await Promise.all([
 		import("@oh-my-pi/pi-coding-agent"),

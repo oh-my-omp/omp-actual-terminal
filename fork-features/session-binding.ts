@@ -4,7 +4,6 @@
  */
 export interface HostSettings {
 	getShellConfig(): { readonly shell: string };
-	/** The operator layers alone (host `Settings.grantAuthority()`), called optionally as the host's approval does. */
 	readonly grantAuthority?: () => HostSettings;
 }
 

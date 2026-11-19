@@ -23,10 +23,8 @@ const helpers: ApprovalHelpers = {
 	truncateForPrompt: (command) => command.slice(0, 40),
 };
 
-/** One view only: the session's rules are also the operator view, as when no operator layer exists. */
 const single = (rules: readonly BashApprovalPatternRule[]): BashPatternViews => ({ session: rules, authority: rules });
 
-// Splits on the separators the approval tests use; real tokenizer parity runs in real omp.
 const segmentHelpers: ApprovalHelpers = {
 	criticalPatterns: [/rm -rf/, /git reset/],
 	tokenizeShellSegments: (command) => command.split(/&&|\|\||;|\|/u)
@@ -187,7 +185,6 @@ describe("command approval host precedence", () => {
 
 describe("approval session binding via activate", () => {
 	it("pending and Unbound do not read settings, including dangerous commands", async () => {
-		// The formatted text is person-facing; pin the language so the assertions are about approval.
 		const savedLanguage = process.env.OMOMP_LANG;
 		process.env.OMOMP_LANG = "en";
 		try {
