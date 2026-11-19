@@ -4,6 +4,12 @@ All notable changes to this project. **Newest entries go on top.**
 
 ## [Unreleased]
 
+## [0.15.3] - 2026-11-20
+
+### Fixed
+
+- Made `exec_command` command approval follow omp 18.22.2's built-in `bash` precedence: operator `bash.patterns` deny and prompt rules are no longer lifted by project allow rules; on a line with `;`, `|`, `||` or `&&`, a later deny beats an earlier prompt; an explicit prompt rule is judged before critical-pattern detection; and restriction rules match a command after its leading `NAME=value` assignments, judged by omp's own `isShellEnvironmentAssignment`
+
 ## [0.15.2] - 2026-11-19
 
 ### Changed
@@ -18,7 +24,6 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Fixed
 
-- Made `exec_command` command approval follow omp 18.22.2's built-in `bash` precedence: operator `bash.patterns` deny and prompt rules are no longer lifted by project allow rules; on a line with `;`, `|`, `||` or `&&`, a later deny beats an earlier prompt; an explicit prompt rule is judged before critical-pattern detection; and restriction rules match a command after its leading `NAME=value` assignments, judged by omp's own `isShellEnvironmentAssignment`
 - Counted a return after the agent wrote Ctrl-C or Ctrl-\ with `write_stdin` as a normal ending, so an interrupt the agent sent no longer raises `abnormal_return`; later input without one clears the mark
 
 ## [0.15.0] - 2026-11-15
