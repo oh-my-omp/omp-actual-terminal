@@ -1,19 +1,3 @@
-/**
- * Stop detectors: whether the main agent's final response means its work is
- * completely done, so the notices about its returned terminals need no turn.
- *
- * - judge: OMP's judge role chain (`@oh-my-pi/pi-coding-agent/judgment`
- *   `resolveJudge`), billed to the session like OMP's own judgments; one
- *   choice question over the rendered judge prompt.
- * - llm: the chat models of OMP's `smol` role chain, in order, through
- *   `@oh-my-pi/pi-ai` `completeSimple`; the answer's first line is DONE or
- *   NOT_DONE.
- * - todo: omp-todo-more's `omp-todo-more:read` reply; done when the list has
- *   items and every one is completed or abandoned.
- * `auto` picks judge when its chain resolves a model, else llm when `smol`
- * resolves one, else todo. A chosen detector that is unavailable or fails
- * gives no decision, and the notices are delivered as usual.
- */
 import type { TodoReadResult } from "./omomp-shared/todo-read.ts";
 import { fillTemplate, type JudgePromptField, type StopConfig } from "./stop-config.ts";
 import type { StopInput, StopVerdict } from "./terminal-notice.ts";
@@ -34,8 +18,6 @@ const LLM_SYSTEM_PROMPT = [
 	`NOT_DONE: ${NOT_DONE_CRITERION}`,
 	"Answer with exactly DONE or NOT_DONE on the first line; one short reason may follow on the next line.",
 ].join("\n");
-
-// ---- omp internals, parsed once at plugin load ----------------------------
 
 interface HostModel {
 	readonly provider: string;
@@ -58,7 +40,6 @@ interface AssistantReply {
 	readonly content?: unknown;
 }
 
-/** The omp functions the detectors call; a missing one fails plugin loading. */
 export interface StopHost {
 	readonly getAgentDir: () => string;
 	readonly resolveJudge: (deps: unknown) => ChainJudge;
@@ -76,7 +57,6 @@ function functionOf(module: unknown, name: string, from: string): (...args: neve
 	return value as (...args: never[]) => unknown;
 }
 
-/** Load the omp modules the stop detectors use, before any tool registers. */
 export async function loadStopHost(): Promise<StopHost> {
 	const [agent, judgment, resolver, roles, ai] = await Promise.all([
 		import("@oh-my-pi/pi-coding-agent"),
@@ -97,9 +77,6 @@ export async function loadStopHost(): Promise<StopHost> {
 	};
 }
 
-// ---- the session the detectors run for -------------------------------------
-
-/** The members of omp's AgentSession the detectors read. */
 export interface DetectorSession {
 	readonly settings: unknown;
 	readonly sessionManager: unknown;
@@ -109,7 +86,6 @@ export interface DetectorSession {
 	readonly telemetry: unknown;
 }
 
-/** Parse the bound AgentSession at the boundary; undefined when it lacks a member. */
 export function detectorSession(session: unknown): DetectorSession | undefined {
 	if (typeof session !== "object" || session === null) return undefined;
 	const registry: unknown = Reflect.get(session, "modelRegistry");
@@ -128,9 +104,6 @@ export function detectorSession(session: unknown): DetectorSession | undefined {
 	};
 }
 
-// ---- todo ----------------------------------------------------------------------
-
-/** Done when the list has items and every one is completed or abandoned; blocked items keep it open. */
 export function todoVerdict(todo: TodoReadResult): StopVerdict {
 	switch (todo.kind) {
 		case "unavailable":
@@ -172,8 +145,6 @@ function todoText(todo: TodoReadResult): string {
 	}
 }
 
-// ---- judge and llm ----------------------------------------------------------
-
 function textOf(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
@@ -184,7 +155,6 @@ function textOf(content: unknown): string {
 		.join("");
 }
 
-/** The first line of an LLM answer as a verdict; undefined when it is neither DONE nor NOT_DONE. */
 export function parseLlmAnswer(text: string): "done" | "not_done" | undefined {
 	const head = (text.trim().split("\n")[0] ?? "").replace(/^[`*\s]+|[`*\s.]+$/g, "").toUpperCase();
 	if (head === "DONE") return "done";
@@ -192,7 +162,6 @@ export function parseLlmAnswer(text: string): "done" | "not_done" | undefined {
 	return undefined;
 }
 
-/** omp's judge role chain for the session, billed to it under `purpose`; undefined when no judge model resolves. */
 export function judgeChain(host: StopHost, session: DetectorSession, purpose: string): ChainJudge | undefined {
 	const chain = host.resolveJudge({
 		settings: session.settings,
@@ -255,13 +224,10 @@ async function runLlm(host: StopHost, session: DetectorSession, models: readonly
 
 export interface StopDetectorDeps {
 	readonly host: StopHost;
-	/** The bound AgentSession, or undefined while unbound. */
 	readonly session: () => unknown;
-	/** One synchronous `omp-todo-more:read` request for the main agent. */
 	readonly readTodo: () => TodoReadResult;
 }
 
-/** Decide one stop with the configured detector. Never throws for an expected failure; it returns `undecided`. */
 export async function detectStop(deps: StopDetectorDeps, config: StopConfig, input: StopInput, signal: AbortSignal): Promise<StopVerdict> {
 	if (config.mode === "off") return { kind: "undecided", cause: "unavailable", reason: { kind: "off" } };
 	const todo = deps.readTodo();

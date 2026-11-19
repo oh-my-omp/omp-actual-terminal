@@ -6,15 +6,6 @@ import { join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
 
-// Session logs whose last write is more than seven days old are replaced by a
-// standard gzip `<name>.log.gz` (readable with zcat); their content is never
-// dropped. A log is archived only once its writer is provably gone:
-// - this process's logs: its `SessionLog` has closed (`openLogs` is the record
-//   of every log file this process still holds, across activations/reloads);
-// - another process's logs: the owner pid in the name no longer exists, or
-//   the log was last written before the machine's last boot;
-// - legacy names without an owner pid: last written before the last boot.
-
 export const LOG_ARCHIVE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const SCAN_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const LOG_PREFIX = "pi-unified-exec-";
@@ -25,12 +16,9 @@ interface LogArchiveRegistry {
 	scan: Promise<readonly ArchiveResult[]> | undefined;
 }
 
-// A child agent and an extension reload may load another copy of this module;
-// open session logs outlive the activation that created them.
 const registrySymbol = Symbol.for("omp-unified-exec.log-archive");
 const processGlobal = globalThis as typeof globalThis & { [registrySymbol]?: LogArchiveRegistry };
 const registry: LogArchiveRegistry = processGlobal[registrySymbol] ??= { openLogs: new Set(), timer: undefined, scan: undefined };
-/** Log paths whose file this process still holds open. */
 export const openSessionLogs: ReadonlySet<string> = registry.openLogs;
 
 export type LogName =
@@ -52,14 +40,12 @@ export type ArchiveResult =
 
 export interface ArchivePolicy {
 	readonly now: number;
-	/** Wall-clock time of the last boot; no process survives it. */
 	readonly bootTime: number;
 	readonly selfPid: number;
 	readonly openLogs: ReadonlySet<string>;
 	readonly pidExists: (pid: number) => boolean;
 }
 
-/** The log file name for a new session of this process. */
 export function sessionLogName(sessionId: number): string {
 	return `${LOG_PREFIX}${process.pid}-${sessionId}-${randomBytes(4).toString("hex")}.log`;
 }
@@ -71,10 +57,8 @@ export function parseLogName(name: string): LogName | undefined {
 	return undefined;
 }
 
-/** Most buffers one `writev` takes (IOV_MAX on Linux and macOS). */
 const WRITEV_MAX_BUFFERS = 1024;
 
-/** The part of `batch` after its first `written` bytes, as views into the same chunks. */
 function unwrittenTail(batch: readonly Uint8Array[], written: number): Uint8Array[] {
 	const tail: Uint8Array[] = [];
 	let offset = written;
@@ -89,16 +73,6 @@ function unwrittenTail(batch: readonly Uint8Array[], written: number): Uint8Arra
 	return tail;
 }
 
-/**
- * A session's raw log, every child chunk appended in arrival order. Chunks
- * stay the views the PTY delivered (Bun passes each callback a buffer of its
- * own and never reuses it) and go to disk in one `writev` at a time: what
- * waits is what arrived during the write in flight, instead of a copy and a
- * queued stream write per chunk. A short `writev` keeps its unwritten
- * remainder queued for the next write. Open from creation until `end`
- * settles, as `openSessionLogs` records; the first failed write — including
- * one that reports no progress without an error — stops the mirror.
- */
 export class SessionLog {
 	private pending: Uint8Array[] = [];
 	private pendingBytes = 0;
@@ -110,13 +84,11 @@ export class SessionLog {
 		registry.openLogs.add(path);
 	}
 
-	/** Create (or truncate) the file now, so it exists before the child writes. */
 	static open(path: string, onError: (error: Error) => void): SessionLog {
 		closeSync(openSync(path, "w"));
 		return new SessionLog(path, openSync(path, "a"), onError);
 	}
 
-	/** Bytes accepted and not yet written. */
 	get backlogBytes(): number {
 		return this.pendingBytes;
 	}
@@ -128,7 +100,6 @@ export class SessionLog {
 		this.flush();
 	}
 
-	/** Write what is pending, then close; resolves once the file is closed (at once after a failed write). */
 	end(): Promise<void> {
 		if (!this.ending) {
 			this.ending = Promise.withResolvers<void>();
@@ -149,8 +120,7 @@ export class SessionLog {
 		const batchBytes = batch.reduce((bytes, chunk) => bytes + chunk.length, 0);
 		this.writing = true;
 		// `writev` may write fewer bytes than the batch holds — a short write at the
-		// file-size limit, among others — and report no error for it. Only the bytes
-		// it wrote leave the queue; the rest stays at the head and goes out next.
+		// file-size limit, among others — and report no error for it.
 		writev(this.fd, batch, (error, bytesWritten) => {
 			this.writing = false;
 			if (error) {
@@ -189,7 +159,6 @@ export class SessionLog {
 	}
 }
 
-/** POSIX existence probe: only ESRCH proves the pid is gone; anything else counts as alive. */
 export function pidExists(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
@@ -216,7 +185,6 @@ async function removeQuietly(path: string): Promise<void> {
 	await unlink(path).catch(() => undefined);
 }
 
-/** Archive one candidate; never throws, and never removes the source unless its gzip is published. */
 export async function archiveLog(dir: string, fileName: string, name: LogName, policy: ArchivePolicy): Promise<ArchiveResult> {
 	const path = join(dir, fileName);
 	const skip = (reason: SkipReason, detail?: string): ArchiveResult => ({ name: fileName, kind: "skipped", reason, detail });
@@ -272,7 +240,6 @@ export async function archiveLog(dir: string, fileName: string, name: LogName, p
 	}
 }
 
-/** Archive every eligible session log in `dir`, one at a time. */
 export async function archiveLogs(dir: string, policy: ArchivePolicy): Promise<readonly ArchiveResult[]> {
 	const results: ArchiveResult[] = [];
 	for (const fileName of await readdir(dir)) {
@@ -291,7 +258,6 @@ function runScan(): void {
 		.finally(() => { registry.scan = undefined; });
 }
 
-/** Scan now and daily for as long as the process lives; a newer activation replaces the timer. */
 export function scheduleLogArchive(): void {
 	clearInterval(registry.timer);
 	registry.timer = setInterval(runScan, SCAN_INTERVAL_MS);

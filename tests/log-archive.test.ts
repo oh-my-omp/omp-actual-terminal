@@ -33,7 +33,6 @@ async function exists(path: string): Promise<boolean> {
 	return lstat(path).then(() => true, () => false);
 }
 
-/** Outcome per file name; directory listing order is not specified. */
 function outcomes(results: readonly ArchiveResult[]): Record<string, string> {
 	return Object.fromEntries(results.map((r) => [r.name, r.kind === "skipped" ? r.reason : r.kind]));
 }
@@ -147,11 +146,9 @@ describe("log archive", () => {
 		const errors: Error[] = [];
 		const log = SessionLog.open(path, (error) => errors.push(error));
 		const encoder = new TextEncoder();
-		// More chunks than one writev takes, written while earlier batches are in flight.
 		const lines = Array.from({ length: 3000 }, (_, index) => `line ${index}\n`);
 		for (const line of lines) log.write(encoder.encode(line));
 		assert.ok(log.backlogBytes > 0, "chunks wait while a write is in flight");
-		// Every accepted chunk is written while the log stays open; only then age the file.
 		while (log.backlogBytes > 0) await new Promise((resolve) => setTimeout(resolve, 1));
 		const old = new Date(Date.now() - 10 * DAY);
 		const live: ArchivePolicy = { now: Date.now(), bootTime: old.getTime() - DAY, selfPid: process.pid, openLogs: openSessionLogs, pidExists };
@@ -174,8 +171,6 @@ describe("log archive", () => {
 	});
 
 	it("counts only the bytes a short write wrote, then reports the failure once", { skip: process.platform === "win32" }, async () => {
-		// A short `writev` — here at RLIMIT_FSIZE — used to count as a whole batch:
-		// the file stopped growing and no error was reported for the lost bytes.
 		const logPath = join(dir, "short.log");
 		const driver = join(dir, "driver.ts");
 		const modulePath = fileURLToPath(new URL("../fork-features/log-archive.ts", import.meta.url));

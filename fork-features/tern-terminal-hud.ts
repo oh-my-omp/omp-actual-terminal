@@ -1,29 +1,3 @@
-/**
- * Tern terminal HUD (fork): live view of every exec_command session for omp's
- * native (Tern Surface Protocol) frontend.
- *
- * A terminals segment joins omp's own running-work pill (`omp.hud.pill`,
- * after its agents and jobs segments): a tinted icon and the stored session
- * count, the words in the hover label. omp has no API for pill segments, so
- * the HUD wraps `InteractiveMode.prototype.describeHudPills` once per process
- * and appends a segment component; Tern draws the capsule, the divider and
- * every chat style. Clicking it opens the Terminals view, built like omp's
- * Background jobs view: a centered card with the sessions as a master list
- * (icon, command, elapsed) and the selected session's status row, command,
- * facts and colored output as its detail. Open shows its retained history
- * and current screen in a full-pane terminal page, with typed keys sent
- * through ExecSession.write. Kill in the view or page uses the same
- * termination path as kill_session.
- *
- * Authority: each session's TerminalScreen (src/terminal-screen.ts) and the
- * SessionStore. The HUD keeps no copy of either: every description re-reads
- * them, and subscriptions only ask omp to describe again.
- *
- * The view and the page are extension custom overlays whose components
- * declare a `nativeOverlay` with omp's own roles (`omp.overlay.jobs`,
- * `omp.overlay.console`), so Tern's built-in styles draw them in every theme
- * and chat style without a plugin; the components keep all behavior.
- */
 import { homedir } from "node:os";
 import { isAbsolute, relative, sep } from "node:path";
 
@@ -37,13 +11,10 @@ import type { ExecSession } from "../src/session.ts";
 import type { SessionStore } from "../src/session-store.ts";
 import type { StyledScreen } from "../src/terminal-screen.ts";
 
-// ---------------- omp native contract ----------------
-
 function requalify(change: string): Error {
 	return new Error(`omp-unified-exec: ${change}; requalify fork-features/tern-terminal-hud.ts for this omp version`);
 }
 
-/** omp's process-wide "a TSP surface is live" flag. */
 export interface NativeRenderingState {
 	isNativeRendering(): boolean;
 	onNativeRenderingChange(listener: (on: boolean) => void): () => void;
@@ -60,7 +31,6 @@ function parseNativeRenderingState(value: { readonly [K in keyof NativeRendering
 	};
 }
 
-/** The prototype slot of omp's `InteractiveMode` that describes the running-work pill row. */
 export interface HudPillsPrototype {
 	describeHudPills(this: object): unknown;
 }
@@ -69,7 +39,6 @@ function isHudPillsPrototype(value: unknown): value is HudPillsPrototype {
 	return typeof value === "object" && value !== null && "describeHudPills" in value && typeof value.describeHudPills === "function";
 }
 
-/** Parse `@oh-my-pi/pi-coding-agent/modes/interactive-mode`; fails when omp no longer has the pill describer. */
 export function parseInteractiveModeModule(value: { readonly InteractiveMode?: unknown }): HudPillsPrototype {
 	const mode = value.InteractiveMode;
 	const prototype: unknown = typeof mode === "function" ? mode.prototype : undefined;
@@ -79,13 +48,11 @@ export function parseInteractiveModeModule(value: { readonly InteractiveMode?: u
 	return prototype;
 }
 
-/** The omp modules the HUD reads, parsed at load so a reshaped omp fails plugin loading. */
 export interface TernHudHost {
 	readonly native: NativeRenderingState;
 	readonly pills: HudPillsPrototype;
 }
 
-/** A described node in omp's native view format (TSP node without its wire id). */
 export interface HudNode {
 	readonly k: string;
 	readonly p?: Readonly<Record<string, unknown>>;
@@ -93,10 +60,8 @@ export interface HudNode {
 	readonly key?: string;
 }
 
-/** A native child: a described node, or a component omp describes in its place. */
 export type NativeChild = NativeNode | Component;
 
-/** A described node whose children may include components (omp's pill row, decorated). */
 export interface NativeNode {
 	readonly k: string;
 	readonly p?: Readonly<Record<string, unknown>>;
@@ -104,21 +69,11 @@ export interface NativeNode {
 	readonly key?: string;
 }
 
-/** The action a segment click sends (not a Tern built-in action name, which Tern handles itself). */
 export const OPEN_ACTION = "unified-exec.terminals.open";
-/**
- * View action: open the selected session's full-pane terminal page. Not Tern's
- * built-in `open`, which opens the node's `href`/`path` and, with neither, drops
- * the click before it reaches the component.
- */
 export const OPEN_TERMINAL_ACTION = "unified-exec.terminal.open";
-/** View / page action: kill the session, as `kill_session` does. */
 export const KILL_ACTION = "kill";
-/** The view action that closes it: omp's `CLOSE_ACTION` id, which Tern's backdrop and head `esc` send too. */
 export const CLOSE_ACTION = "close";
-/** The terminal page's way back to the list (Tern's backdrop and head `esc` send `close` too). */
 export const BACK_ACTION = "back";
-/** The Terminals view's frame: omp's Background jobs overlay role, so Tern lays it out as that view. */
 export const VIEW_FRAME = { role: "omp.overlay.jobs", size: "lg", anchor: "center", head: "Terminals" } as const;
 
 function viewFrame(): Readonly<Record<string, unknown>> {
@@ -127,8 +82,6 @@ function viewFrame(): Readonly<Record<string, unknown>> {
 const COMMAND_MAX = 120;
 const SGR = /\x1b\[[0-9;:]*m/g;
 
-// ---------------- view model ----------------
-
 export type TerminalState =
 	| { readonly kind: "running" }
 	| {
@@ -136,28 +89,21 @@ export type TerminalState =
 			readonly exitCode: number | null;
 			readonly signal: string | null;
 			readonly failure: string | null;
-			/** Epoch ms the session exited. */
 			readonly exitedAt: number;
 	  };
 
-/** What the list, the page frame and the detail's facts show of a session: everything but its screen. */
 export interface TerminalSummary {
 	readonly id: number;
-	/** The start title exec_command was given, sanitized, for list labels and the page head. */
 	readonly title: string;
-	/** The command on one line, cut at COMMAND_MAX. */
 	readonly command: string;
-	/** The whole command, sanitized, for the view's command block. */
 	readonly script: string;
 	readonly state: TerminalState;
 	readonly cwd: string;
 	readonly pid: number | undefined;
-	/** Epoch ms the session started. */
 	readonly startedAt: number;
 	readonly logPath: string;
 }
 
-/** A session shown with its output: the selected detail or the terminal page. */
 export interface TerminalEntry extends TerminalSummary {
 	readonly screen: StyledScreen;
 }
@@ -189,7 +135,6 @@ function exitSucceeded(state: Extract<TerminalState, { kind: "exited" }>): boole
 	return state.exitCode === 0 && state.signal === null && state.failure === null;
 }
 
-/** The page head's state words. */
 function stateText(state: TerminalState): string {
 	if (state.kind === "running") return tr("running", "运行中");
 	if (state.failure !== null) return tr(`failed: ${oneLine(state.failure)}`, `失败：${oneLine(state.failure)}`);
@@ -197,13 +142,11 @@ function stateText(state: TerminalState): string {
 	return state.exitCode === null ? tr("exited", "已退出") : tr(`exit ${state.exitCode}`, `退出 ${state.exitCode}`);
 }
 
-/** The page head's state span style. */
 function stateTone(state: TerminalState): string {
 	if (state.kind === "running") return "accent";
 	return exitSucceeded(state) ? "success" : "error";
 }
 
-/** A state as the Background jobs view shows one: its label, tone and glyph (pulsing while running). */
 interface StateLook {
 	readonly label: string;
 	readonly tone: "pending" | "success" | "error";
@@ -219,7 +162,6 @@ function stateLook(state: TerminalState): StateLook {
 	return { label, tone: "error", glyph: { t: "✕" } };
 }
 
-/** How long the session has run, or ran: frozen at its exit. */
 function elapsedMs(entry: TerminalSummary, now: number): number {
 	const end = entry.state.kind === "running" ? now : entry.state.exitedAt;
 	return Math.max(0, Math.round(end - entry.startedAt));
@@ -235,12 +177,6 @@ function parseItemId(item: unknown): number | undefined {
 	return Number.isSafeInteger(id) ? id : undefined;
 }
 
-/**
- * Pure: the terminals segment for `count` stored sessions, `running` of them
- * still running. omp's running-work segment, copied: a row with role
- * `omp.hud.seg`, a tinted icon and the bare count; the words live in the
- * hover label. Tern owns its styling inside omp's pill in every chat style.
- */
 export function describeTerminalSegment(count: number, running: number): HudNode {
 	const label = tr(
 		`${count} terminal${count === 1 ? "" : "s"} · ${running} running`,
@@ -261,13 +197,8 @@ function isNativeNode(value: unknown): value is NativeNode {
 	return typeof value === "object" && value !== null && "k" in value && typeof value.k === "string";
 }
 
-/** omp's pill when it has no segments of its own (its `describeHudPills` builds the same row). */
 const EMPTY_PILL: NativeNode = { k: "row", key: "running", p: { role: "omp.hud.pill", align: "center" }, c: [] };
 
-/**
- * Parse what omp's `describeHudPills` returned: an `omp.hud` row holding at
- * most one `omp.hud.pill` row. Anything else means omp reshaped its pills.
- */
 export function parseHudPillsNode(value: unknown): NativeNode {
 	const pill = isNativeNode(value) ? value.c?.[0] : undefined;
 	if (
@@ -279,18 +210,12 @@ export function parseHudPillsNode(value: unknown): NativeNode {
 	return value;
 }
 
-/**
- * Pure: omp's pill row with `segment` appended as the pill's last segment, a
- * new pill when omp has none, and the row shown. omp's node is not mutated:
- * omp returns the same object while its own segments are unchanged.
- */
 export function withTerminalSegment(hud: NativeNode, segment: Component): NativeNode {
 	const existing = hud.c?.[0];
 	const pill = isNativeNode(existing) ? existing : EMPTY_PILL;
 	return { ...hud, p: { ...hud.p, hidden: undefined }, c: [{ ...pill, c: [...(pill.c ?? []), segment] }] };
 }
 
-/** An action button, as omp's `actionButton` builds it. */
 function actionButton(label: string, act: string, keys?: string, tone?: string): HudNode {
 	return {
 		k: "row",
@@ -301,9 +226,7 @@ function actionButton(label: string, act: string, keys?: string, tone?: string):
 }
 
 /**
- * A leading home directory as `~`: the rest keeps the platform separator (`~/src` on
- * macOS and Linux, `~\src` on Windows). `relative` compares the two sides under the
- * platform's rules (separators, and letter case on Windows). omp's own `shortenPath`
+ * omp's own `shortenPath`
  * lives in `@oh-my-pi/pi-tui/render`, which ships TypeScript source; importing it would
  * stop this module from loading on a Node host before the factory can reject that host.
  */
@@ -325,7 +248,6 @@ function actionsRow(children: readonly HudNode[]): HudNode {
 
 const SPACER: HudNode = { k: "spacer", p: { grow: 1 } };
 
-/** A master-list row, as the Background jobs view lists a job: icon, command, elapsed. */
 function describeListItem(entry: TerminalSummary, now: number): HudNode {
 	const look = stateLook(entry.state);
 	const elapsed = formatElapsedUi(elapsedMs(entry, now));
@@ -346,11 +268,6 @@ function describeListItem(entry: TerminalSummary, now: number): HudNode {
 	};
 }
 
-/**
- * The selected session's detail, laid out like a job's: a status row (state,
- * elapsed, `exec · #id`, Kill while running and Open), the command, the
- * facts and the session's colored output, following it while it runs.
- */
 function describeDetail(entry: TerminalEntry, now: number): HudNode {
 	const look = stateLook(entry.state);
 	const running = entry.state.kind === "running";
@@ -374,7 +291,6 @@ function describeDetail(entry: TerminalEntry, now: number): HudNode {
 				p: { role: "omp.jobs.status", gap: "sm", align: "center" },
 				c: [
 					{ k: "text", key: "state", p: { spans: [look.glyph, { t: ` ${look.label}` }], role: "omp.jobs.state", tone: look.tone, wrap: "none" } },
-					// A running session's age ticks Tern-side from the age at send; an exited one is stopped.
 					{ k: "elapsed", key: "age", p: { age, ...(running ? {} : { stopped: age }), format: "short", role: "omp.jobs.age", title: running ? tr("Running for", "运行时长") : tr("Ran for", "运行时长") } },
 					{ k: "text", key: "id", p: { spans: [{ t: `exec · #${entry.id}`, s: "mono" }], role: "omp.jobs.id", wrap: "none", truncate: "end" } },
 					SPACER,
@@ -399,13 +315,6 @@ function describeDetail(entry: TerminalEntry, now: number): HudNode {
 	};
 }
 
-/**
- * Pure: the Terminals view's body, built like omp's Background jobs view: a
- * master/detail split (the sessions in id order, the selected one's detail)
- * over a footer with the running/stored summary and Close; with no session,
- * an empty state and Close. The frame is VIEW_FRAME. Only `selected`, one of
- * `entries`, carries a screen: the list shows none.
- */
 export function describeTerminalsSheet(
 	entries: readonly TerminalSummary[],
 	selected: TerminalEntry | undefined,
@@ -462,7 +371,6 @@ export function describeTerminalsSheet(
 	};
 }
 
-/** The full-pane terminal page's frame: omp's PTY Console role, titled with the path back to the list. */
 export function terminalPageFrame(entry: TerminalSummary | undefined, id: number): Readonly<Record<string, unknown>> {
 	return {
 		role: "omp.overlay.console",
@@ -475,12 +383,6 @@ export function terminalPageFrame(entry: TerminalSummary | undefined, id: number
 	};
 }
 
-/**
- * Pure: the full-pane terminal page, built like omp's Console sheet: the
- * session's history and screen as colored `ansi` at the session's own width,
- * following its newest row and scrolling back inside itself, then an action
- * bar: a note that keys go to the terminal while it runs, Kill and Back (esc).
- */
 export function describeTerminalPage(entry: TerminalEntry | undefined): HudNode {
 	if (!entry) {
 		return {
@@ -493,7 +395,6 @@ export function describeTerminalPage(entry: TerminalEntry | undefined): HudNode 
 		};
 	}
 	const running = entry.state.kind === "running";
-	// The column fills the sheet and the screen grows into it, so the action bar sits at the bottom like the Console's.
 	return {
 		k: "col",
 		p: { gap: "sm", min: { h: 1 } },
@@ -506,7 +407,6 @@ export function describeTerminalPage(entry: TerminalEntry | undefined): HudNode 
 					cols: entry.screen.view.cols,
 					follow: true,
 					grow: 1,
-					// A fraction of the available extent: the screen takes the sheet's height left by the action bar.
 					max: { h: 1 },
 				},
 			},
@@ -525,13 +425,10 @@ export function describeTerminalPage(entry: TerminalEntry | undefined): HudNode 
 	};
 }
 
-// ---------------- components ----------------
-
 function sortedSessions(store: SessionStore): ExecSession[] {
 	return store.values().sort((a, b) => a.id - b.id);
 }
 
-/** A session with a screen, or undefined after a spawn failure or once its screen was released. */
 function summaryOf(session: ExecSession | undefined): TerminalSummary | undefined {
 	return session?.screenRevision() === undefined ? undefined : terminalSummary(session);
 }
@@ -541,7 +438,6 @@ function entryOf(session: ExecSession | undefined): TerminalEntry | undefined {
 	return session && screen ? { ...terminalSummary(session), screen } : undefined;
 }
 
-/** What a native event asks of the HUD's components. */
 type HudEvent =
 	| { readonly kind: "action"; readonly act: string }
 	| { readonly kind: "select"; readonly id: number; readonly activate: boolean };
@@ -556,18 +452,14 @@ function parseHudEvent(event: unknown): HudEvent | undefined {
 	return undefined;
 }
 
-/** Kill a stored session the way `kill_session` does; resolves whether it exited. */
 export type KillSession = (id: number) => Promise<boolean>;
 
-/** How the Terminals view was left. */
 export type SheetResult = { readonly kind: "closed" } | { readonly kind: "open"; readonly id: number };
 
-/** An interactive mode's terminal handle, asked to describe omp's dock again. */
 interface RenderTarget {
 	requestRender(): void;
 }
 
-/** omp's `InteractiveMode#ui` (its TUI): store changes reach omp's dock only through it. */
 function renderTargetOf(mode: object): RenderTarget {
 	const ui: unknown = "ui" in mode ? mode.ui : undefined;
 	const request: unknown = typeof ui === "object" && ui !== null && "requestRender" in ui ? ui.requestRender : undefined;
@@ -576,9 +468,7 @@ function renderTargetOf(mode: object): RenderTarget {
 }
 
 /**
- * The terminals segment inside one interactive mode's pill. omp calls
- * `describe` instead of `render` while Tern renders natively, and only then
- * describes the pill row, so `render` draws nothing. Each mode gets its own
+ * Each mode gets its own
  * component: omp skips a component described twice in one frame.
  */
 class TerminalSegment implements Component {
@@ -600,13 +490,6 @@ class TerminalSegment implements Component {
 	invalidate(): void {}
 }
 
-/**
- * One activation's terminals segment for every interactive mode describing
- * omp's pills. The segment description is derived from the store and
- * re-read after each store or exit change; the decorated pill row is
- * memoized per mode on omp's node identity, the segment component is fixed
- * per mode for this provider's lifetime.
- */
 class SegmentProvider {
 	private node: HudNode | undefined;
 	private readonly modes = new WeakMap<object, { readonly segment: TerminalSegment; decorated?: { readonly base: unknown; readonly node: NativeNode } }>();
@@ -638,7 +521,6 @@ class SegmentProvider {
 		return this.node;
 	}
 
-	/** omp's pill row for `mode` with the terminals segment, or omp's own row when no session is stored. */
 	decorate = (mode: object, base: unknown): unknown => {
 		if (!this.targets.has(mode)) this.targets.set(mode, renderTargetOf(mode));
 		if (this.store.size === 0) return base;
@@ -654,7 +536,6 @@ class SegmentProvider {
 		return node;
 	};
 
-	/** Stop watching; the caller has already unregistered `decorate`, so omp re-describes its own row. */
 	dispose(): void {
 		this.watch.dispose();
 		this.requestRender();
@@ -664,7 +545,6 @@ class SegmentProvider {
 
 type DecoratePills = (mode: object, base: unknown) => unknown;
 
-/** The process's pill wrapper: installed once per prototype, delegating to the current activation's decorator. */
 interface PillsRegistry {
 	decorate: DecoratePills | undefined;
 	readonly wrapped: WeakSet<object>;
@@ -674,11 +554,6 @@ const pillsRegistrySymbol = Symbol.for("omp-unified-exec.tern-hud-pills");
 const processGlobal = globalThis as typeof globalThis & { [pillsRegistrySymbol]?: PillsRegistry };
 const pillsRegistry: PillsRegistry = processGlobal[pillsRegistrySymbol] ??= { decorate: undefined, wrapped: new WeakSet() };
 
-/**
- * Wrap omp's pill describer once per process. Reloaded activations swap
- * `pillsRegistry.decorate` rather than wrapping again; with no decorator the
- * wrapper returns omp's row unchanged.
- */
 export function wrapHudPills(prototype: HudPillsPrototype): void {
 	if (pillsRegistry.wrapped.has(prototype)) return;
 	const original = prototype.describeHudPills;
@@ -689,7 +564,6 @@ export function wrapHudPills(prototype: HudPillsPrototype): void {
 	pillsRegistry.wrapped.add(prototype);
 }
 
-/** Store and per-session subscriptions shared by the segment, the sheet and the page; each change re-describes. */
 class SessionWatch {
 	private readonly watches = new Map<number, { readonly exit: () => void; screen: (() => void) | undefined }>();
 	private readonly unsubscribeStore: () => void;
@@ -697,7 +571,6 @@ class SessionWatch {
 	constructor(
 		private readonly store: SessionStore,
 		private readonly changed: () => void,
-		/** The session whose screen to watch; none when absent (the segment only counts). */
 		private readonly shown?: () => number | undefined,
 	) {
 		this.unsubscribeStore = store.subscribe(() => {
@@ -707,7 +580,6 @@ class SessionWatch {
 		this.sync();
 	}
 
-	/** Watch every stored session's exit and only the shown one's screen. */
 	sync(): void {
 		const sessions = sortedSessions(this.store);
 		const shownId = this.shown ? (this.shown() ?? sessions[0]?.id) : undefined;
@@ -744,24 +616,13 @@ class SessionWatch {
 	}
 }
 
-/** How often an open view re-describes while a session runs, so list ages advance (omp's jobs view does the same). */
 const VIEW_TICK_MS = 1000;
 
-/**
- * The Terminals view, an extension custom overlay framed as omp's
- * Background jobs view (`VIEW_FRAME`); it holds focus, so esc / ↑ / ↓ /
- * enter / x arrive in `handleInput`.
- */
 class TerminalsSheet implements Component {
 	get nativeOverlay(): Readonly<Record<string, unknown>> {
 		return viewFrame();
 	}
 	private described: HudNode | undefined;
-	/**
-	 * The selected session's styled screen at the parse revision it was read:
-	 * the tick re-describes for the list's ages, and an unchanged screen is
-	 * not read again (a parse advances the revision and also re-describes).
-	 */
 	private shown: { readonly id: number; readonly revision: number; readonly screen: StyledScreen } | undefined;
 	private readonly watch: SessionWatch;
 	private readonly tick: NodeJS.Timeout;
@@ -817,7 +678,6 @@ class TerminalsSheet implements Component {
 
 	describe(): HudNode {
 		if (!this.described) {
-			// Only the selected session's screen is shown, so only it is read.
 			const sessions = sortedSessions(this.store).filter((session) => session.screenRevision() !== undefined);
 			const selected = sessions.find((session) => session.id === this.selectedId) ?? sessions[0];
 			this.described = describeTerminalsSheet(sessions.map(terminalSummary), selected && this.entry(selected));
@@ -871,11 +731,6 @@ class TerminalsSheet implements Component {
 
 const encoder = new TextEncoder();
 
-/**
- * The full-pane terminal page, built like omp's Console sheet: the session's
- * history and screen at full height, keys forwarded to the session while it
- * runs (Esc goes back to the list instead), Kill and Back.
- */
 class TerminalPage implements Component {
 	private described: HudNode | undefined;
 	private readonly watch: SessionWatch;
@@ -937,11 +792,7 @@ class TerminalPage implements Component {
 	}
 }
 
-// ---------------- mounting ----------------
-
-/** Load the omp modules the HUD reads; fails when omp no longer provides them. */
 export async function loadTernHudHost(): Promise<TernHudHost> {
-	// Dynamic: omp supplies these modules at extension load time.
 	const [state, modes] = await Promise.all([
 		import("@oh-my-pi/pi-tui/native/state"),
 		import("@oh-my-pi/pi-coding-agent/modes/interactive-mode"),
@@ -949,15 +800,6 @@ export async function loadTernHudHost(): Promise<TernHudHost> {
 	return { native: parseNativeRenderingState(state), pills: parseInteractiveModeModule(modes) };
 }
 
-/**
- * Keep this activation's terminals segment in omp's pill exactly while an
- * interactive session renders natively; the segment itself shows only while
- * the store holds a session, and the ANSI TUI never sees it. A segment click
- * opens the Terminals view; Open replaces it with the session's terminal
- * page, whose Back reopens the view on the same session. At most one of them
- * is open. `store` is read at each session start and open: the store belongs
- * to the runtime the activation serves then.
- */
 export function mountTerminalHud(pi: ExtensionAPI, store: () => SessionStore, host: TernHudHost, kill: KillSession): void {
 	let ui: ExtensionContext["ui"] | undefined;
 	let provider: SegmentProvider | undefined;

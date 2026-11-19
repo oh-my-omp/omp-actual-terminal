@@ -13,7 +13,6 @@ function terminal(t: TestContext, cols = 20, rows = 3, reply: (bytes: Uint8Array
 	return screen;
 }
 
-// One-byte writes deliberately split CSI commands and every multibyte UTF-8 character.
 function fragmented(screen: TerminalScreen, text: string): void {
 	for (const byte of encoder.encode(text)) screen.write(Uint8Array.of(byte));
 }
@@ -27,8 +26,6 @@ function rendered(observation: TerminalObservation, text: string, historyLines =
 	return observation;
 }
 
-// Public xterm cells are an independent semantic oracle for SGR serialization.
-// Normalize only empty default glyphs: trimmed blanks and explicit spaces draw alike.
 async function cellRows(t: TestContext, text: string, cols: number, rows: number) {
 	const emulator = new xtermHeadless.Terminal({ cols, rows, allowProposedApi: true });
 	t.after(() => emulator.dispose());
@@ -342,7 +339,6 @@ describe("TerminalScreen styled display", () => {
 		const screen = terminal(t, 20, 3, () => parsed());
 		fragmented(screen, "1\r\n2\r\n3\r\n4\r\n5");
 		rendered(await screen.observe(), "1\n2\n3\n4\n5", 2);
-		// The cursor report arrives only after the preceding output is parsed.
 		const replied = new Promise<void>((resolve) => { parsed = resolve; });
 		fragmented(screen, "\r\n6\r\n7\x1b[6n");
 		await replied;
@@ -361,7 +357,6 @@ describe("TerminalScreen parsed change subscriptions", () => {
 		screen.onChange(() => seen.push(withoutSgr(screen.styledScreen().text)));
 		assert.deepEqual(seen, []);
 
-		// One complete child write makes the callback boundary unambiguous.
 		screen.write(encoder.encode("\r\x1b[2K\x1b[31mafter\x1b[0m"));
 		assert.deepEqual(seen, [], "notification must wait for the parse callback");
 		rendered(await screen.observe(), "after");

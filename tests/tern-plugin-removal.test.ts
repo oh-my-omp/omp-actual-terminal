@@ -27,7 +27,6 @@ interface SimulatorOptions {
 	readonly failure?: "list" | "remove" | "unlink";
 	readonly failureMessage?: string;
 	readonly catalogReply?: string;
-	/** Tern keeps listing the plugin after a successful remove/unlink. */
 	readonly stuck?: boolean;
 }
 
@@ -55,7 +54,6 @@ function makeTern(t: TestContext, installed: Installed, options: SimulatorOption
 	writeFileSync(logPath, "");
 	writeFileSync(optionsPath, JSON.stringify(options));
 	const env: NodeJS.ProcessEnv = {
-		// No ambient Tern: the fixture is the only executable on PATH.
 		PATH: fixtureBin,
 		TERN_TEST_OPTIONS: optionsPath,
 		TERN_TEST_ROOT: pluginRoot,

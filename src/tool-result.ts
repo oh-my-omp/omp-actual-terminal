@@ -16,14 +16,12 @@ export type ProcessOperation = "exec_command" | "write_stdin";
 export type ProcessStatus = "running" | "exited";
 export type KillStatus = "killed" | "kill_failed";
 
-/** Fields shared by every result that carries child-process output. */
 export interface OutputResultDetails {
 	operation: ProcessOperation | "kill_session";
 	status: ProcessStatus | KillStatus;
 	running: boolean;
 	chunk_id: string;
 	wall_time_seconds: number;
-	/** Bounded, terminal-inert tail sent to the model and used by the TUI renderer. */
 	output: string;
 	original_token_count?: number;
 	session_id?: number;
@@ -31,27 +29,20 @@ export interface OutputResultDetails {
 	signal?: string;
 	failure_message?: string;
 	log_path?: string;
-	/** Non-consuming retained terminal projection. */
 	terminal_url?: string;
 	cwd?: string;
-	/** Shell executable selected when the session was spawned. */
 	shell?: string;
 	command?: string;
 	truncation?: TruncationResult;
-	/** Cumulative bytes this session has produced since spawn. */
 	output_bytes_total?: number;
-	/** Optional explanation of an unusual session state (e.g. shell exited but the terminal is still held open). */
 	note?: string;
-	/** How `output` relates to the session's terminal screen. */
 	terminal?: TerminalDetails;
 }
 
-/** Geometry is shared; only running observations carry incremental metadata. */
 interface TerminalGeometryDetails {
 	screen: TerminalScreenKind;
 	cols: number;
 	rows: number;
-	/** 1-based cursor position within the screen. */
 	cursor_row: number;
 	cursor_col: number;
 }
@@ -59,13 +50,11 @@ interface TerminalGeometryDetails {
 export interface IncrementalTerminalDetails extends TerminalGeometryDetails {
 	screen_changed: boolean;
 	history_lines?: number;
-	/** Rows that scrolled off since the previous call were evicted from the capped history before being reported; they are only in the log. */
 	history_may_be_truncated?: true;
 }
 
 export interface FinalTerminalDetails extends TerminalGeometryDetails {
 	retained_rows: number;
-	/** The retained normal-screen history may have reached the emulator's cap. */
 	history_may_be_truncated: boolean;
 }
 
@@ -95,10 +84,8 @@ export interface KillResultDetails extends OutputResultDetails {
 
 interface OutputEnvelopeInput {
 	wallTimeSec: number;
-	/** The session's terminal observation this call, or nothing. */
 	collected: CollectResult;
 	logPath?: string;
-	/** Cumulative bytes the session has produced since spawn. */
 	totalBytes?: number;
 }
 
@@ -112,7 +99,6 @@ export interface FinalizeProcessInput extends OutputEnvelopeInput {
 	shell?: string;
 	command?: string;
 	yieldTimeMs?: number;
-	/** Long-wait / wake metadata merged into the result (undefined values skipped). */
 	extra?: Partial<ProcessResultDetails>;
 }
 
@@ -135,14 +121,10 @@ function generateChunkId(): string {
 }
 
 function approxTokenCount(byteLength: number): number {
-	// Mirror codex's rough `approx_token_count` behaviour: 4 bytes ≈ 1 token.
 	return Math.ceil(byteLength / 4);
 }
 
 export function safeMeta(value: string, max = 4096): string {
-	// Metadata sits outside the 50 KiB child-output body. Bound both the scan and
-	// rendered value so a malformed path/error cannot recreate an oversized
-	// result through a header field.
 	const scanLimit = max * 8;
 	let end = Math.min(value.length, scanLimit);
 	if (end < value.length && end > 0 && /[\ud800-\udbff]/.test(value[end - 1]!)) end--;
@@ -212,7 +194,6 @@ function createOutputEnvelope(input: OutputEnvelopeInput): OutputEnvelope {
 	return envelope;
 }
 
-/** Terminal metadata for a full rendered screen (also used by live streaming snapshots). */
 export function terminalViewDetails(view: TerminalView, screenChanged: boolean): IncrementalTerminalDetails {
 	return {
 		screen: view.screen,
@@ -233,7 +214,6 @@ function terminalDetails(observation: TerminalObservation): IncrementalTerminalD
 	return details;
 }
 
-/** Header lines describing the terminal output, shared by process and kill results. */
 function terminalLines(terminal: TerminalDetails | undefined): string[] {
 	if (!terminal) return [];
 	const lines = [
@@ -298,7 +278,6 @@ export function finalizeKillResult(input: FinalizeKillInput): KillResultDetails 
 	return shape;
 }
 
-/** Pi-bash-style marker appended to model-visible text after a truncated body. */
 export function truncationMarker(t: TruncationResult | undefined, logPath: string | undefined): string | null {
 	if (!t?.truncated) return null;
 	const full = logPath ? `. Full output: ${safeMeta(logPath)}` : "";

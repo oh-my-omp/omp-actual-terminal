@@ -1,11 +1,3 @@
-/**
- * SessionStore LRU policy tests.
- *
- * We use synthetic ExecSession-like stubs so we don't have to spawn real
- * processes in unit tests. The store only relies on `id`, `lastUsed`,
- * `hasExited`, `terminate()`, `release()`, and `releaseForShutdown()`.
- */
-
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { SessionStore } from "../src/session-store.ts";
@@ -77,8 +69,6 @@ describe("SessionStore", () => {
 	});
 
 	it("evicts oldest exited entry first", () => {
-		// cap=3, protected=1 (only the most recent is protected).
-		// Fill with 3 entries; 2 exited. Insert 4th → should evict the oldest exited.
 		const store = new SessionStore({ maxSessions: 3, lruProtectedCount: 1 });
 		const a = stub(1, 1000, /*exited*/ true); // oldest exited
 		const b = stub(2, 2000, /*exited*/ true); // newer exited
@@ -94,7 +84,6 @@ describe("SessionStore", () => {
 	});
 
 	it("falls back to oldest alive when no unprotected exited entries", () => {
-		// cap=3, protected=1. All alive.
 		const store = new SessionStore({ maxSessions: 3, lruProtectedCount: 1 });
 		store.insert(stub(1, 1000));
 		store.insert(stub(2, 2000));
@@ -105,7 +94,6 @@ describe("SessionStore", () => {
 	});
 
 	it("protects the N most recent entries", () => {
-		// cap=5, protected=3. Oldest 2 unprotected. Even though older exist, only unprotected evicted.
 		const store = new SessionStore({ maxSessions: 5, lruProtectedCount: 3 });
 		store.insert(stub(1, 1000, /*exited*/ true));
 		store.insert(stub(2, 2000));
@@ -114,7 +102,6 @@ describe("SessionStore", () => {
 		store.insert(stub(5, 5000)); // most recent (protected)
 		const newEntry = stub(6, 6000);
 		const { pruned } = store.insert(newEntry);
-		// id 3, 4, 5 are protected (3 most recent). id 1 (exited) is the victim.
 		assert.equal(pruned!.id, 1);
 	});
 

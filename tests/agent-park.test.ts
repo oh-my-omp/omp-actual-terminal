@@ -1,11 +1,3 @@
-/**
- * A subagent's terminals across omp's idle park, through the real tools and
- * real PTYs. omp's agent registry and lifecycle are simulated by `FakeOmp`
- * with omp's observable contract: `isParking` is true during the park's
- * `session_shutdown`, `revive` resolves after the revived activation saw
- * `session_start`, and a released generation ends through the registry.
- */
-
 import { strict as assert } from "node:assert";
 import { afterEach, describe, it } from "node:test";
 import { type AgentGeneration, type AgentHost, type AgentIdentity, parkedRuntimes, parseAgentHost } from "../fork-features/agent-park.ts";
@@ -50,11 +42,9 @@ class FakeOmp implements AgentHost {
 		this.ended.add(listener);
 		return () => this.ended.delete(listener);
 	}
-	/** omp releases the current generation (a main session's teardown, or a kill). */
 	release(): void {
 		for (const listener of this.ended) listener(this.generation);
 	}
-	/** A new agent generation for the next test. */
 	reset(): void {
 		this.release();
 		this.generation = {} as AgentGeneration;
@@ -65,7 +55,6 @@ class FakeOmp implements AgentHost {
 	}
 }
 
-// One per process, as omp's registry is: the parked-runtime listener subscribes once.
 const omp = new FakeOmp();
 
 interface Harness {
@@ -138,7 +127,6 @@ async function waitFor(cond: () => boolean | Promise<boolean>, timeoutMs = 8000)
 	return !!(await cond());
 }
 
-/** Lets a notice that should NOT be sent pass its 250 ms merge window. */
 const settle = () => new Promise((r) => setTimeout(r, 400));
 
 function alive(pid: number): boolean {
@@ -154,7 +142,6 @@ async function startBackground(h: Harness, cmd: string, extra: object = {}): Pro
 	return { sid, pid };
 }
 
-/** omp adopts the finished subagent, then parks it after its idle TTL. */
 async function park(h: Harness): Promise<void> {
 	omp.adopted = true;
 	omp.parking = true;
@@ -162,7 +149,6 @@ async function park(h: Harness): Promise<void> {
 	omp.parking = false;
 }
 
-/** omp revives the agent: a new activation sees session_start. */
 async function revive(): Promise<Harness> {
 	const revived = makeHarness();
 	await revived.emit("session_start");

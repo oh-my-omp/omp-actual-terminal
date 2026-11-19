@@ -4,10 +4,6 @@ import { writeTerminalImage } from "./terminal-image.ts";
 import { getTerminalResource, noteTerminalRead, parseTerminalTarget, readTerminal, terminalText } from "./terminal-resource.ts";
 import type { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
 
-// The brand marks every handler this plugin registered, including versions
-// before the shared copy: such a handler carries only this brand, so the shared
-// copy would treat it as foreign. It is this plugin's own, and an in-process
-// reload after an upgrade releases it before registering.
 const handlerBrand = Symbol.for("omp-unified-exec.term-handler");
 
 interface TerminalUrlHandler {
@@ -20,7 +16,6 @@ interface TerminalUrlHandler {
 
 const ROUTER_MEMBERS = ["register", "isBuiltin", "unregister", "getHandler", "specs"] as const;
 
-/** The router members the shared copy reads; a missing one fails plugin loading with a requalify hint. */
 function isInternalUrlRouter(value: unknown): value is InternalUrlRouter {
 	if (typeof value !== "object" || value === null) return false;
 	for (const member of ROUTER_MEMBERS) {
@@ -29,9 +24,7 @@ function isInternalUrlRouter(value: unknown): value is InternalUrlRouter {
 	return true;
 }
 
-/** The router owns registration; the shared copy arbitrates ownership and sorts non-built-in schemes by name. */
 export async function initializeTerminalUrls(): Promise<void> {
-	// This host-only subpath does not exist in the Node/Pi development runtime.
 	const module = await import("@oh-my-pi/pi-coding-agent/internal-urls");
 	const Router: unknown = module.InternalUrlRouter;
 	if (typeof Router !== "function" || !("instance" in Router) || typeof Router.instance !== "function") {

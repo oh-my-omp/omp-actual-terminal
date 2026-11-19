@@ -1,8 +1,5 @@
 /**
- * Binding to omp's internal AgentSession (#29), used by command approval and
- * by the stop detectors (its settings, model registry and judgment ledger).
- * The first session_start resolves the registry once; switches and branches
- * only recheck the retained sessionManager identity. Registry entries can be
+ * Registry entries can be
  * replaced by same-id helper sessions, so they must not be looked up again.
  */
 export interface HostSettings {
@@ -45,7 +42,6 @@ export function bindSession(host: SessionRegistry, ctx: BindingContext): HostBin
 		return { kind: "unbound", reason: "no-registry-entry" };
 	}
 	if (session.sessionManager !== ctx.sessionManager) return { kind: "unbound", reason: "identity-mismatch" };
-	// Keep the actual AgentSession: its owner can replace settings at runtime.
 	return { kind: "bound", session: session as BoundSession, agentId: ctx.agentId };
 }
 

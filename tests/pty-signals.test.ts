@@ -1,11 +1,3 @@
-/**
- * Unit tests for the numeric-signal → SIG* name mapping in src/pty.ts.
- *
- * Regression: the map used to be a hand-picked 6-entry table, so tty-mode
- * children killed by SIGSEGV / SIGPIPE / SIGUSR1 were reported as exit_code=0.
- * The map is now built from the platform's full `os.constants.signals` table.
- */
-
 import { strict as assert } from "node:assert";
 import { constants } from "node:os";
 import { describe, it } from "node:test";
@@ -20,8 +12,6 @@ describe("signalNameFromNumber", () => {
 	});
 
 	it("maps crash/IO signals that the old hand-picked table missed", () => {
-		// Windows' os.constants.signals lacks SIGPIPE/SIGUSR1/SIGUSR2 — only
-		// assert the signals the platform actually defines.
 		for (const name of ["SIGSEGV", "SIGPIPE", "SIGUSR1", "SIGUSR2"] as const) {
 			const num = constants.signals[name];
 			if (num === undefined) continue;

@@ -1,13 +1,3 @@
-# Publishes pi-unified-exec to npm via Trusted Publisher (OIDC).
-# No NPM_TOKEN secret required — authentication is proven by the
-# id-token: write permission below, which GitHub Actions signs and npm
-# validates against the Trusted Publisher config on
-# https://www.npmjs.com/package/pi-unified-exec/access.
-#
-# Release flow:
-#   npm version patch          # bumps package.json + creates v* tag
-#   git push && git push --tags
-
 name: Publish to npm
 
 on:

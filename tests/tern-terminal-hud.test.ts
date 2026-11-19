@@ -66,7 +66,6 @@ function styledEntry(id: number, cols: number, lines = 3): TerminalEntry {
 	};
 }
 
-/** Exits `ranMs` after entry()'s start. */
 function exited(exitCode: number | null, ranMs = 2500): Extract<TerminalState, { kind: "exited" }> {
 	return { kind: "exited", exitCode, signal: null, failure: null, exitedAt: new Date(2026, 0, 2, 3, 4, 5).getTime() + ranMs };
 }
@@ -88,7 +87,6 @@ function terminalCount(segment: HudNode): number {
 	return Number(span.t);
 }
 
-/** omp's own segment, as `describeHudPills` builds it. */
 function ompSegment(key: string, icon: string, act: string): HudNode {
 	return {
 		k: "row",
@@ -98,7 +96,6 @@ function ompSegment(key: string, icon: string, act: string): HudNode {
 	};
 }
 
-/** omp's `describeHudPills` row for its own segments, built as omp 18.12 builds it. */
 function ompPillsRow(segments: readonly HudNode[]): HudNode {
 	const pills = segments.length > 0 ? [{ k: "row", p: { role: "omp.hud.pill", align: "center" }, c: [...segments], key: "running" }] : [];
 	return { k: "row", p: { role: "omp.hud", justify: "end", hidden: pills.length === 0 || undefined }, c: pills };
@@ -108,7 +105,6 @@ function isComponent(child: unknown): child is HudComponent {
 	return typeof child === "object" && child !== null && "describe" in child && typeof child.describe === "function";
 }
 
-/** The pill's children of a described `omp.hud` row; none when the row has no pill. */
 function pillChildren(row: unknown): readonly unknown[] {
 	assert.ok(typeof row === "object" && row !== null && "c" in row && Array.isArray(row.c));
 	const pill: unknown = row.c[0];
@@ -128,7 +124,6 @@ function onlyRole(node: HudNode, role: string): HudNode {
 	return matches[0]!;
 }
 
-/** The master list's selected item key, or null without a list (the empty view). */
 function selectedOf(view: HudNode): unknown {
 	const lists = nodesOfKind(view, "list");
 	return lists.length === 0 ? null : lists[0]!.p?.selected;
@@ -138,7 +133,6 @@ function listItems(view: HudNode): { readonly key: string | undefined; readonly 
 	return nodesOfKind(onlyNode(view, "list"), "item").map((item) => ({ key: item.key, tone: item.p?.tone, value: item.p?.value }));
 }
 
-/** The detail's Output: colored ANSI text, or the placeholder text. */
 function outputOf(view: HudNode): { readonly kind: "ansi" | "none"; readonly text: unknown; readonly node: HudNode } {
 	const out = onlyRole(view, "omp.jobs.out");
 	const ansi = withRole(out, "omp.jobs.output");
@@ -425,12 +419,6 @@ function waitFor(
 	});
 }
 
-/**
- * Stands in for omp's InteractiveMode: `describeHudPills` returns the same
- * row while omp's own segments are unchanged, as omp's memo does, and `ui`
- * is its TUI. Every harness shares this class, as every omp session shares
- * InteractiveMode, so the process-wide wrapper is installed once.
- */
 class FakeInteractiveMode {
 	ompSegments: readonly HudNode[] = [];
 	renders = 0;
@@ -464,7 +452,6 @@ function makeHarness(t: TestContext, initiallyNative = false, ModeClass: new () 
 			const done = (result?: unknown) => {
 				if (disposed) return;
 				disposed = true;
-				// showHookCustom disposes the component before settling its result promise.
 				try {
 					customComponent.dispose();
 					overlay = undefined;
@@ -519,7 +506,6 @@ function makeHarness(t: TestContext, initiallyNative = false, ModeClass: new () 
 		await Promise.all(sessions.map((session) => waitFor(
 			() => session.hasExited, (listener) => session.onExit(listener), "all HUD test children exited",
 		)));
-		// TerminalScreen.release is idempotent, including after store.remove/terminateAll.
 		await Promise.all(sessions.map((session) => session.release()));
 	});
 
@@ -538,9 +524,7 @@ function makeHarness(t: TestContext, initiallyNative = false, ModeClass: new () 
 		},
 		emit,
 		get renders() { return renders; },
-		/** Listeners this activation holds in the process-global native-rendering set. */
 		get nativeListenerCount() { return nativeListeners.size; },
-		/** The terminals segment omp's pill holds this frame. */
 		get segment() {
 			const found = segments();
 			assert.equal(found.length, 1, "omp's pill holds exactly one terminals segment");
@@ -555,7 +539,6 @@ function makeHarness(t: TestContext, initiallyNative = false, ModeClass: new () 
 			assert.equal(overlay?.nativeOverlay?.role, "omp.overlay.console", "terminal page is open");
 			return overlay;
 		},
-		/** Whether omp's pill shows the terminals segment this frame. */
 		get mounted() { return segments().length > 0; },
 		get sheetOpen() { return overlay?.nativeOverlay?.role === VIEW_FRAME.role; },
 		setNative(on: boolean) {
@@ -816,7 +799,6 @@ describe("terminal HUD lifecycle with real sessions", () => {
 	it("reads only the selected session's screen, and reads it again only after a parsed write", async (t) => {
 		const h = makeHarness(t, true);
 		await h.emit("session_start");
-		// The child echoes its input itself: ConPTY does not echo for a non-console reader.
 		const echo = [process.execPath, "-e", "process.stdout.write('ready\\n'); process.stdin.on('data', (data) => process.stdout.write(data))"];
 		const sessions = [h.spawn(echo), h.spawn(echo), h.spawn(echo)];
 		for (const session of sessions) {

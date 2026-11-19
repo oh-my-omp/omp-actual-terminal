@@ -1,6 +1,5 @@
 import type { Language } from "./omomp-shared/i18n.ts";
 
-/** Owned diagnostics carry facts until the human notification boundary. */
 export type StopConfigReason =
 	| { readonly kind: "non_mapping"; readonly scope: "root" | "section" }
 	| { readonly kind: "unknown_keys"; readonly keys: readonly string[] }
@@ -28,7 +27,6 @@ export type StopReason =
 	| { readonly kind: "models_failed"; readonly failures: readonly ModelFailure[] }
 	| { readonly kind: "external_error"; readonly detail: string };
 
-/** Explicit language keeps this usable for stable English model text too. */
 export function renderStopConfigReason(reason: StopConfigReason, language: Language): string {
 	const zh = language === "zh";
 	switch (reason.kind) {

@@ -1,14 +1,5 @@
-// Test-only stand-ins for host modules the shared copies in
-// fork-features/omomp-shared/ import statically. The copies are consumed
-// byte-identical, so their `import { z } from "@oh-my-pi/pi-coding-agent"` and
-// `import { ptree } from "@oh-my-pi/pi-utils"` resolve to the real modules
-// only inside omp; under `bun test` this preload (see bunfig.toml) answers
-// the same surface with Node equivalents. Production code and typechecking
-// never see this file.
 import { spawn as spawnProcess } from "node:child_process";
 import { mock } from "bun:test";
-
-// ---- z ------------------------------------------------------------------
 
 const ok = (data) => ({ success: true, data });
 const failIssues = (issues) => ({ success: false, error: { issues } });
@@ -102,8 +93,6 @@ const z = {
 
 mock.module("@oh-my-pi/pi-coding-agent", () => ({ z }));
 
-// ---- ptree ---------------------------------------------------------------
-
 class AbortError extends Error {}
 class TimeoutError extends AbortError {}
 class NonZeroExitError extends AbortError {
@@ -113,8 +102,6 @@ class NonZeroExitError extends AbortError {
 	}
 }
 
-// Minimal stand-in for ptree.spawn: argv without a shell, one wait() that
-// answers the fields the shared copy reads.
 const ptree = {
 	TimeoutError,
 	AbortError,

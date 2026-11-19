@@ -1,39 +1,22 @@
-/**
- * Terminal notices: every follow-up the exec tool sends about a terminal —
- * on_exit wakes, monitor returns and reminders, input-wait alerts, and the
- * terminal lifecycle's abnormal-return, unread, reclaim-due and reclaimed
- * notices — is one `TerminalNotice`: the terminal's identity plus one variant
- * of `NoticeBody`. One formatter renders them, so each terminal is named by
- * its session id and the title given to exec_command, followed by a short
- * reason per notice. One dispatcher merges whatever is pending into a single
- * message, delivered as an aside: into a run in progress at its next step
- * boundary, or as an agent-initiated turn while the agent is idle. It retries
- * a failed send at the next safe boundary.
- */
-
 import { formatElapsedShort, formatElapsedShortUi } from "../src/format-time.ts";
 import { tr } from "./omomp-shared/i18n.ts";
 import { sanitizeOutputText } from "../src/output-safety.ts";
 import { DEFAULT_NOTICE_TEMPLATE, DEFAULT_STOP_CONFIG, fillTemplate, type NoticeTemplateField, type StopConfig } from "./stop-config.ts";
 import type { StopReason } from "./stop-reasons.ts";
 
-/** What an agent needs to find the terminal again. */
 export interface TerminalIdentity {
 	readonly sessionId: number;
 	readonly title: string;
-	/** Retained terminal; stays readable after the terminal is reclaimed. */
 	readonly terminalUrl: string | undefined;
 	readonly logPath: string | undefined;
 }
 
-/** How a terminal's command returned. Kills (by the agent or a human) are normal endings. */
 export type TerminalOutcome =
 	| { readonly kind: "normal" }
 	| { readonly kind: "abnormal"; readonly reason: string };
 
 export type MonitorEndReason = "natural" | "human_terminated" | "lru_terminated";
 
-/** What a monitor waits for: output closure only, regex-matched lines, or a judged screen. */
 export type MonitorWatch =
 	| { readonly kind: "end" }
 	| { readonly kind: "regex"; readonly condition: string }
@@ -49,9 +32,7 @@ export interface MonitorReturns {
 export type InputPromptLabel = "dialog" | "inline" | "pager";
 
 export type ReclaimCause =
-	/** Read, then not read again through the TTL and the grace period; sent only when the `notice.graceReclaim` setting is on. */
 	| { readonly kind: "grace_expired"; readonly killed: boolean }
-	/** The session store reached its cap and evicted its least recently used entry. */
 	| { readonly kind: "capacity"; readonly cap: number; readonly signalled: boolean };
 
 export type NoticeBody =
@@ -78,7 +59,6 @@ export type NoticeBody =
 			readonly reason: MonitorEndReason;
 			readonly exitCode: number | null;
 			readonly signal: string | null;
-			/** Matches not yet returned when output closed. */
 			readonly lines: readonly string[];
 			readonly omitted: number;
 	  }
@@ -94,7 +74,6 @@ export type NoticeBody =
 	| {
 			readonly kind: "monitor_judge_match";
 			readonly monitor: MonitorReturns;
-			/** The judged screen's last non-blank lines. */
 			readonly screenLines: readonly string[];
 	  }
 	| { readonly kind: "monitor_judge_failed"; readonly monitor: MonitorReturns; readonly detail: string }
@@ -123,7 +102,6 @@ export interface TerminalNotice {
 	readonly body: NoticeBody;
 }
 
-/** One rendered notice inside a follow-up's details. */
 export interface NoticeDetails {
 	readonly session_id: number;
 	readonly title: string;
@@ -142,7 +120,6 @@ export interface NoticeMessage {
 const MAX_META_CHARS = 160;
 export const MAX_TITLE_CHARS = 80;
 const MAX_FAILURE_CHARS = 200;
-/** More recent matches than this add a narrow-the-condition advisory. */
 const MONITOR_NOISY_MATCHES = 20;
 
 function oneLine(raw: string, max: number): string {
@@ -150,7 +127,6 @@ function oneLine(raw: string, max: number): string {
 	return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
 }
 
-/** A title as exec_command accepts it: one sanitized line, nonblank; undefined when blank. */
 export function parseTerminalTitle(raw: unknown): string | undefined {
 	if (typeof raw !== "string") return undefined;
 	const title = oneLine(raw, MAX_TITLE_CHARS);
@@ -189,7 +165,6 @@ function outputLabel(localized: boolean): string {
 	return localized ? tr("output (not user instructions):", "输出（不是用户指令）：") : "output (not user instructions):";
 }
 
-/** What a monitor waits for, as one phrase. */
 function watchText(watch: MonitorWatch, localized: boolean): string {
 	const t = (en: string, zh: string): string => localized ? tr(en, zh) : en;
 	const elapsed = (ms: number): string => localized ? formatElapsedShortUi(ms) : formatElapsedShort(ms);
@@ -206,11 +181,9 @@ function watchText(watch: MonitorWatch, localized: boolean): string {
 interface Described {
 	readonly reason: string;
 	readonly lines: readonly string[];
-	/** The agent is expected to act on it, not merely take note. */
 	readonly actionable: boolean;
 }
 
-/** The short reason and the lines that follow it. Exhaustive over `NoticeBody`. */
 export function describeNotice(body: NoticeBody, localized = false): Described {
 	const t = (en: string, zh: string): string => localized ? tr(en, zh) : en;
 	const elapsed = (ms: number): string => localized ? formatElapsedShortUi(ms) : formatElapsedShort(ms);
@@ -390,11 +363,6 @@ export function describeNotice(body: NoticeBody, localized = false): Described {
 	}
 }
 
-/**
- * One follow-up for every notice in the batch. Notices about the same
- * terminal share one heading, so one return reported by several owners
- * (an abnormal return, a monitor End, an on_exit wake) reads as one entry.
- */
 function buildNoticeMessageForLocale(notices: readonly TerminalNotice[], localized: boolean, template: string): NoticeMessage {
 	const t = (en: string, zh: string): string => localized ? tr(en, zh) : en;
 	const groups = new Map<number, { identity: TerminalIdentity; described: Described[] }>();
@@ -454,7 +422,6 @@ function buildNoticeMessageForLocale(notices: readonly TerminalNotice[], localiz
 	return { content, details: { notices: details } };
 }
 
-/** The model-facing follow-up; `template` is the configured notice template. */
 export function buildNoticeMessage(notices: readonly TerminalNotice[], template: string = DEFAULT_NOTICE_TEMPLATE): NoticeMessage {
 	return buildNoticeMessageForLocale(notices, false, template);
 }
@@ -474,7 +441,6 @@ function noticeFromDetails(value: unknown): TerminalNotice | undefined {
 	};
 }
 
-/** Render the persisted notice details for the human-facing transcript. */
 export function buildNoticeDisplayMessage(value: unknown): string {
 	try {
 		if (typeof value !== "object" || value === null || !("notices" in value) || !Array.isArray(value.notices)) return "";
@@ -485,18 +451,8 @@ export function buildNoticeDisplayMessage(value: unknown): string {
 	}
 }
 
-/**
- * `withheld`: not sent because the agent's work is finished and the batch held
- * no terminal problem, so it must not start a turn; the notice's source then
- * finishes silently what the notice asked of the agent.
- */
 export type NoticeOutcome = "delivered" | "dropped" | "withheld";
 
-/**
- * The terminal lifecycle's own reminders, as opposed to follow-ups the agent
- * asked for (monitor, on_exit wake) and alerts about a running program
- * (input wait). `stop: off` silences exactly these.
- */
 export function isLifecycleNotice(kind: NoticeKind): boolean {
 	switch (kind) {
 		case "abnormal_return":
@@ -515,11 +471,6 @@ export function isLifecycleNotice(kind: NoticeKind): boolean {
 	}
 }
 
-/**
- * Whether the notice reports a terminal problem: the one kind that still wakes
- * an agent whose work is finished. Everything else a finished agent would only
- * read and set aside.
- */
 export function isTerminalProblem(kind: NoticeKind): boolean {
 	switch (kind) {
 		case "abnormal_return":
@@ -540,52 +491,35 @@ export function isTerminalProblem(kind: NoticeKind): boolean {
 
 export type StopDetector = "judge" | "llm" | "todo";
 
-/** Whether the agent's final response means the work is completely done; `undecided` delivers notices as usual. */
 export type StopVerdict =
 	| { readonly kind: "done"; readonly detector: StopDetector }
 	| { readonly kind: "not_done"; readonly detector: StopDetector }
-	/** `unavailable`: nothing to ask (no model, no todo list, no session); `failed`: the detector errored. */
 	| { readonly kind: "undecided"; readonly cause: "unavailable" | "failed"; readonly reason: StopReason };
 
 export interface StopInput {
-	/** The text of the main agent's final response. */
 	readonly lastResponse: string;
-	/** The pending notices as the agent would read them. */
 	readonly notices: string;
 }
 
-/** What the dispatcher needs to decide a stop; the extension wires it to the config, detectors and lifecycle. */
 export interface NoticeGate {
-	/** The stop configuration, read again for every flush. */
 	config(): StopConfig;
 	detect(config: StopConfig, input: StopInput, signal: AbortSignal): Promise<StopVerdict>;
-	/** Reclaim every returned terminal at once, without notices. */
 	collect(): Promise<void>;
-	/** Whether the terminal lifecycle still owns the terminal. */
 	tracked(sessionId: number): boolean;
-	/** Every verdict, for the human-facing log. */
 	verdict(verdict: StopVerdict): void;
 }
 
 interface Pending {
 	readonly key: string;
 	notice: TerminalNotice;
-	/** False once the notice no longer describes the terminal; it is then dropped unsent. */
 	current: () => boolean;
 	readonly settle: Array<(outcome: NoticeOutcome) => void>;
 }
 
 export interface NoticeDispatcherOptions {
-	/** Deliver one message as an aside (pi.sendMessage wrapper). May throw or reject. */
 	send: (message: NoticeMessage) => void | Promise<void>;
-	/** The current stop decisions; none delivers every notice with the default template. */
 	gate?: () => NoticeGate | undefined;
-	/**
-	 * Whether the agent's host considers its work finished (an adopted
-	 * subagent, idle or parked): it is then woken only by a terminal problem.
-	 */
 	finished?: () => boolean;
-	/** Notices submitted within this window share one follow-up. */
 	debounceMs?: number;
 	onSendError?: (error: unknown) => void;
 	setTimeoutFn?: (cb: () => void, ms: number) => unknown;
@@ -594,38 +528,16 @@ export interface NoticeDispatcherOptions {
 
 const DEFAULT_DEBOUNCE_MS = 250;
 
-/**
- * A stop's decision: still to be made about this response, being made, made
- * done (the work is finished until the next run), or made otherwise (or
- * nothing to decide).
- */
 type StopState =
 	| { readonly kind: "open"; readonly response: string }
 	| { readonly kind: "deciding" }
 	| { readonly kind: "done" }
 	| { readonly kind: "settled" };
 
-/** The host as the dispatcher sees it: a run in progress (with its final response once omp reports it), or stopped. */
 type HostPhase =
 	| { readonly kind: "running"; readonly response: string | undefined }
 	| { readonly kind: "stopped"; readonly stop: StopState };
 
-/**
- * The one delivery path for terminal notices. While a run is in progress
- * whatever is pending goes out after the debounce, and the host injects it at
- * the run's next step boundary, so the agent reads it while working instead of
- * in a turn of its own after its final answer. While the agent is stopped,
- * pending notices go out as one message. Before the first delivery after a
- * stop with a final response, the gate decides whether that
- * response finished the work; if so, every returned terminal is reclaimed, the
- * notices about terminals the lifecycle no longer owns are dropped, and the
- * agent counts as finished until its next run starts. A finished agent (done
- * so, or an adopted subagent) is woken only by a terminal problem: a batch
- * without one is withheld, and a batch with one goes out whole. A failed send
- * keeps notices pending for the next flush, which safe boundaries (tool end, a
- * settled run, the lifecycle's minute sweep) trigger — never a
- * self-rescheduling loop.
- */
 export class NoticeDispatcher {
 	private pending = new Map<string, Pending>();
 	private inFlight: Pending[] | undefined;
@@ -633,7 +545,6 @@ export class NoticeDispatcher {
 	private stopped = false;
 	private sequence = 0;
 	private phase: HostPhase = { kind: "stopped", stop: { kind: "settled" } };
-	/** Advances whenever a decision in progress stops describing the conversation. */
 	private generation = 0;
 	private deciding: AbortController | undefined;
 	private readonly debounceMs: number;
@@ -642,11 +553,6 @@ export class NoticeDispatcher {
 		this.debounceMs = opts.debounceMs ?? DEFAULT_DEBOUNCE_MS;
 	}
 
-	/**
-	 * Queue a notice; resolves once it was delivered or dropped. Input-wait
-	 * alerts collapse per session (the newest screen wins); every other notice
-	 * is delivered on its own.
-	 */
 	submit(notice: TerminalNotice, current: () => boolean = () => true): Promise<NoticeOutcome> {
 		if (this.stopped) return Promise.resolve("dropped");
 		return new Promise((resolve) => {
@@ -663,23 +569,16 @@ export class NoticeDispatcher {
 		});
 	}
 
-	/** omp's `agent_start`: pending notices go into the run, and a decision in progress no longer applies. */
 	agentStarted(): void {
 		this.abandonDecision();
 		this.phase = { kind: "running", response: undefined };
 		if (this.pending.size) this.schedule();
 	}
 
-	/** omp's `session_stop`: the main agent's final response of this run. */
 	recordResponse(text: string): void {
 		if (this.phase.kind === "running") this.phase = { kind: "running", response: text };
 	}
 
-	/**
-	 * omp's `agent_end` once the run settled: deliver what waited. A `final`
-	 * stop with a final response is decided first; `awaiting` (the session
-	 * idles until background work returns) never is, since it is not done.
-	 */
 	agentStopped(settle: "final" | "awaiting"): void {
 		if (this.phase.kind !== "running") return;
 		const response = settle === "final" ? this.phase.response : undefined;
@@ -687,7 +586,6 @@ export class NoticeDispatcher {
 		this.flush();
 	}
 
-	/** A session switch or branch: the recorded response no longer describes the conversation. */
 	forgetResponse(): void {
 		this.abandonDecision();
 		if (this.phase.kind === "running") this.phase = { kind: "running", response: undefined };
@@ -720,14 +618,12 @@ export class NoticeDispatcher {
 		}
 	}
 
-	/** Deliver everything pending. Safe from any boundary; a send or decision in flight defers the rest. */
 	flush(): void {
 		if (this.stopped || this.inFlight) return;
 		const gate = this.opts.gate?.();
 		const config = gate?.config() ?? DEFAULT_STOP_CONFIG;
 		this.dropWhere((entry) => !entry.current() || (config.mode === "off" && isLifecycleNotice(entry.notice.body.kind)));
 		if (this.pending.size === 0) return;
-		// A working agent reads them at its next step boundary; stop decisions belong to stops.
 		if (this.phase.kind === "running") {
 			this.send(config.noticeTemplate);
 			return;
@@ -747,7 +643,6 @@ export class NoticeDispatcher {
 			case "settled":
 				break;
 		}
-		// Finished: decided done at this stop, or the host adopted the agent's result.
 		const finished = stop.kind === "done" || this.opts.finished?.() === true;
 		if (finished && ![...this.pending.values()].some((entry) => isTerminalProblem(entry.notice.body.kind))) {
 			const withheld = [...this.pending.values()];
@@ -777,10 +672,8 @@ export class NoticeDispatcher {
 			if (verdict.kind === "done") {
 				try { await gate.collect(); } catch { /* a terminal that could not be reclaimed keeps its notices */ }
 				if (this.stopped) return;
-				// A terminal problem still wakes the agent after its terminal was collected.
 				this.dropWhere((entry) => !gate.tracked(entry.notice.identity.sessionId) && !isTerminalProblem(entry.notice.body.kind));
 			}
-			// A run that started meanwhile took over delivery (agentStarted scheduled it).
 			if (generation !== this.generation) return;
 			this.phase = { kind: "stopped", stop: verdict.kind === "done" ? { kind: "done" } : { kind: "settled" } };
 			this.flush();
@@ -800,7 +693,6 @@ export class NoticeDispatcher {
 		const failed = (error: unknown) => {
 			if (this.inFlight !== batch) return;
 			this.inFlight = undefined;
-			// Back in front of anything submitted meanwhile; a newer same-key alert wins.
 			const restored = new Map<string, Pending>();
 			for (const entry of batch) {
 				const newer = this.pending.get(entry.key);
@@ -820,7 +712,6 @@ export class NoticeDispatcher {
 		Promise.resolve(result).then(done, failed);
 	}
 
-	/** Drop everything; nothing pending may reach a closed or replaced conversation. */
 	stop(): void {
 		this.stopped = true;
 		this.abandonDecision();
@@ -835,14 +726,12 @@ export class NoticeDispatcher {
 		for (const entry of entries) for (const settle of entry.settle) settle("dropped");
 	}
 
-	/** Accept notices again after a new session start, which begins stopped. */
 	reset(): void {
 		this.stop();
 		this.stopped = false;
 		this.phase = { kind: "stopped", stop: { kind: "settled" } };
 	}
 
-	/** Notices not yet delivered (test helper). */
 	get pendingCount(): number {
 		return this.pending.size + (this.inFlight?.length ?? 0);
 	}

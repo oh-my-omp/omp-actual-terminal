@@ -28,13 +28,11 @@ interface Harness {
 	readonly sent: NoticeMessage[];
 	readonly inputs: StopInput[];
 	collects: number;
-	/** Terminals the lifecycle still owns; collect() untracks `returned`. */
 	readonly tracked: Set<number>;
 	readonly returned: Set<number>;
 	resolveDetect(verdict: StopVerdict): void;
 }
 
-/** A dispatcher whose timer never fires on its own: flushes happen only at the run events under test. */
 function harness(config: StopConfig = DEFAULT_STOP_CONFIG): Harness {
 	let resolve: ((verdict: StopVerdict) => void) | undefined;
 	const h: Harness = {
@@ -113,12 +111,10 @@ describe("notice delivery around runs", () => {
 		assert.equal(await quiet, "withheld", "a running terminal's notice does not wake finished work");
 		assert.equal(h.collects, 1);
 		assert.equal(h.sent.length, 0);
-		// Later in the same stop: still finished, so a normal exit wake stays quiet...
 		const wake = h.notices.submit(exitWake(2));
 		h.notices.flush();
 		assert.equal(await wake, "withheld");
 		assert.equal(h.sent.length, 0);
-		// ...and a terminal problem goes out with whatever else is pending, without another decision.
 		const reminder = h.notices.submit(match(2));
 		const problem = h.notices.submit(abnormal(3));
 		h.notices.flush();
@@ -126,7 +122,6 @@ describe("notice delivery around runs", () => {
 		assert.deepEqual(h.sent[0].details.notices.map((n) => n.kind), ["monitor_match", "abnormal_return"]);
 		assert.equal(h.inputs.length, 1);
 		assert.equal(h.collects, 1);
-		// The next run ends the finished state: without a new decision its notices are delivered.
 		h.notices.agentStarted();
 		const after = h.notices.submit(exitWake(2));
 		h.notices.agentStopped("final");

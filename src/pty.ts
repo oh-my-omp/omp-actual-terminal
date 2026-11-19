@@ -1,18 +1,9 @@
-/**
- * PTY spawn through Bun's native terminal.
- *
- * Presents a single `SpawnedChild` abstraction used by `session.ts`.
- * Mirrors codex's `codex_utils_pty::pty`; every session runs in a PTY,
- * so there is no pipe backend.
- */
-
 import { spawn as cpSpawn } from "node:child_process";
 import { constants as osConstants } from "node:os";
 import { resolve as resolvePath } from "node:path";
 
 import { findOnPath, IS_WINDOWS, isFile, resolveBinary } from "./shell.ts";
 
-/** PTY geometry used when the caller does not choose one. */
 export const DEFAULT_PTY_COLS = 120;
 export const DEFAULT_PTY_ROWS = 80;
 
@@ -24,13 +15,6 @@ export interface SpawnOptions {
 	rows?: number;
 }
 
-/**
- * Signature for the "something exited" callback. `exitCode` may be null when
- * killed by a signal (and `signal` is set in that case). `failureMessage` is
- * set when the "exit" was actually an async spawn/runtime error (e.g. ENOENT
- * for a missing shell binary or a bad cwd) so callers can surface a
- * diagnosable failure instead of a silent empty exit.
- */
 export type ExitCallback = (
 	exitCode: number | null,
 	signal: NodeJS.Signals | null,
@@ -39,45 +23,15 @@ export type ExitCallback = (
 
 export interface SpawnedChild {
 	readonly pid: number | undefined;
-	/**
-	 * The direct child process (the shell) has exited. Distinct from the
-	 * session's exit, which waits for the terminal to close: descendants that
-	 * still hold the PTY (e.g. a SIGHUP-immune background job) keep it open,
-	 * so the terminal close can lag the process exit indefinitely. Exposed so
-	 * callers can explain a session that stays "running" after its shell is
-	 * gone.
-	 */
 	readonly processExited: boolean;
-	/** The direct child's exit status once `processExited`; the terminal may still be open. */
 	readonly processExit: ProcessExit | undefined;
-	/** Write raw bytes to the PTY input side. */
 	write(data: Uint8Array): boolean;
-	/** Subscribe to data chunks (combined stdout+stderr). Returns unsubscribe. */
 	onData(handler: (chunk: Uint8Array) => void): () => void;
-	/** Subscribe to the child's exit event. Fires at most once. */
 	onExit(handler: ExitCallback): void;
-	/**
-	 * Subscribe to the direct child's exit, which can precede the terminal
-	 * close by any amount; fires once, from a microtask if it already happened.
-	 */
 	onProcessExit(handler: (exit: ProcessExit) => void): () => void;
-	/**
-	 * Send a signal to the process group. Keeps reaching the group after the
-	 * shell exits while a member still holds the terminal; no-ops once the
-	 * session has finalized.
-	 */
 	kill(signal?: NodeJS.Signals): void;
-	/**
-	 * Signal whatever is left of the process group, even after the terminal
-	 * closed (on macOS the terminal closes with the shell while background
-	 * group members keep running); 0 only probes. Returns whether any member
-	 * received it. POSIX only: Windows has no group to reach once the root
-	 * has exited.
-	 */
 	signalGroup(signal: NodeJS.Signals | 0): boolean;
 }
-
-// ---------------- Bun runtime admission ----------------
 
 type BunTerminal = {
 	readonly closed: boolean;
@@ -119,7 +73,6 @@ type BunRuntime = {
 	spawn(command: string[], options: BunSpawnOptions): BunSubprocess;
 };
 
-/** Require the host's native PTY capability before extension activation. */
 export function requireBunRuntime(
 	candidate: unknown = Reflect.get(globalThis, "Bun"),
 ): BunRuntime {
@@ -137,37 +90,23 @@ export function requireBunRuntime(
 	return candidate as BunRuntime;
 }
 
-// Numeric signal → name, built from the platform's full signal table so our
-// ExitCallback always reports SIG* strings (SIGSEGV, SIGPIPE, SIGUSR1, …
-// included — a hand-picked subset previously made crashes look like
-// exit_code=0). First name wins for aliased numbers (e.g. SIGABRT/SIGIOT).
 const SIGNAL_NAMES: Record<number, NodeJS.Signals> = {};
 for (const [name, num] of Object.entries(osConstants.signals)) {
 	if (SIGNAL_NAMES[num] === undefined) SIGNAL_NAMES[num] = name as NodeJS.Signals;
 }
 
-/** Resolve a numeric signal to its SIG* name for the current platform. */
 export function signalNameFromNumber(num: number): NodeJS.Signals | null {
 	return SIGNAL_NAMES[num] ?? null;
 }
 
 /**
- * Windows: force-kill the whole process tree rooted at `pid`.
- *
- * There are no POSIX signals or process groups on Windows. Killing only the
+ * Killing only the
  * direct child (the shell) leaves grandchildren alive holding the console
  * open, which delays the terminal's exit indefinitely and orphans the
- * subtree. `taskkill /T /F` terminates the tree rooted at `pid`. Fire-and-
- * forget: the backend's exit event is the source of truth for exit.
- *
- * Limitation: /T enumerates children of a LIVE root — if the direct child
- * already exited while a backgrounded grandchild lives on, taskkill finds
- * nothing to kill. True group semantics would need a Job Object
- * (JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE); POSIX handles this case via
- * process groups (`kill -pid` works after the leader exits).
+ * subtree.
  */
 /**
- * Absolute path to taskkill.exe. Never spawn the bare name: Windows'
+ * Never spawn the bare name: Windows'
  * CreateProcess checks the parent's cwd before PATH, so a taskkill.exe
  * planted in an untrusted repository would execute with every kill.
  */
@@ -184,7 +123,6 @@ function killWindowsTree(pid: number): void {
 		});
 		tk.on("error", () => {});
 	} catch {
-		// taskkill missing/unspawnable — nothing more we can do
 	}
 }
 
@@ -195,17 +133,10 @@ function killPosixProcessGroup(pid: number, signal: NodeJS.Signals): void {
 		try {
 			process.kill(pid, signal);
 		} catch {
-			// already gone
 		}
 	}
 }
 
-/**
- * Bun execs the child after the terminal exists, so a missing shell
- * binary surfaces only as a bare non-zero exit with no output. Check it
- * first so the caller gets a diagnosable failure. (exec_command validates
- * the working directory before it gets here.)
- */
 function assertSpawnable(opts: SpawnOptions): void {
 	const file = opts.command[0];
 	if (!file) throw new Error("spawnChild: empty command");
@@ -213,13 +144,10 @@ function assertSpawnable(opts: SpawnOptions): void {
 	if (!found) throw new Error(`spawn ${file} ENOENT: shell binary not found (check shell binary and workdir: ${opts.cwd})`);
 }
 
-/** Spawn a child in the Bun host's native PTY. */
 export function spawnChild(opts: SpawnOptions): SpawnedChild {
 	assertSpawnable(opts);
 	return spawnBunPty(requireBunRuntime(), opts);
 }
-
-// ---------------- Bun PTY impl ----------------
 
 export type ProcessExit = {
 	exitCode: number | null;
@@ -266,7 +194,6 @@ export function spawnBunPty(runtime: BunRuntime, opts: SpawnOptions): SpawnedChi
 			try {
 				handler(chunk);
 			} catch {
-				// ignore handler errors
 			}
 		}
 	};
@@ -278,7 +205,6 @@ export function spawnBunPty(runtime: BunRuntime, opts: SpawnOptions): SpawnedChi
 			try {
 				handler(processExit.exitCode, processExit.signal, processExit.failureMessage);
 			} catch {
-				// ignore handler errors
 			}
 		}
 		exitHandlers.clear();
@@ -287,7 +213,6 @@ export function spawnBunPty(runtime: BunRuntime, opts: SpawnOptions): SpawnedChi
 
 	const child = runtime.spawn([file, ...args], {
 		cwd: opts.cwd,
-		// The child talks to this PTY's xterm emulator, never to omp's own terminal.
 		env: { ...opts.env, TERM: "xterm-256color" },
 		terminal: {
 			name: "xterm-256color",
@@ -318,7 +243,6 @@ export function spawnBunPty(runtime: BunRuntime, opts: SpawnOptions): SpawnedChi
 				try {
 					handler(exit);
 				} catch {
-					// ignore handler errors
 				}
 			}
 			processExitHandlers.clear();
@@ -352,7 +276,6 @@ export function spawnBunPty(runtime: BunRuntime, opts: SpawnOptions): SpawnedChi
 				try {
 					handler(chunk);
 				} catch {
-					// ignore handler errors
 				}
 			}
 			pendingData = [];
@@ -367,7 +290,6 @@ export function spawnBunPty(runtime: BunRuntime, opts: SpawnOptions): SpawnedChi
 				try {
 					handler(exit.exitCode, exit.signal, exit.failureMessage);
 				} catch {
-					// ignore handler errors
 				}
 				return;
 			}
@@ -398,12 +320,9 @@ export function spawnBunPty(runtime: BunRuntime, opts: SpawnOptions): SpawnedChi
 				killPosixProcessGroup(child.pid, signal);
 				return;
 			}
-			// The shell is reaped but a group member still holds the terminal. The
-			// group id stays reserved while any member lives; the bare pid does not.
 			try {
 				process.kill(-child.pid, signal);
 			} catch {
-				// the group is gone
 			}
 		},
 		signalGroup(signal) {

@@ -1,14 +1,3 @@
-/**
- * Terminal lifecycle through the real tools and real PTYs: required titles,
- * the silent linger of a normal return with no process left, abnormal-return
- * notices, the 30-minute TTL with its read reminder or reclaim-due notice,
- * the 5-minute grace, reclaim (killing processes that still hold the
- * terminal), and the `notice.graceReclaim` plugin setting that decides
- * whether that reclaim sends a merged reclaimed notice. The lifecycle clock
- * is injected so a test steps through half an hour without waiting;
- * processes run on real time.
- */
-
 import { strict as assert } from "node:assert";
 import { afterEach, describe, it } from "node:test";
 import type { PluginSettingsReader } from "../fork-features/plugin-settings.ts";
@@ -25,7 +14,6 @@ interface ListedSession {
 	lifecycle?: { returned: string; read: boolean; phase: string };
 }
 
-/** The result fields these tests read; the tools' own schemas cover the rest. */
 interface ToolDetails {
 	session_id?: number;
 	terminal_url?: string;
@@ -53,12 +41,9 @@ type Handler = (event: object, ctx: object) => unknown;
 
 interface Harness {
 	readonly sent: Sent[];
-	/** UI warnings shown to the human. */
 	readonly warnings: string[];
 	emit(event: string, evt?: object): Promise<void>;
-	/** Call a tool and let the host finalize its result successfully. */
 	call(name: string, params: object): Promise<ToolResult>;
-	/** Advance the lifecycle clock and run the minute sweep once. */
 	advance(ms: number): void;
 	notices(kind: string): Notice[];
 	listed(id: number): Promise<ListedSession | undefined>;
@@ -85,7 +70,6 @@ function makeHarness(pluginSettings?: PluginSettingsReader): Harness {
 		getFlag: () => false, getActiveTools: () => ["bash"], setActiveTools() {},
 		sendMessage: (message: Sent["message"], options: Sent["options"]) => { sent.push({ message, options }); },
 	};
-	// The fake supplies only the ExtensionAPI surfaces the tool core consumes.
 	activate(pi as unknown as Parameters<typeof activate>[0], undefined, undefined, undefined, undefined, {
 		nowFn: () => now,
 		setIntervalFn: (cb) => { sweep = cb; return 1; },
@@ -134,10 +118,8 @@ async function waitFor(cond: () => boolean | Promise<boolean>, timeoutMs = 8000)
 	return !!(await cond());
 }
 
-/** Lets a notice that should NOT be sent pass its 250 ms merge window. */
 const settle = () => new Promise((r) => setTimeout(r, 400));
 
-/** What the omp term:// handler does after delivering content. */
 async function readTerm(url: string): Promise<readonly string[]> {
 	const key = url.slice("term://".length);
 	const projection = await readTerminal(key);
@@ -156,11 +138,6 @@ async function startBackground(h: Harness, cmd: string, title: string, yieldMs =
 	return { sid, url, output: output ?? "" };
 }
 
-/**
- * A terminal whose shell exits 0 while a SIGHUP-immune job of its process
- * group keeps running: Linux keeps the terminal open for it, macOS closes the
- * terminal and leaves the job running. Reclaim must end the job either way.
- */
 async function startHeld(h: Harness, title: string): Promise<{ sid: number; url: string; bg: number }> {
 	const { sid, url } = await startBackground(h, "(trap '' HUP; exec sleep 300) & echo bg=$!; sleep 0.5", title);
 	assert.ok(await waitFor(async () => (await h.listed(sid))?.lifecycle !== undefined), "the shell returned");
@@ -194,7 +171,6 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const { sid, bg, url } = await startHeld(h, "held job");
-		// startHeld read the returned terminal; the TTL counts from that read.
 		h.advance(30 * MINUTE - 1);
 		await settle();
 		assert.equal(h.notices("reclaim_due").length, 0, "not before the TTL");
@@ -213,7 +189,6 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		assert.ok(await waitFor(() => !alive(bg)), "the job holding the terminal is killed");
 		await settle();
 		assert.equal(h.sent.length, before, "notice.graceReclaim defaults to off: the reclaim sends nothing");
-		// The retained terminal stays readable.
 		assert.ok((await readTerminal(url.slice(7))).retainedLines.some((line) => line.startsWith("bg=")));
 	});
 
@@ -242,7 +217,6 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		assert.ok(await waitFor(async () => (await h.listed(sid))?.lifecycle?.phase === "linger"));
 		assert.equal((await h.listed(sid))?.lifecycle?.read, false);
 		h.advance(4 * MINUTE);
-		// A read does not extend the linger.
 		await readTerm(url);
 		h.advance(MINUTE - 1);
 		await settle();
@@ -291,7 +265,6 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		assert.equal(h.notices("reclaimed").length, 0);
 		assert.equal((await h.listed(sid))?.lifecycle?.read, false);
 
-		// A late first read starts a full TTL of its own.
 		await readTerm(url);
 		h.advance(30 * MINUTE - 1);
 		await settle();
@@ -366,7 +339,6 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 			return { "notice.graceReclaim": value };
 		});
 		await h.emit("session_start");
-		// exec_command also reads the settings (for exec.initFile); count only each sweep's reads.
 		const sweepReads = async (sweep: () => Promise<void>): Promise<number> => {
 			const before = cwds.length;
 			await sweep();
@@ -382,7 +354,6 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		}), 1, "read once per reclaiming sweep");
 		assert.equal(h.notices("reclaimed").length, 0, "off: reclaimed without a notice");
 
-		// Changed in /settings meanwhile: the next reclaiming sweep reads it, no restart.
 		value = true;
 		const a = await startHeld(h, "first");
 		const b = await startHeld(h, "second");
@@ -416,7 +387,6 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		};
 		await reclaimOne("invalid one", 1);
 		await reclaimOne("invalid two", 2);
-		// Unreadable only after the start: exec_command refuses to start without readable settings.
 		await reclaimOne("unreadable", 3, () => { stored = async () => { throw new Error("broken overrides"); }; });
 		assert.equal(h.notices("reclaimed").length, 0);
 		assert.equal(h.warnings.filter((w) => /notice\.graceReclaim must be true or false; using false/.test(w)).length, 1);

@@ -1,10 +1,3 @@
-/**
- * `exec.initFile` through the real exec_command and real PTY shells: the init
- * file's exports and aliases reach the command, a failing file stops the
- * shell before it, and an unusable setting refuses the call before anything
- * runs. The plugin settings reader stands in for omp's `getPluginSettings`.
- */
-
 import { strict as assert } from "node:assert";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -16,7 +9,6 @@ import { activate } from "../src/index.ts";
 import { findOnPath, IS_WINDOWS } from "../src/shell.ts";
 import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";
 
-/** The result fields these tests read. */
 interface ExecDetails {
 	exit_code?: number | null;
 	session_id?: number;
@@ -39,7 +31,6 @@ interface Harness {
 const live = new Set<Harness>();
 const roots: string[] = [];
 
-/** A tool core whose calls come from a session at `cwd`, reading plugin settings through `settings`. */
 function makeHarness(cwd: string, settings: PluginSettingsReader): Harness {
 	const tools: Record<string, ToolDef> = {};
 	const handlers: Record<string, Handler[]> = {};
@@ -50,7 +41,6 @@ function makeHarness(cwd: string, settings: PluginSettingsReader): Harness {
 		registerCommand() {}, registerShortcut() {}, registerFlag() {}, registerMessageRenderer() {},
 		getFlag: () => false, getActiveTools: () => ["bash"], setActiveTools() {}, sendMessage() {},
 	};
-	// The fake supplies only the ExtensionAPI surfaces the tool core consumes.
 	activate(pi as unknown as Parameters<typeof activate>[0], undefined, undefined, undefined, undefined, {}, undefined, settings, undefined, stubShellHost);
 	const harness: Harness = {
 		async exec(params) {
@@ -87,7 +77,6 @@ describe("exec.initFile", () => {
 			const root = tempRoot();
 			mkdirSync(join(root, "sub"));
 			writeFileSync(join(root, "init.sh"), "export UE_PRESET=preset-ok\nalias greet='echo greeted --flag'\n");
-			// Relative to the session cwd, not to the command's workdir.
 			const h = makeHarness(root, settingsOf({ "exec.initFile": "init.sh" }));
 			const cmd = `greet one; printf 'env=%s\\n' "$UE_PRESET"; printf '%s\\n' "it's quoted"`;
 			const r = await h.exec({ cmd, shell, workdir: "sub" });

@@ -1,9 +1,3 @@
-// Ambient script (no top-level import/export): these modules exist only inside
-// oh-my-pi, so their values are parsed at runtime by omp-presentation.ts and
-// tern-terminal-hud.ts.
-
-// The Bun global the shared copies reach for `Bun.TOML.parse`; src/pty.ts
-// declares the members it needs locally instead of relying on this.
 declare namespace Bun {
 	export const TOML: { parse(text: string): object };
 }
@@ -29,12 +23,7 @@ declare module "@oh-my-pi/pi-coding-agent/internal-urls" {
 	export const InternalUrlRouter: unknown;
 }
 
-// Types for the byte-identical shared copies in fork-features/omomp-shared/:
-// they name these modules statically, so the ambient declarations carry the
-// members the copies actually read rather than `unknown`.
-
 declare module "@oh-my-pi/pi-coding-agent/internal-urls/types" {
-	/** omp's parsed internal URL; identical to `URL` at runtime. */
 	export type InternalUrl = URL;
 	export interface SchemeSpec {
 		readonly backing: "file" | "virtual" | "remote" | "device";
@@ -80,9 +69,7 @@ declare module "@oh-my-pi/pi-coding-agent" {
 	export const CRITICAL_BASH_PATTERNS: unknown;
 	export const getAgentDir: unknown;
 
-	/** The members of the host's `zod` namespace export the shared copies use. */
 	export namespace zod {
-		/** One parse issue reported by a failed `safeParse`. */
 		export interface ZodLikeIssue {
 			readonly path: readonly (string | number)[];
 			readonly message: string;
@@ -159,7 +146,6 @@ declare module "@oh-my-pi/pi-coding-agent/extensibility/plugins/loader" {
 declare module "@oh-my-pi/pi-utils" {
 	export const procmgr: unknown;
 
-	/** The members of the host's ptree helper the shared copies use. */
 	export namespace ptree {
 		export interface WaitResult {
 			readonly exitCode: number | undefined;

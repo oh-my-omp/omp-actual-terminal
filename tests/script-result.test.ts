@@ -2,10 +2,6 @@ import type { FinalScreenOutput } from "../src/collect.ts";
 import { TerminalGrid } from "../src/terminal-screen.ts";
 
 
-/**
- * Structured tool results: every tool declares an `outputSchema` and returns
- * matching `structuredContent`, with `output` as a real multi-line string.
- */
 
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
@@ -76,7 +72,6 @@ function makeHarness() {
 		getActiveTools: () => [],
 		setActiveTools() {},
 	};
-	// The fake supplies only the ExtensionAPI surfaces consumed by the tool core.
 	const api = pi as unknown as Parameters<typeof activate>[0];
 	activate(api, undefined, STUB_SHELL_PATH, undefined, undefined, {}, undefined, undefined, undefined, stubShellHost);
 	return {

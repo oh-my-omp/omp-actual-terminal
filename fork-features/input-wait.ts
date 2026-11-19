@@ -1,28 +1,13 @@
-/**
- * Input-wait alerts: a running session whose screen has settled on a prompt
- * the agent has not seen.
- *
- * No terminal protocol announces "waiting for input". debconf (which asks
- * openssh-server's sshd_config question during `apt upgrade`) talks to its
- * frontend over its own pipe; the whiptail/dialog frontend reaches the PTY only
- * as ordinary drawing (alternate screen, hidden cursor, box characters). Over
- * ssh the local process state says nothing either. Detection is therefore a
- * heuristic over the rendered screen, applied only after output has been
- * quiet, and every alert says so.
- */
-
 import { sanitizeOutputText } from "../src/output-safety.ts";
 import type { InputPromptLabel, TerminalNotice } from "./terminal-notice.ts";
 
 export type InputScreenKind = "normal" | "alternate";
 
-/** One rendered physical row. */
 export interface InputScreenRow {
 	readonly text: string;
 	readonly wrapped: boolean;
 }
 
-/** The active screen at a quiet moment; cursor is 0-based within the screen. */
 export interface InputScreen {
 	readonly kind: InputScreenKind;
 	readonly rows: readonly InputScreenRow[];
@@ -34,38 +19,28 @@ export type InputPromptKind = InputPromptLabel;
 
 export interface InputPrompt {
 	readonly kind: InputPromptKind;
-	/** Sanitized screen lines that show the prompt. */
 	readonly lines: readonly string[];
 }
 
-/** whiptail/newt draw `<Ok>`, dialog draws `<  OK  >`. */
 const DIALOG_BUTTON = /<\s*(?:ok|yes|no|cancel)\s*>/i;
-/** Prompts that end where the cursor waits. */
 const INLINE_PROMPTS: readonly RegExp[] = [
-	// [Y/n], [y/N], [Y/n/q]
 	/\[(?:[\w-]{1,12}\/)+[\w-]{1,12}\]/,
-	// (yes/no), (yes/no/[fingerprint]), dpkg's (Y/I/N/O/D/Z)
 	/\((?:[\w[\]-]{1,14}\/)+[\w[\]-]{1,14}\)/,
-	// dpkg conffile: [default=N]
 	/\[default=[^\]]*\]/i,
-	// sudo, ssh, gpg: "[sudo] password for x:", "Enter passphrase for key '…':"
 	/\b(?:password|passphrase|passcode|pin)\b[^:]*:$/i,
 	/\b(?:press|hit)\s+(?:enter|return|any key)\b/i,
 ];
-/** less/more waiting on their bottom row. */
 const PAGER_PROMPT = /^(?::|.*\(END\)|--More--.*)$/;
 
 const MAX_LINE_CHARS = 1024;
 const MAX_DIALOG_LINES = 24;
 const INLINE_CONTEXT_LINES = 3;
-/** Box-drawing block; dialog frames carry no text. */
 const BOX_DRAWING = /[\u2500-\u257f]+/g;
 
 function clean(text: string): string {
 	return sanitizeOutputText(text).trimEnd().slice(0, MAX_LINE_CHARS);
 }
 
-/** Non-blank logical lines of rows[0, end), joining wrapped continuations. */
 function logicalLines(rows: readonly InputScreenRow[], end: number): string[] {
 	const lines: string[] = [];
 	for (let index = 0; index < end; index++) {
@@ -76,7 +51,6 @@ function logicalLines(rows: readonly InputScreenRow[], end: number): string[] {
 	return lines.map(clean).filter((line) => line !== "");
 }
 
-/** The prompt the screen shows, if any. Pure: the caller decides when the screen is quiet and unseen. */
 export function detectInputPrompt(screen: InputScreen): InputPrompt | undefined {
 	const { rows, cursorRow, cursorCol } = screen;
 	if (rows.some((row) => DIALOG_BUTTON.test(row.text))) {
@@ -97,7 +71,6 @@ export function detectInputPrompt(screen: InputScreen): InputPrompt | undefined 
 	return undefined;
 }
 
-/** One undelivered alert; `current` is false once the screen changed, was shown to the agent, or the session ended. */
 export interface InputWaitAlert {
 	readonly notice: TerminalNotice;
 	current(): boolean;

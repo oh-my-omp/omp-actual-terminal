@@ -1,14 +1,5 @@
-/**
- * The judge behind judge monitors: whether a terminal's current screen shows
- * what the agent stated as the monitor's intent. One choice question to omp's
- * judge role chain (the chain the stop gate uses), billed to the bound session
- * under the `unified-exec-monitor` purpose. The state is the screen alone; the
- * intent is in the question, so omp's judgment cache answers an identical
- * screen and intent without a model call.
- */
 import { detectorSession, judgeChain, type StopHost } from "./stop-gate.ts";
 
-/** One judgment's deadline; past it the judgment failed. */
 export const JUDGE_DEADLINE_MS = 30_000;
 
 const MET_CRITERION = "The screen shows that the statement holds.";
@@ -22,13 +13,10 @@ export type ScreenVerdict =
 	| { readonly kind: "failed"; readonly detail: string };
 
 export interface ScreenJudge {
-	/** Whether a judge model resolves for the bound session now. */
 	available(): boolean;
-	/** Judge one screen. Never rejects: an error, a missing answer or the deadline is `failed`. */
 	judge(intent: string, screen: string, signal: AbortSignal): Promise<ScreenVerdict>;
 }
 
-/** A screen judge for the session `session()` returns at each call (undefined while unbound). */
 export function screenJudge(host: StopHost, session: () => unknown): ScreenJudge {
 	const chain = () => {
 		const bound = detectorSession(session());

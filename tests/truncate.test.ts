@@ -1,11 +1,3 @@
-/**
- * Unit tests for truncateTail — re-exported from `@earendil-works/pi-coding-agent`.
- *
- * These tests pin the behavior we depend on. If pi-coding-agent ever
- * changes truncation semantics in a way that breaks unified-exec, these
- * tests will surface it before the LLM does.
- */
-
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateTail } from "@earendil-works/pi-coding-agent";
@@ -22,8 +14,6 @@ describe("truncateTail", () => {
 	});
 
 	it("truncates by line cap", () => {
-		// 3000 lines, each ~10 chars → ~30 KB total (under byte cap),
-		// but lines > 2000 → line-cap truncation.
 		const lines: string[] = [];
 		for (let i = 1; i <= 3000; i++) lines.push(`line ${i}`);
 		const text = lines.join("\n");
@@ -32,16 +22,13 @@ describe("truncateTail", () => {
 		assert.equal(r.truncatedBy, "lines");
 		assert.equal(r.outputLines, DEFAULT_MAX_LINES);
 		assert.equal(r.totalLines, 3000);
-		// The last line should be "line 3000"
 		const resultLines = r.content.split("\n");
 		assert.equal(resultLines[resultLines.length - 1], "line 3000");
-		// And the first kept line should be "line 1001" (since we keep last 2000)
 		assert.equal(resultLines[0], "line 1001");
 		assert.equal(r.lastLinePartial, false);
 	});
 
 	it("truncates by byte cap", () => {
-		// 5 lines, each 20 KB → 100 KB total, 5 lines (under line cap).
 		const chunk = "x".repeat(20 * 1024);
 		const text = `${chunk}\n${chunk}\n${chunk}\n${chunk}\n${chunk}`;
 		const r = truncateTail(text);
@@ -64,7 +51,6 @@ describe("truncateTail", () => {
 
 	it("respects custom maxLines", () => {
 		const text = "a\nb\nc\nd\ne\n";
-		// lines → ["a","b","c","d","e"] (trailing \n dropped, pi >= 0.80). Keep last 2 → "d\ne".
 		const r = truncateTail(text, { maxLines: 2 });
 		assert.equal(r.truncated, true);
 		assert.equal(r.truncatedBy, "lines");
@@ -99,7 +85,6 @@ describe("truncateTail", () => {
 	});
 
 	it("handles UTF-8 multibyte chars cleanly", () => {
-		// 3 KB of emoji, well under 50 KiB cap — no truncation.
 		const line = "🎉".repeat(1024);
 		const r = truncateTail(line);
 		assert.equal(r.truncated, false);
@@ -108,14 +93,11 @@ describe("truncateTail", () => {
 
 	it("partial-last-line truncation respects UTF-8 boundaries", () => {
 		const emoji = "🎉"; // 4 bytes
-		// ~60 KiB of emoji in one line → forced to tail-truncate inside a line
 		const line = emoji.repeat(16 * 1024); // 64 KiB
 		const r = truncateTail(line, { maxBytes: 50 * 1024 });
 		assert.equal(r.truncated, true);
 		assert.equal(r.lastLinePartial, true);
-		// Content should decode cleanly: every char is an emoji.
 		const expectedChar = emoji;
-		// All chars in the result must be the full emoji (no broken surrogates).
 		for (const ch of [...r.content]) {
 			assert.equal(ch, expectedChar, `expected all emoji, got: ${ch.codePointAt(0)?.toString(16)}`);
 		}

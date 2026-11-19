@@ -1,14 +1,3 @@
-/**
- * Unit tests for src/shell.ts: shell command construction, PATH lookup, the
- * default-shell choice (pi-shell on Windows, bash on POSIX, explicit choices
- * in between), the cmd refusal and `PI_UNIFIED_EXEC_BASH`.
- *
- * The platform branch is a parameter, so both defaults are asserted on every
- * runner. PATH-lookup and resolution tests build synthetic PATH directories
- * under a temp dir and inject them via the env parameter, so Windows-style
- * .exe probing runs anywhere — it's just a filename suffix.
- */
-
 import { strict as assert } from "node:assert";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,10 +18,8 @@ import {
 
 const WIN_EXTS = [".exe", ".cmd", ".bat", ""];
 
-/** The host's cmd.exe test, as omp's `procmgr.isCmdShell` answers it. */
 const isCmdShell = (shell: string): boolean => /(^|[\\/])cmd(\.exe)?$/i.test(shell);
 
-/** One selection with the stub classifier plus the case's own options. */
 function choose(
 	env: NodeJS.ProcessEnv | undefined,
 	requested?: string,
@@ -41,7 +28,6 @@ function choose(
 	return resolveDefaultShell(env, requested, { isCmdShell, ...options });
 }
 
-/** Create a synthetic PATH dir containing the given (regular) files. */
 const tempRoots: string[] = [];
 function makePathDir(name: string, files: string[]): string {
 	const dir = mkdtempSync(join(tmpdir(), `uexec-shell-${name}-`));
@@ -226,7 +212,6 @@ describe("resolveDefaultShell", () => {
 				shell: "C:\\omp\\omp.exe",
 			});
 		}
-		// Nothing on PATH changes it: there is no probe left to find a bash.
 		const bashDir = makePathDir("defaultbash", ["bash.exe"]);
 		assert.deepEqual(choose({ PATH: bashDir }, undefined, { isWindows: true, omp: "C:\\omp\\omp.exe" }), {
 			kind: "pi-shell",
@@ -235,7 +220,6 @@ describe("resolveDefaultShell", () => {
 	});
 
 	it("Windows: the pi-shell executable defaults to the omp process's own binary", () => {
-		// Inside omp, process.execPath is the omp binary; a bun driver passes Bun.which("omp").
 		assert.deepEqual(choose({}, undefined, { isWindows: true }), { kind: "pi-shell", shell: process.execPath });
 	});
 
@@ -276,7 +260,6 @@ describe("resolveDefaultShell", () => {
 			reason: "cmd",
 			source: "shellPath",
 		});
-		// Neither the call nor the host setting names a shell: SHELL supplied it.
 		assert.deepEqual(choose({ SHELL: " cmd.exe " }, undefined, { isWindows: true }), {
 			kind: "refused",
 			shell: "cmd.exe",
@@ -310,7 +293,6 @@ describe("resolveDefaultShell", () => {
 			assert.deepEqual(choose(undefined, "first-host-shell"), { kind: "shell", shell: "first-host-shell" });
 			assert.deepEqual(choose(undefined, "second-host-shell"), { kind: "shell", shell: "second-host-shell" });
 			assert.deepEqual(choose(undefined, " \t"), { kind: "shell", shell: "second-process-shell" });
-			// A supplied environment never sees the process's SHELL.
 			assert.deepEqual(choose({ PATH: "" }, undefined, { isWindows: false }), { kind: "shell", shell: "bash" });
 			assert.deepEqual(choose({ PATH: "" }, undefined, { isWindows: true, omp: "omp" }), {
 				kind: "pi-shell",
@@ -355,7 +337,6 @@ describe("resolveBinary", () => {
 	});
 
 	it("resolves relative PATH entries to absolute paths", () => {
-		// A relative PATH entry must not produce a cwd-dependent result.
 		const found = findOnPath("node", { PATH: process.env.PATH ?? "" });
 		assert.ok(found);
 		const dir = makePathDir("rel", IS_WINDOWS ? ["reltool.exe"] : ["reltool"]);

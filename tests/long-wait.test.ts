@@ -1,9 +1,3 @@
-/**
- * Unit tests for event-driven collection/termination waits (src/long-wait.ts).
- * Uses injected monotonic clocks / timers where determinism matters; real
- * waits are all sub-second.
- */
-
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { MAX_TIMER_ARM_MS, waitForExitOrDeadline } from "../src/long-wait.ts";
@@ -64,8 +58,6 @@ describe("waitForExitOrDeadline", () => {
 		let mono = 0;
 		const armed: number[] = [];
 		const exited = new AbortController();
-		// 3× MAX_TIMER_ARM_MS requires at least 3 arms; each arm advances mono to the
-		// requested deadline chunk so the wait progresses without real multi-day delays.
 		const outcome = await waitForExitOrDeadline({
 			exited: exited.signal,
 			durationMs: MAX_TIMER_ARM_MS * 3,
@@ -118,10 +110,6 @@ describe("waitForExitOrDeadline", () => {
 	});
 
 	it("runs on the monotonic clock: an early timer fire re-arms instead of ending the wait", async () => {
-		// Simulate coarse/foul timers: the injected setTimeout always fires
-		// almost immediately, but the injected monotonic clock only advances a
-		// little per fire — the wait must re-arm until the monotonic deadline
-		// is genuinely reached, and must not consult the wall clock at all.
 		let mono = 1000;
 		let fires = 0;
 		const exited = new AbortController();
@@ -155,8 +143,6 @@ describe("waitForExitOrDeadline", () => {
 		});
 		assert.ok(cleared.length >= 1, "pending deadline timer must be cleared on exit");
 
-		// Deadline outcome: the abort listener registered on `exited` must be
-		// removed — a later abort produces no unhandled effects.
 		const exited2 = new AbortController();
 		await waitForExitOrDeadline({ exited: exited2.signal, durationMs: 20 });
 		exited2.abort(); // must be inert

@@ -7,7 +7,6 @@ import { activate } from "../src/index.ts";
 test("session startup preserves builtin bash without a keep-builtin-bash flag", async () => {
 	type Handler = (event: unknown, ctx: ExtensionContext) => Promise<void>;
 	const registered = new Map<string, Handler[]>();
-	// Pi keeps every handler an extension registers for an event.
 	const handlers = { has: (name: string) => registered.has(name), get: (name: string) => {
 		const list = registered.get(name);
 		return list && (async (event: unknown, ctx: ExtensionContext) => { for (const handler of list) await handler(event, ctx); });
@@ -30,7 +29,6 @@ test("session startup preserves builtin bash without a keep-builtin-bash flag", 
 	assert.equal(flags.includes("keep-builtin-bash"), false);
 	assert.equal(widgetReads, 0, "no widget work or legacy capability probes with no sessions");
 	assert.deepEqual(active, ["bash", "read", "exec_command"]);
-	// omp settles runs through agent_end (it has no agent_settled) and reports final responses through session_stop.
 	assert.ok(handlers.has("agent_start"));
 	assert.ok(handlers.has("agent_end"));
 	assert.ok(handlers.has("session_stop"));

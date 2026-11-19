@@ -1,11 +1,5 @@
-/**
- * Shared human-readable duration formatters for TUI banners, widgets, and
- * wake metadata. Keep wall-clock math in callers; these only format ms → text.
- */
-
 import { tr } from "../fork-features/omomp-shared/i18n.ts";
 
-/** Widget / session lists: floored seconds → `45s`, `2m05s`, `2h40m`. */
 export function formatElapsed(ms: number): string {
 	const totalSeconds = Math.max(0, Math.floor(ms / 1000));
 	if (totalSeconds < 60) return `${totalSeconds}s`;
@@ -15,7 +9,6 @@ export function formatElapsed(ms: number): string {
 	return `${hours}h${String(totalMinutes % 60).padStart(2, "0")}m`;
 }
 
-/** Widget/session-list duration for human-facing UI; units follow the UI language. */
 export function formatElapsedUi(ms: number): string {
 	const totalSeconds = Math.max(0, Math.floor(ms / 1000));
 	if (totalSeconds < 60) return tr(`${totalSeconds}s`, `${totalSeconds}秒`);
@@ -32,7 +25,6 @@ export function formatElapsedUi(ms: number): string {
 }
 
 
-/** Wake messages: rounded seconds, same shape as formatElapsed. */
 export function formatElapsedShort(ms: number): string {
 	const s = Math.max(0, Math.round(ms / 1000));
 	if (s < 60) return `${s}s`;
@@ -41,7 +33,6 @@ export function formatElapsedShort(ms: number): string {
 	return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m`;
 }
 
-/** Wake duration for human-facing notices; units follow the UI language. */
 export function formatElapsedShortUi(ms: number): string {
 	const s = Math.max(0, Math.round(ms / 1000));
 	if (s < 60) return tr(`${s}s`, `${s}秒`);
@@ -56,12 +47,10 @@ export function formatElapsedShortUi(ms: number): string {
 	);
 }
 
-/** Tool result footer while running: always one decimal second (`1.2s`). */
 export function formatDurationSeconds(ms: number): string {
 	return `${(ms / 1000).toFixed(1)}s`;
 }
 
-/** Current host UTC time — the trustworthy clock surfaced in tool results. */
 export function nowUtcIso(nowMs: number = Date.now()): string {
 	return new Date(nowMs).toISOString();
 }

@@ -23,7 +23,6 @@ async function detect(cols: number, rows: number, bytes: string): Promise<InputP
 	}
 }
 
-/** The debconf/ucf question openssh-server asks about sshd_config, as whiptail draws it. */
 const WHIPTAIL = [
 	"\x1b[?1049h\x1b[?25l\x1b[H\x1b[2J",
 	"\x1b[1;1HPackage configuration",

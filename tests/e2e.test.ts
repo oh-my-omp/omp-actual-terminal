@@ -1,12 +1,3 @@
-/**
- * End-to-end tests for unified-exec.
- *
- * Exercises the full tool pipeline by instantiating the extension with a stub
- * ExtensionAPI and calling the registered tools' `execute` functions directly.
- * Bypasses pi's event loop but uses the real SessionStore / ExecSession /
- * SpawnedChild code paths.
- */
-
 import { strict as assert } from "node:assert";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -45,7 +36,6 @@ function makeHarness(shellPath: () => string | undefined = STUB_SHELL_PATH) {
 		notifications: [] as Array<{ message: string; type?: string }>,
 		statuses: new Map<string, string | undefined>(),
 		widgets: new Map<string, { content: string[] | undefined; options?: unknown }>(),
-		// Queue of responders for ui.select(); each gets the options array.
 		selectResponses: [] as Array<(options: string[]) => string | undefined>,
 	};
 
@@ -83,8 +73,6 @@ function makeHarness(shellPath: () => string | undefined = STUB_SHELL_PATH) {
 		sendMessage: (message: { customType: string; content: string }) => { sentMessages.push(message); },
 	};
 
-	// Activate the tool core directly; factory admission is covered separately.
-	// The fake supplies only the ExtensionAPI surfaces consumed by the tool core.
 	const api = pi as unknown as Parameters<typeof activate>[0];
 	activate(api, undefined, shellPath, undefined, undefined, {}, undefined, undefined, undefined, stubShellHost);
 
@@ -121,7 +109,6 @@ function assertReportedShell(
 	assert.ok(result.content[0].text.split("\n").includes(`shell: ${shell}`), result.content[0].text);
 }
 
-/** Real process state is external to fake clocks; wait for the named condition. */
 async function waitFor(cond: () => boolean | Promise<boolean>, timeoutMs = 8000): Promise<boolean> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
@@ -309,8 +296,6 @@ describe("unified-exec e2e", () => {
 			assert.ok(initialUpdates.length > 0, "expected a streaming update from the live readline loop");
 			assert.ok(initialUpdates.every((update) => update.details.shell === "/bin/sh"));
 
-			// A new default invocation must use the changed environment, not the
-			// earlier /bin/sh selection or a cached platform fallback.
 			process.env.SHELL = "bash";
 			const next = await h.call("exec_command", { title: "Test command", cmd: 'printf "new-bash-version:%s\\n" "${BASH_VERSION:?not running bash}"',
 				yield_time_ms: 2000, });
@@ -321,7 +306,6 @@ describe("unified-exec e2e", () => {
 			assert.notEqual(nextShell, "/bin/sh");
 			assertReportedShell(next, nextShell);
 
-			// Neither querying nor terminating the old PTY may resolve SHELL again.
 			process.env.SHELL = "definitely-not-a-real-later-shell-xyz";
 			const pollUpdates: Array<{ details: { shell?: string } }> = [];
 			const polled = await h.call(
@@ -369,7 +353,6 @@ describe("unified-exec e2e", () => {
 			assert.equal(r.details.shell, "cmd.exe");
 			assert.match(String(r.details.failure_message), /never launches cmd/, JSON.stringify(r.details));
 			assert.doesNotMatch(r.details.output, /must-not-run/);
-			// The one notice is the refusal, and it points at pi-shell.
 			assert.equal(h.uiEvents.notifications.length, 1, JSON.stringify(h.uiEvents.notifications));
 			assert.match(h.uiEvents.notifications[0]?.message ?? "", /pi-shell/);
 			const listed = await h.call("list_sessions", {});
@@ -393,8 +376,6 @@ describe("unified-exec e2e", () => {
 	it("process that exits BETWEEN calls remains readable through its terminal", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
-		// 3 ticks @ 200ms = 600ms runtime. Yield at 250ms -> session_id returned.
-		// Then wait 800ms so the process exits, then read its retained terminal.
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "for i in 1 2 3; do echo tock $i; sleep 0.2; done",
 			yield_time_ms: 250, });
 		assert.ok(
@@ -403,7 +384,6 @@ describe("unified-exec e2e", () => {
 		);
 		const sid = r1.details.session_id;
 
-		// Wait for the process to definitely exit (600ms runtime - 250ms yield + slack).
 		await new Promise((r) => setTimeout(r, 800));
 
 		const projection = await readTerminal(r1.details.terminal_url.slice(7));
@@ -417,13 +397,11 @@ describe("unified-exec e2e", () => {
 	it("long-running command yields a session and monitor awaits completion", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
-		// 5 ticks, 0.3s apart = ~1.5s total. Yield at 600ms.
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "for i in 1 2 3 4 5; do echo tick $i; sleep 0.3; done",
 			yield_time_ms: 600, });
 		assert.equal(r1.details.exit_code, undefined, "should still be running");
 		assert.ok(typeof r1.details.session_id === "number", `got session_id=${r1.details.session_id}`);
 		const sid = r1.details.session_id;
-		// Expect ~ticks 1-2 in first yield.
 		assert.ok(r1.details.output.includes("tick 1"), `first out: ${r1.details.output}`);
 
 		const monitoring = await h.call("monitor", { session_id: sid });
@@ -439,13 +417,11 @@ describe("unified-exec e2e", () => {
 	it("write_stdin sends input and terminal EOF to cat", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
-		// Disable terminal echo so the observed line must come from cat.
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "stty -echo; exec cat",
 			yield_time_ms: 300, });
 		assert.ok(typeof r1.details.session_id === "number", `got ${JSON.stringify(r1.details)}`);
 		const sid = r1.details.session_id;
 
-		// Send a line.
 		const r2 = await h.call("write_stdin", {
 			session_id: sid,
 			chars: "hello from stdin\n",
@@ -454,7 +430,6 @@ describe("unified-exec e2e", () => {
 		assert.ok(r2.details.output.includes("hello from stdin"), `got ${JSON.stringify(r2.details)}`);
 		assert.ok(typeof r2.details.session_id === "number");
 
-		// Send EOF so cat exits. The call returns as soon as the exit is observed.
 		const r3 = await h.call("write_stdin", {
 			session_id: sid,
 			chars: "\x04",
@@ -478,7 +453,6 @@ describe("unified-exec e2e", () => {
 		const dt = Date.now() - t0;
 		assert.ok(dt < 2500, `kill_session took too long: ${dt}ms`);
 		assert.equal(r2.details.session_id, sid);
-		// Either signal=SIGTERM, or exit_code set (sleep can be killed with no code).
 		assert.ok(r2.details.signal === "SIGTERM" || r2.details.exit_code != null, `details=${JSON.stringify(r2.details)}`);
 		await h.emit("session_shutdown");
 	});
@@ -487,8 +461,6 @@ describe("unified-exec e2e", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		try {
-			// Yield before the burst so kill_session, rather than exec_command,
-			// owns the buffered output that exercises this regression.
 			const started = await h.call("exec_command", { title: "Test command", cmd: 'sleep 0.8; for i in $(seq 1 4000); do echo "kill-line-${i}-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; done; sleep 60',
 				yield_time_ms: 250, });
 			const sid = started.details.session_id;
@@ -535,7 +507,6 @@ describe("unified-exec e2e", () => {
 	it("kill_session escalates to SIGKILL when SIGTERM is trapped", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
-		// Trap SIGTERM so bash ignores it; SIGKILL should still work.
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "trap '' TERM; sleep 60",
 			shell: "bash",
 			yield_time_ms: 300, });
@@ -543,9 +514,7 @@ describe("unified-exec e2e", () => {
 		assert.ok(typeof sid === "number");
 		const r2 = await h.call("kill_session", { session_id: sid });
 		if (IS_WINDOWS) {
-			// No POSIX signals on Windows: the initial "SIGTERM" is already a
-			// force tree-kill (taskkill /T /F) and escalation is skipped (a
-			// second identical taskkill can't behave differently). Don't assert
+			// Don't assert
 			// on exit timing (taskkill on a loaded runner can exceed the 2s
 			// window) — assert the retained session is no longer running instead.
 			assert.equal(r2.details.escalated, false, `details=${JSON.stringify(r2.details)}`);
@@ -560,7 +529,6 @@ describe("unified-exec e2e", () => {
 		await h.emit("session_shutdown");
 	});
 
-	// macOS closes the terminal with the shell, so only Linux keeps such a session open.
 	it("kill_session ends a session whose shell exited while a group member holds the terminal", { skip: process.platform !== "linux" }, async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
@@ -581,7 +549,6 @@ describe("unified-exec e2e", () => {
 				try {
 					process.kill(bg, "SIGKILL");
 				} catch {
-					// already gone
 				}
 			}
 			await h.emit("session_shutdown");
@@ -598,7 +565,6 @@ describe("unified-exec e2e", () => {
 		const ids = l.details.sessions.map((s: any) => s.session_id);
 		assert.ok(ids.includes(r1.details.session_id));
 		assert.ok(ids.includes(r2.details.session_id));
-		// Cleanup.
 		await h.call("kill_session", { session_id: r1.details.session_id });
 		await h.call("kill_session", { session_id: r2.details.session_id });
 		await h.emit("session_shutdown");
@@ -684,7 +650,6 @@ describe("unified-exec e2e", () => {
 		await h.emit("session_tree", { oldLeafId: "old", newLeafId: "new" });
 		assert.equal(h.uiEvents.statuses.get("unified-exec.sessions"), "unified-exec: 2 sessions running");
 
-		// Poll for the short session's exit instead of a fixed 1.1s sleep.
 		assert.ok(
 			await waitFor(() => h.uiEvents.statuses.get("unified-exec.sessions") === "unified-exec: 1 session running"),
 			`status did not decrement: ${h.uiEvents.statuses.get("unified-exec.sessions")}`,
@@ -712,19 +677,12 @@ describe("unified-exec e2e", () => {
 	});
 
 	it("session_shutdown racing exec_command creation does not orphan the child", async () => {
-		// Regression: exec_command inserts into the store only AFTER the
-		// 150ms early-exit grace; a shutdown inside that window used to drain
-		// the store without seeing the new session, leaving the process alive
-		// and untracked.
 		const h = makeHarness();
 		await h.emit("session_start");
 		const inflight = h.call("exec_command", { title: "Test command", cmd: "sleep 30", yield_time_ms: 500 });
 		await new Promise((r) => setTimeout(r, 40)); // inside the grace window
 		await h.emit("session_shutdown");
 		const r = await inflight;
-		// Shutdown owns the pending session: the call never returns a session_id. It
-		// reports the exit, or — where exit reporting outlasts shutdown's wait (Bun
-		// Terminal on Windows after taskkill) — an explicit unconfirmed exit.
 		assert.equal(r.details.session_id, undefined, JSON.stringify(r.details));
 		const reportedExit = r.details.exit_code != null || Boolean(r.details.signal);
 		const unconfirmed = r.details.running === true && /exit not confirmed/.test(r.details.failure_message ?? "");
@@ -736,8 +694,6 @@ describe("unified-exec e2e", () => {
 	});
 
 	it("a session in the grace window at shutdown never reaches the next session period", { skip: IS_WINDOWS }, async () => {
-		// #66: the grace ended after shutdown had already drained the store, and
-		// the session was inserted anyway, surviving into the next session_start.
 		const marker = `30.${process.pid}${Date.now() % 1000}`;
 		const h = makeHarness();
 		await h.emit("session_start");
@@ -756,10 +712,6 @@ describe("unified-exec e2e", () => {
 	});
 
 	it("an in-flight write_stdin whose terminal shutdown released before the child died returns empty output", { skip: IS_WINDOWS }, async () => {
-		// Shutdown releases the live terminal at once, but a child that ignores
-		// SIGTERM dies only at the SIGKILL escalation 1 s later. A 500 ms
-		// attachment window therefore ends while the child is alive, after the
-		// release, and must not observe the released screen.
 		const unhandled: unknown[] = [];
 		const onUnhandled = (reason: unknown) => unhandled.push(reason);
 		process.on("unhandledRejection", onUnhandled);
@@ -792,7 +744,6 @@ describe("unified-exec e2e", () => {
 		await h.emit("session_start");
 		await h.emit("session_shutdown");
 		await assert.rejects(() => h.call("exec_command", { title: "Test command", cmd: "echo nope" }), /shutting down/);
-		// A new session_start re-arms the extension (reload/new/resume).
 		await h.emit("session_start");
 		const r = await h.call("exec_command", { title: "Test command", cmd: "echo back" });
 		assert.equal(r.details.exit_code, 0);
@@ -825,7 +776,6 @@ describe("unified-exec e2e", () => {
 		const r = await promise;
 		const dt = Date.now() - t0;
 		assert.ok(dt < 2000, `should have returned near abort time; dt=${dt}`);
-		// Session should still be alive.
 		assert.ok(typeof r.details.session_id === "number", `${JSON.stringify(r.details)}`);
 		const sid = r.details.session_id;
 		const list = await h.call("list_sessions", {});
@@ -860,7 +810,6 @@ describe("unified-exec e2e", () => {
 		assert.equal(r.details.cwd, process.cwd());
 		assert.equal(r.details.command, "echo ok");
 		assert.equal(r.details.yield_time_ms, 2000);
-		// cwd line appears in the LLM-visible header text
 		assert.ok(r.content[0].text.includes(`cwd: ${process.cwd()}`), `cwd header missing: ${r.content[0].text}`);
 		await h.emit("session_shutdown");
 	});
@@ -873,7 +822,6 @@ describe("unified-exec e2e", () => {
 
 		assert.ok(typeof r.details.log_path === "string" && r.details.log_path.length > 0, `log_path missing: ${JSON.stringify(r.details)}`);
 		assert.ok(existsSync(r.details.log_path), `log file should exist: ${r.details.log_path}`);
-		// log file should contain the full output verbatim.
 		const logContent = readFileSync(r.details.log_path, "utf-8");
 		assert.ok(logContent.includes("hello"), `log content: ${logContent}`);
 		await h.emit("session_shutdown");
@@ -907,7 +855,6 @@ describe("unified-exec e2e", () => {
 
 	it("invalid explicit and environment-selected shells fail without running a fallback", async () => {
 		const previous = process.env.SHELL;
-		// No host setting: this test drives the explicit argument and SHELL.
 		const h = makeHarness(() => undefined);
 		const missingShell = "definitely-not-a-real-shell-xyz";
 		try {
@@ -920,8 +867,6 @@ describe("unified-exec e2e", () => {
 					...(explicit ? { shell: missingShell } : {}),
 				};
 				if (IS_WINDOWS) {
-					// Resolution must reject before CreateProcess can fall back to
-					// cwd-first executable lookup or a lower-priority interpreter.
 					await assert.rejects(() => h.call("exec_command", args), /not found on PATH/);
 				} else {
 					const result = await h.call("exec_command", args);
@@ -995,7 +940,6 @@ describe("unified-exec e2e", () => {
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "sleep 0.3", yield_time_ms: 250 });
 		const sid = r1.details.session_id;
 		assert.ok(typeof sid === "number", JSON.stringify(r1.details));
-		// Wait for the observed exit (the running-sessions status clears), not a fixed delay.
 		assert.ok(await waitFor(() => h.uiEvents.statuses.get("unified-exec.sessions") === undefined), "exit was not observed");
 
 		const l1 = await h.call("list_sessions", {});
@@ -1058,7 +1002,6 @@ describe("unified-exec e2e", () => {
 		const updates: any[] = [];
 		const r = await h.call("exec_command", { title: "Test command", cmd: "echo quiet-start; sleep 30", yield_time_ms: 2000 }, undefined,
 			(partial: any) => updates.push(partial));
-		// About eight 250 ms ticks of silence after the first line; each repeat would equal its predecessor.
 		assert.ok(updates.length >= 1, "the first tick still streams the screen");
 		assert.ok(updates.at(-1).details.output.includes("quiet-start"), updates.at(-1).details.output);
 		for (let i = 1; i < updates.length; i++) {

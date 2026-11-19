@@ -1,13 +1,3 @@
-/**
- * Structured tool results matching each tool's `outputSchema`.
- *
- * `structuredContent` exposes `output` as a real multi-line string plus
- * typed state (`exit_code`, `session_id`, …). They derive only from the
- * already-bounded, sanitized result details, so they add no new size or
- * terminal-safety surface. Model-visible `content` and persisted `details`
- * are unchanged.
- */
-
 import { Type, type Static } from "typebox";
 
 import type { OnExitPolicy } from "./completion.ts";
@@ -16,7 +6,6 @@ import { type KillResultDetails, type ProcessResultDetails, safeMeta } from "./t
 
 const optionalMeta = (value: string | undefined): string | undefined => (value ? safeMeta(value) : undefined);
 
-/** Drop undefined fields so the value is plain JSON. */
 function compact<T extends Record<string, unknown>>(value: T): T {
 	for (const key of Object.keys(value)) if (value[key] === undefined) delete value[key];
 	return value;

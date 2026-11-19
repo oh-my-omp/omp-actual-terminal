@@ -9,8 +9,6 @@ import { bindSession, bindingContext, recheckBinding, type BoundSession, type Ho
 import { activate } from "../src/index.ts";
 import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";
 
-// Canned literal segments exercise the port's branches, not shell parsing or
-// builtin parity. Real tokenizer and builtin comparisons run in real omp.
 const helpers: ApprovalHelpers = {
 	criticalPatterns: [/rm -rf/],
 	tokenizeShellSegments(command) {

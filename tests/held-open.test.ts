@@ -1,7 +1,3 @@
-/**
- * Held-open result rendering and foreground shell lifecycle.
- */
-
 import { strict as assert } from "node:assert";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -39,7 +35,6 @@ function spawnShell(cmd: string, workdir: string): ExecSession {
 	return session;
 }
 
-/** Kill the whole process group and wait for the close-based exit. */
 async function cleanup(session: ExecSession): Promise<void> {
 	session.kill("SIGKILL");
 	await waitFor(() => session.hasExited, 5000);

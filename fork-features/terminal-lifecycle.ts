@@ -1,43 +1,3 @@
-/**
- * Terminal lifecycle: from the moment exec_command hands a background
- * session_id to the agent until the terminal is reclaimed.
- *
- * A terminal "returns" when its shell exits — background processes may still
- * hold the PTY — or, failing that, when its terminal closes. Then:
- *   - a normal return with no process left (the terminal closed and its
- *     process group is empty) lingers for the linger period and is reclaimed
- *     silently, read or not: its term:// and log hold everything a later
- *     look needs. A normal return whose processes end later lingers from the
- *     moment the lifecycle sees them gone; reads do not extend the linger;
- *   - an abnormal return (non-zero exit, signal, failure) is reported at once;
- *     kills by the agent or a human, and returns after the agent's own
- *     interrupt (Ctrl-C or Ctrl-\ written with write_stdin), are normal endings;
- *   - for every other returned terminal, TTL after the return or the last
- *     read, the minute sweep reminds the agent: a terminal never read gets
- *     one read reminder and is kept until read; a read terminal gets a
- *     reclaim-due reminder and a grace period;
- *   - reading during the grace period starts a new TTL; otherwise the
- *     terminal's remaining processes are killed and it leaves the store. A
- *     reclaimed notice naming every terminal reclaimed in that sweep follows
- *     only when `graceReclaimNotice` (the `notice.graceReclaim` plugin
- *     setting) says so, read once per sweep while the reclaims run.
- * The retained term:// and the log stay readable after reclaim, and the
- * lifecycle remembers each reclaimed terminal so a later tool call naming its
- * session_id can point to them.
- * When the agent's work is judged finished, `collectReturned` reclaims every returned
- * terminal at once, read or not, without notices. When the dispatcher
- * withholds a read or reclaim-due reminder because the agent is finished
- * (an idle or parked subagent), the terminal is reclaimed at once, silently.
- * Eviction at the store's cap, which no reminder announced, always sends a
- * reclaimed notice.
- *
- * Reads are term:// reads of the returned terminal, and tool results that
- * showed it after it returned, committed when the host finalizes them.
- * Checks run once a minute: the grace and linger periods are long enough
- * that minute precision does not matter. No event reports that a process
- * group emptied, so the sweep also probes for it.
- */
-
 import type { NoticeDispatcher, TerminalIdentity, TerminalNotice, TerminalOutcome } from "./terminal-notice.ts";
 
 export const RECLAIM_TTL_MS = 30 * 60_000;
@@ -51,34 +11,24 @@ export interface ShellExit {
 	readonly failureMessage?: string;
 }
 
-/** The session surface the lifecycle needs (test-fakeable). */
 export interface LifecycleSession {
 	readonly id: number;
 	readonly title: string;
 	readonly displayCommand: string;
 	readonly terminalUrl: string | undefined;
 	readonly logPath: string;
-	/** The terminal has closed. */
 	readonly hasExited: boolean;
 	readonly exitCode: number | null;
 	readonly signal: string | null;
 	readonly failureMessage: string | null;
-	/** The shell itself has exited; the terminal may still be held open. */
 	readonly shellExited: boolean;
 	readonly shellExit: ShellExit | undefined;
 	onShellExit(listener: (exit: ShellExit) => void): () => void;
 	onExit(listener: () => void): () => void;
-	/** Fired for each term:// read of this terminal. */
 	onTerminalRead(listener: () => void): () => void;
-	/** Whether any of its processes remain: the terminal is open, or its process group still has members. */
 	processesRemain(): boolean;
 }
 
-/**
- * What the agent or a human did to end the command: a kill, or an interrupt
- * the agent wrote as input that later input has not followed. Either makes
- * the coming return a normal ending.
- */
 interface Ending {
 	readonly killed: boolean;
 	readonly interrupted: boolean;
@@ -86,10 +36,8 @@ interface Ending {
 
 const NATURAL: Ending = { killed: false, interrupted: false };
 
-/** Ctrl-C (ETX, SIGINT) and Ctrl-\ (FS, SIGQUIT): input that asks the foreground program to end. */
 const INTERRUPT_BYTES: readonly number[] = [0x03, 0x1c];
 
-/** Whether written input carries an interrupt control character. */
 export function carriesInterrupt(bytes: Uint8Array): boolean {
 	return INTERRUPT_BYTES.some((byte) => bytes.includes(byte));
 }
@@ -100,7 +48,6 @@ type Phase =
 	| { readonly kind: "ttl"; readonly due: number }
 	| { readonly kind: "unread_reminded" }
 	| { readonly kind: "grace"; readonly until: number }
-	/** A normal return with no process left: reclaimed silently at `until`. */
 	| { readonly kind: "linger"; readonly until: number }
 	| { readonly kind: "reclaiming" };
 
@@ -113,17 +60,14 @@ interface Tracked {
 	life: Life;
 	readonly unsubscribe: Array<() => void>;
 }
-/** The lifecycle's time source and sweep scheduler; the host clock unless injected. */
 export interface LifecycleClock {
 	readonly nowFn?: () => number;
 	readonly setIntervalFn?: (cb: () => void, ms: number) => unknown;
 	readonly clearIntervalFn?: (handle: unknown) => void;
 }
 
-/** What reclaiming did: the terminal is gone (and whether processes had to be killed), or something still holds it. */
 export type ReclaimResult = { readonly kind: "gone"; readonly killedProcesses: boolean } | { readonly kind: "held" };
 
-/** A terminal this lifecycle reclaimed or evicted; `outcome` is undefined when it was still running. */
 export interface ReclaimedTerminal {
 	readonly identity: TerminalIdentity;
 	readonly outcome: TerminalOutcome | undefined;
@@ -131,13 +75,11 @@ export interface ReclaimedTerminal {
 
 export interface TerminalLifecycleOptions extends LifecycleClock {
 	readonly notices: NoticeDispatcher;
-	/** Kill what is left of the terminal's processes and remove it from the store. */
 	readonly reclaim: (sessionId: number) => Promise<ReclaimResult>;
 	readonly ttlMs?: number;
 	readonly graceMs?: number;
 	readonly lingerMs?: number;
 	readonly sweepMs?: number;
-	/** Whether a grace-expired reclaim sends a notice; read at each reclaiming sweep and expected never to reject. Absent: never. */
 	readonly graceReclaimNotice?: () => Promise<boolean>;
 }
 
@@ -145,7 +87,6 @@ export function identityOf(session: LifecycleSession): TerminalIdentity {
 	return { sessionId: session.id, title: session.title, terminalUrl: session.terminalUrl, logPath: session.logPath };
 }
 
-/** Pure: how a command returned. Kills and the agent's interrupts are deliberate and therefore normal. */
 export function classifyReturn(exit: ShellExit, failureMessage: string | null, ending: Ending): TerminalOutcome {
 	if (ending.killed || ending.interrupted) return { kind: "normal" };
 	const failure = failureMessage ?? exit.failureMessage;
@@ -158,9 +99,7 @@ export function classifyReturn(exit: ShellExit, failureMessage: string | null, e
 
 export class TerminalLifecycle {
 	private readonly tracked = new Map<number, Tracked>();
-	/** Tool results that showed a returned terminal, awaiting the host's finalization. */
 	private readonly toolReads = new Map<string, Set<number>>();
-	/** Terminals this lifecycle reclaimed or evicted, by session_id, until shutdown. */
 	private readonly gone = new Map<number, ReclaimedTerminal>();
 	private sweeper: unknown;
 	private stopped = false;
@@ -180,14 +119,12 @@ export class TerminalLifecycle {
 		return this.opts.nowFn ? this.opts.nowFn() : Date.now();
 	}
 
-	/** Begin owning a terminal; call when exec_command commits to returning its session_id. */
 	track(session: LifecycleSession): void {
 		if (this.stopped || this.tracked.has(session.id)) return;
 		const entry: Tracked = { session, life: { kind: "running", ending: NATURAL }, unsubscribe: [] };
 		this.tracked.set(session.id, entry);
 		entry.unsubscribe.push(
 			session.onShellExit((exit) => this.returned(entry, exit)),
-			// The terminal closed: a normal return may now have no process left.
 			session.onExit(() => { this.returned(entry, undefined); this.linger(entry); }),
 			session.onTerminalRead(() => this.markRead(session.id)),
 		);
@@ -199,34 +136,25 @@ export class TerminalLifecycle {
 		return this.tracked.has(sessionId);
 	}
 
-	/** The reclaimed or evicted terminal with this session_id, if this lifecycle let it go. */
 	reclaimed(sessionId: number): ReclaimedTerminal | undefined {
 		return this.gone.get(sessionId);
 	}
 
-	/** Lifecycle state for listings: undefined while running or untracked. */
 	status(sessionId: number): { readonly outcome: TerminalOutcome; readonly read: boolean; readonly phase: Phase["kind"] } | undefined {
 		const life = this.tracked.get(sessionId)?.life;
 		return life?.kind === "returned" ? { outcome: life.outcome, read: life.read.kind === "read", phase: life.phase.kind } : undefined;
 	}
 
-	/** A kill is about to be sent: unless the command already returned, it ends normally. */
 	noteKill(sessionId: number): void {
 		const entry = this.tracked.get(sessionId);
 		if (entry?.life.kind === "running") entry.life = { kind: "running", ending: { ...entry.life.ending, killed: true } };
 	}
 
-	/** The kill did not land: a later return is judged without it. */
 	killFailed(sessionId: number): void {
 		const entry = this.tracked.get(sessionId);
 		if (entry?.life.kind === "running") entry.life = { kind: "running", ending: { ...entry.life.ending, killed: false } };
 	}
 
-	/**
-	 * The agent's input reached a running terminal. An interrupt makes the
-	 * coming return a normal ending; input without one means the program went
-	 * on after any earlier interrupt, so a later return is judged on its own.
-	 */
 	noteInput(sessionId: number, bytes: Uint8Array): void {
 		const entry = this.tracked.get(sessionId);
 		if (entry?.life.kind === "running") {
@@ -234,10 +162,6 @@ export class TerminalLifecycle {
 		}
 	}
 
-	/**
-	 * A term:// read, or a committed tool result: the agent saw the returned
-	 * terminal, so a new TTL starts. A lingering terminal keeps its deadline.
-	 */
 	markRead(sessionId: number): void {
 		const entry = this.tracked.get(sessionId);
 		if (!entry) return;
@@ -251,7 +175,6 @@ export class TerminalLifecycle {
 		this.linger(entry);
 	}
 
-	/** A tool result is about to show this terminal; it counts as a read once the host finalizes it. */
 	noteToolRead(toolCallId: string, sessionId: number): void {
 		const entry = this.tracked.get(sessionId);
 		if (!entry) return;
@@ -261,7 +184,6 @@ export class TerminalLifecycle {
 		ids.add(sessionId);
 	}
 
-	/** The host finalized a tool result; an error or cancellation shows the agent nothing. */
 	commitToolReads(toolCallId: string, isError: boolean): void {
 		const ids = this.toolReads.get(toolCallId);
 		if (!ids) return;
@@ -269,7 +191,6 @@ export class TerminalLifecycle {
 		if (!isError) for (const id of ids) this.markRead(id);
 	}
 
-	/** The store evicted the terminal at its cap: that is a reclaim too. */
 	evicted(session: LifecycleSession, cap: number): void {
 		const entry = this.tracked.get(session.id);
 		if (!entry) return;
@@ -299,7 +220,6 @@ export class TerminalLifecycle {
 		const life: Life = { kind: "returned", outcome, returnedAt: now, read: { kind: "unread" }, phase: { kind: "ttl", due: now + this.ttlMs } };
 		entry.life = life;
 		if (outcome.kind === "abnormal") {
-			// A fault stays news after the terminal is collected, so the notice does not depend on tracking.
 			void this.opts.notices.submit({
 				identity: identityOf(session),
 				body: { kind: "abnormal_return", command: session.displayCommand, reason: outcome.reason },
@@ -308,11 +228,6 @@ export class TerminalLifecycle {
 		this.linger(entry);
 	}
 
-	/**
-	 * A normal return with no process left lingers, then goes silently. Only
-	 * a terminal still in its TTL or past its read reminder starts lingering:
-	 * one in its grace period is reclaimed within the same span anyway.
-	 */
 	private linger(entry: Tracked): void {
 		const life = entry.life;
 		if (this.stopped || this.tracked.get(entry.session.id) !== entry || life.kind !== "returned" || life.outcome.kind !== "normal") return;
@@ -321,7 +236,6 @@ export class TerminalLifecycle {
 		entry.life = { ...life, phase: { kind: "linger", until: this.now() + this.lingerMs } };
 	}
 
-	/** One pass over every owned terminal; the sweeper calls it once a minute. */
 	sweep(): void {
 		if (this.stopped) return;
 		const now = this.now();
@@ -329,11 +243,9 @@ export class TerminalLifecycle {
 		const lingered: Tracked[] = [];
 		for (const entry of this.tracked.values()) {
 			if (entry.life.kind === "running") {
-				// Backstop for a missed shell-exit event.
 				if (entry.session.shellExited || entry.session.hasExited) this.returned(entry, entry.session.shellExit);
 				continue;
 			}
-			// The processes of a normal return may have ended since the last sweep.
 			this.linger(entry);
 			const life = entry.life;
 			if (life.kind !== "returned") continue;
@@ -369,25 +281,16 @@ export class TerminalLifecycle {
 			}
 		}
 		if (reclaims.length) void this.reclaimAll(reclaims);
-		// Silent: nothing is left to end, and the terminal stays readable. One still held is retried next sweep.
 		for (const entry of lingered) void this.reclaimEntry(entry, entry.life);
-		// The sweep is also a retry point for a notice whose send failed while the agent was idle.
 		this.opts.notices.flush();
 	}
 
-	/**
-	 * Reclaim a sweep's terminals together, so their notices share one
-	 * follow-up. The setting is read while the reclaims run: every entry turns
-	 * `reclaiming` before the first await, so a slow read never lets the next
-	 * sweep pick it again, and it never delays ending the processes.
-	 */
 	private async reclaimAll(entries: readonly Tracked[]): Promise<void> {
 		const notify = this.opts.graceReclaimNotice?.() ?? Promise.resolve(false);
 		const reclaimed = Promise.all(entries.map(async (entry): Promise<TerminalNotice | undefined> => {
 			const life = entry.life;
 			if (life.kind !== "returned") return undefined;
 			const identity = identityOf(entry.session);
-			// Still held (the kill did not land): try again at the next sweep.
 			const result = await this.reclaimEntry(entry, { ...life, phase: { kind: "grace", until: this.now() } });
 			if (result?.kind !== "gone") return undefined;
 			return { identity, body: { kind: "reclaimed", outcome: life.outcome, cause: { kind: "grace_expired", killed: result.killedProcesses } } };
@@ -397,12 +300,6 @@ export class TerminalLifecycle {
 		for (const notice of results) if (notice) void this.opts.notices.submit(notice);
 	}
 
-	/**
-	 * The agent is done: reclaim every returned terminal now, read or not,
-	 * without notices. Running terminals and terminals already being reclaimed
-	 * are left alone; a terminal something still holds keeps its prior state.
-	 * Resolves to the terminals that are gone.
-	 */
 	async collectReturned(): Promise<ReadonlySet<number>> {
 		const entries = [...this.tracked.values()].filter((entry) => entry.life.kind === "returned" && entry.life.phase.kind !== "reclaiming");
 		const results = await Promise.all(entries.map(async (entry) => {
@@ -412,7 +309,6 @@ export class TerminalLifecycle {
 		return new Set(results.filter((id): id is number => id !== undefined));
 	}
 
-	/** Reclaim one returned terminal; a held one gets `onHeld`. Undefined when it changed hands meanwhile. */
 	private async reclaimEntry(entry: Tracked, onHeld: Life): Promise<ReclaimResult | undefined> {
 		const life = entry.life;
 		if (life.kind !== "returned") return undefined;
@@ -428,10 +324,6 @@ export class TerminalLifecycle {
 		return result;
 	}
 
-	/**
-	 * Nobody will act on a withheld reminder: reclaim the terminal now. One
-	 * that something still holds is retried at the next sweep.
-	 */
 	private reclaimWithheld(entry: Tracked, reminded: Life): void {
 		if (this.stopped || this.tracked.get(entry.session.id) !== entry || entry.life !== reminded || reminded.kind !== "returned") return;
 		void this.reclaimEntry(entry, { ...reminded, phase: { kind: "grace", until: this.now() } });
@@ -459,7 +351,6 @@ export class TerminalLifecycle {
 		this.sweeper = undefined;
 	}
 
-	/** Session shutdown: stop before the store kills its terminals, so those kills create no notices. */
 	shutdown(): void {
 		this.stopped = true;
 		this.stopSweeper();
@@ -469,12 +360,10 @@ export class TerminalLifecycle {
 		this.gone.clear();
 	}
 
-	/** Accept terminals again after a new session start. */
 	restart(): void {
 		this.stopped = false;
 	}
 
-	/** Owned terminals (test helper). */
 	get size(): number {
 		return this.tracked.size;
 	}

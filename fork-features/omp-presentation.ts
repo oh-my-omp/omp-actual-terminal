@@ -1,13 +1,3 @@
-/**
- * oh-my-pi (omp) presentation for the unified-exec tools.
- *
- * Every tool registers with `loadMode: "essential"`, so omp lists it as a
- * top-level function instead of mounting it under `xd://`. exec_command /
- * write_stdin / kill_session delegate to omp's own bash renderer through
- * display-only adapters; every other tool uses omp's default card.
- * Model-visible results are untouched. The factory rejects non-omp hosts
- * before activation and initializes the Tern terminal HUD on omp.
- */
 import type { ExtensionAPI, ToolDefinition, TruncationResult } from "@earendil-works/pi-coding-agent";
 
 import { sanitizeOutputText } from "../src/output-safety.ts";
@@ -27,19 +17,13 @@ import { loadTernHudHost, mountTerminalHud } from "./tern-terminal-hud.ts";
 import { initializeTerminalUrls } from "./terminal-url.ts";
 import type * as TernPluginRemoval from "./tern-plugin-removal.ts";
 
-// See the load site in the factory below: a literal specifier lets bundlers
-// inline the module and hoist its host-only imports into module loading.
 const TERN_PLUGIN_REMOVAL_MODULE = "./tern-plugin-removal.ts";
 
-// ---------------- omp bash renderer contract ----------------
-
-/** Arguments omp's bash renderer projects into its command line. */
 export interface ShellArgs {
 	readonly command?: string;
 	readonly cwd?: string;
 }
 
-/** The subset of omp's `BashToolDetails` this adapter fills. */
 export interface ShellDetails {
 	readonly exitCode?: number;
 	readonly wallTimeMs?: number;
@@ -52,12 +36,10 @@ export interface ShellResult {
 	readonly isError: boolean;
 }
 
-/** omp render options; only `isPartial` is read, the rest passes through. */
 interface RenderOptions {
 	readonly isPartial?: boolean;
 }
 
-/** Opaque host values passed through unchanged: theme, components, native views. */
 type HostValue = unknown;
 
 interface OmpShellRenderer {
@@ -69,17 +51,14 @@ interface OmpShellRenderer {
 	readonly inline: boolean;
 }
 
-/** Tool arguments as omp hands them to renderers: possibly still streaming, any field missing. */
 type StreamedArgs<K extends string> = { readonly [P in K]?: unknown } | undefined;
 
-/** A tool result as omp hands it back: ours (any persisted version) or omp's error result. */
 export interface HostResult {
 	readonly content?: unknown;
 	readonly details?: unknown;
 	readonly isError?: unknown;
 }
 
-/** Tool hooks omp reads off a registered definition (forwarded by its tool proxy). */
 interface OmpToolHooks<K extends string> {
 	renderCall(args: StreamedArgs<K>, options: RenderOptions, theme: HostValue): HostValue;
 	renderResult(result: HostResult, options: RenderOptions, theme: HostValue, args?: StreamedArgs<K>): HostValue;
@@ -106,9 +85,6 @@ function parseShellRenderer(value: unknown): OmpShellRenderer {
 	return bash as OmpShellRenderer;
 }
 
-// ---------------- result model ----------------
-
-/** What a unified-exec result means for display, parsed from persisted details. */
 export type ResultView =
 	| { readonly kind: "streaming"; readonly output: string }
 	| {
@@ -142,10 +118,8 @@ export type ResultView =
 			readonly wallTimeMs: number | undefined;
 			readonly marker: string | null;
 	  }
-	/** Thrown tool errors, unknown sessions and unrecognized legacy details: the result text itself. */
 	| { readonly kind: "message"; readonly text: string; readonly isError: boolean };
 
-/** Fields of `OutputResultDetails` the display reads; persisted values are re-checked. */
 type PersistedDetails = {
 	readonly [K in
 		| "operation"
@@ -182,20 +156,16 @@ function optionalNumber(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-/** Pure: unified-exec result (any persisted shape) → display meaning. */
 export function parseResultView(result: HostResult, isPartial: boolean): ResultView {
 	const details =
 		typeof result.details === "object" && result.details !== null ? (result.details as PersistedDetails) : undefined;
-	// kill_session on an unknown id answers `found: false` without an error flag; it is still a failed action.
 	if (details?.operation === "kill_session" && details.found === false) return messageView(result, true);
 	if (typeof details?.output !== "string") return messageView(result, result.isError === true);
 	const output = sanitizeOutputText(details.output);
-	// Partial updates carry only the cumulative tail; terminal fields arrive with the final result.
 	if (isPartial) return { kind: "streaming", output };
 
 	const wallSeconds = optionalNumber(details.wall_time_seconds);
 	const wallTimeMs = wallSeconds === undefined ? undefined : wallSeconds * 1000;
-	// `truncation` is written only by createOutputEnvelope, next to `output`.
 	const marker = truncationMarker(
 		details.truncation as TruncationResult | undefined,
 		typeof details.log_path === "string" ? details.log_path : undefined,
@@ -245,7 +215,6 @@ function shellResult(text: string, details: ShellDetails, isError: boolean): She
 	return { content: [{ type: "text", text }], details, isError };
 }
 
-/** Pure: display meaning → the result omp's bash renderer draws. */
 export function toShellResult(view: ResultView): ShellResult {
 	switch (view.kind) {
 		case "streaming":
@@ -296,8 +265,6 @@ export function toShellResult(view: ResultView): ShellResult {
 	}
 }
 
-// ---------------- argument model ----------------
-
 function base64ByteLength(b64: string): number {
 	const compact = b64.replace(/\s+/g, "");
 	const padding = compact.endsWith("==") ? 2 : compact.endsWith("=") ? 1 : 0;
@@ -316,7 +283,6 @@ function stringifyChars(chars: string): string {
 	return safe.length > 40 ? `${safe.slice(0, 37)}…` : safe;
 }
 
-/** Pure: streamed exec_command args → bash command line. */
 export function execShellArgs(args: StreamedArgs<"cmd" | "workdir">): ShellArgs {
 	return {
 		command: typeof args?.cmd === "string" ? args.cmd : undefined,
@@ -324,7 +290,6 @@ export function execShellArgs(args: StreamedArgs<"cmd" | "workdir">): ShellArgs 
 	};
 }
 
-/** Pure: write_stdin args → a bash comment naming the action, never executable bytes. */
 export function writeStdinShellArgs(args: StreamedArgs<"session_id" | "chars" | "chars_b64">): ShellArgs {
 	const target = typeof args?.session_id === "number"
 		? tr(`session ${args.session_id}`, `会话 ${args.session_id}`)
@@ -342,7 +307,6 @@ export function writeStdinShellArgs(args: StreamedArgs<"session_id" | "chars" | 
 	return { command: tr(`# stdin → ${target}: (input required)`, `# 输入 → ${target}：（需要输入）`) };
 }
 
-/** Pure: kill_session args → a bash comment naming the action. */
 export function killShellArgs(args: StreamedArgs<"session_id" | "signal">): ShellArgs {
 	const target = typeof args?.session_id === "number"
 		? tr(`session ${args.session_id}`, `会话 ${args.session_id}`)
@@ -350,8 +314,6 @@ export function killShellArgs(args: StreamedArgs<"session_id" | "signal">): Shel
 	const signal = optionalString(args?.signal) ?? "SIGTERM";
 	return { command: tr(`# kill ${target} (${signal})`, `# 结束 ${target}（${signal}）`) };
 }
-
-// ---------------- registration ----------------
 
 function delegateToShell<K extends string>(
 	bash: OmpShellRenderer,
@@ -367,8 +329,6 @@ function delegateToShell<K extends string>(
 		describeResult: (result, options, args) => {
 			const shell = adaptResult(result, options);
 			const view = bash.describeResult(shell, options, adaptArgs(args)) as { readonly tone?: unknown } | undefined;
-			// Tern derives card status from the host result's isError, which stays false for a nonzero
-			// exit (an ordinary completion for the model); the view's tone is the display-side failure signal.
 			return shell.isError && view !== undefined ? { ...view, tone: view.tone ?? "error" } : view;
 		},
 		mergeCallAndResult: bash.mergeCallAndResult,
@@ -376,7 +336,6 @@ function delegateToShell<K extends string>(
 	};
 }
 
-/** Tools rendered as bash; any other tool uses omp's default card. */
 export const SHELL_PRESENTED_TOOLS = ["exec_command", "write_stdin", "kill_session"] as const;
 type ShellPresentedTool = (typeof SHELL_PRESENTED_TOOLS)[number];
 
@@ -385,12 +344,9 @@ function isShellPresented(name: string): name is ShellPresentedTool {
 }
 
 /**
- * omp's registration API: every tool top-level (`loadMode: "essential"`), bash
- * delegation attached for the shell-presented tools.
  * The bash renderer is required; a missing or reshaped one fails plugin loading.
  */
 async function presentOnOmp(pi: ExtensionAPI): Promise<ExtensionAPI> {
-	// Dynamic: omp supplies this module at extension load time.
 	const { toolRenderers } = await import("@oh-my-pi/pi-tui/tools");
 	const bash = parseShellRenderer(toolRenderers.bash);
 	const hooks: Record<ShellPresentedTool, OmpToolHooks<string>> = {
@@ -401,26 +357,17 @@ async function presentOnOmp(pi: ExtensionAPI): Promise<ExtensionAPI> {
 	const registerTool: ExtensionAPI["registerTool"] = (definition) => {
 		const topLevel = { ...definition, loadMode: "essential" };
 		const presented = isShellPresented(definition.name) ? { ...topLevel, ...hooks[definition.name] } : topLevel;
-		// omp's registerTool takes its own render signatures and `loadMode`; Pi's ToolDefinition type cannot express them.
 		pi.registerTool(presented as unknown as ToolDefinition);
 	};
 	return Object.create(pi, { registerTool: { value: registerTool } }) as ExtensionAPI;
 }
 
-/** What the extension hands back to host-specific features after activating. */
 export interface ActivatedExtension {
-	/** The store of the runtime the activation serves now; a revived subagent's activation swaps it at session_start. */
 	readonly store: () => SessionStore;
-	/** Kill a stored session as `kill_session` does; resolves whether it exited. */
 	readonly kill: (id: number) => Promise<boolean>;
 }
 
-/**
- * Load omp's active-theme appearance: whether its current theme is light.
- * In Tern omp follows Tern's appearance, the surface the HUD shows screens on.
- */
 async function loadOmpAppearance(): Promise<() => TerminalAppearance> {
-	// Dynamic: omp supplies this module at extension load time.
 	const themeModule: unknown = await import("@oh-my-pi/pi-tui/theme");
 	if (
 		typeof themeModule !== "object" ||
@@ -437,9 +384,7 @@ async function loadOmpAppearance(): Promise<() => TerminalAppearance> {
 	return () => (isLightTheme(getCurrentThemeName()) ? "light" : "dark");
 }
 
-/** Read omp's effective external shell at spawn time, not an activation-time copy. */
 async function loadOmpShellPath(host: ExtensionAPI): Promise<() => string | undefined> {
-	// Load with the other omp modules inside the admitted factory.
 	const registry: unknown = await import("@oh-my-pi/pi-coding-agent/config/registry");
 	if (typeof registry !== "object" || registry === null ||
 		!("lookup" in registry) || typeof registry.lookup !== "function") {
@@ -455,12 +400,6 @@ async function loadOmpShellPath(host: ExtensionAPI): Promise<() => string | unde
 	return shellPathReader(handle.get.bind(handle), runtime);
 }
 
-/**
- * The reader outlives the activation that built it: a parked subagent's
- * terminal runtime keeps it. It is built here, outside the async loader,
- * whose whole scope (the activation's `host`, and through it the
- * AgentSession) a closure created inside it would keep alive.
- */
 function shellPathReader(get: (settings: unknown) => unknown, runtime: { readonly settings: unknown }): () => string | undefined {
 	return () => {
 		const value: unknown = get(runtime.settings);
@@ -470,7 +409,6 @@ function shellPathReader(get: (settings: unknown) => unknown, runtime: { readonl
 	};
 }
 
-/** omp's shared `gh` mutation detector and SQLite view-cache invalidation; the plugin keeps no copy of either. */
 async function loadGithubCacheInvalidation(): Promise<(command: string) => void> {
 	const module: unknown = await import("@oh-my-pi/pi-coding-agent/tools/gh-cache-invalidation");
 	if (typeof module !== "object" || module === null ||
@@ -480,13 +418,6 @@ async function loadGithubCacheInvalidation(): Promise<(command: string) => void>
 	return module.invalidateGithubCacheForBashCommand as (command: string) => void;
 }
 
-/**
- * Admit only omp, identified by its injected `arktype` builder, and activate
- * through {@link presentOnOmp} with omp's theme appearance
- * (sessions answer it to OSC 10/11). The awaited factory initializes Tern's
- * normal plugin copy before registering tools/HUD; omp also awaits this
- * factory during package install/force-reinstall validation.
- */
 export function withHostPresentation(
 	activate: (
 		pi: ExtensionAPI,
@@ -506,13 +437,11 @@ export function withHostPresentation(
 			throw new Error("omp-unified-exec only supports omp (oh-my-pi); the current host is not omp (missing arktype).");
 		}
 		requireBunRuntime();
-		// The omp modules load before activating, so a reshaped omp fails plugin loading with nothing registered.
 		return Promise.all([
 			presentOnOmp(host), loadTernHudHost(), loadOmpAppearance(), loadOmpShellPath(host), loadCommandApprovalHost(),
 			loadGithubCacheInvalidation(), loadStopHost(), loadPluginSettingsReader(), loadAgentHost(), loadShellHost(),
 		]).then(async ([pi, hud, appearance, shellPath, approvalHost, invalidateGithubCache, stopHost, pluginSettings, agentHost, shellHost]) => {
-			// tern-plugin-removal statically imports host modules
-			// (@oh-my-pi/pi-utils' ptree) that resolve only inside omp. The specifier
+			// The specifier
 			// is non-literal so bundlers leave it deferred: inlining it would hoist
 			// those imports into the bundle and fail module loading before the
 			// host-admission checks above can reject a foreign host.

@@ -1,18 +1,3 @@
-/**
- * Probe: what bytes does write_stdin actually deliver to the child for various
- * `chars` inputs?
- *
- * Since the wire-format bug was fixed (see commit history), `chars` is
- * documented as a C-style escape string:
- *   - Raw bytes in the JS string pass through untouched (UTF-8 encoded).
- *   - Literal backslash escapes (`\\x03`, `\\n`, `\\u001b`, etc.) are
- *     DECODED into the bytes they name by src/unescape.ts.
- *   - `chars_b64` is the binary-safe sibling parameter for exact byte
- *     control with no decoding.
- *
- * These tests pin both channels end-to-end through the real tool pipeline.
- */
-
 import { strict as assert } from "node:assert";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -60,7 +45,6 @@ function makeHarness() {
 		getActiveTools: () => ["bash"],
 		setActiveTools: () => {},
 	};
-	// The fake supplies only the ExtensionAPI surfaces consumed by the tool core.
 	const api = pi as unknown as Parameters<typeof activate>[0];
 	activate(api, undefined, STUB_SHELL_PATH, undefined, undefined, {}, undefined, undefined, undefined, stubShellHost);
 	return {
@@ -79,11 +63,6 @@ type ExecCaller = {
 	call(toolName: string, params: Record<string, unknown>): Promise<{ details: { session_id?: unknown; log_path?: unknown } }>;
 };
 
-/**
- * Start `cat > out` with the terminal in raw mode and return its session id
- * once the mode switch is done (the marker is printed after `stty`), so no
- * test byte reaches the line discipline in canonical mode.
- */
 async function startRawCat(h: ExecCaller, out: string): Promise<number> {
 	const r1 = await h.call("exec_command", { title: "Test command", cmd: `stty raw -echo; printf raw-ready; exec cat > '${out}'`,
 		yield_time_ms: 300, });
@@ -98,10 +77,6 @@ async function startRawCat(h: ExecCaller, out: string): Promise<number> {
 	return sid;
 }
 
-/**
- * Spawn `cat > <tmpfile>` so every byte we write_stdin lands in the file
- * verbatim. Returns helpers to push chars and read back the captured bytes.
- */
 async function spawnCapture() {
 	const dir = mkdtempSync(join(tmpdir(), "unified-exec-chars-"));
 	const out = join(dir, "stdin.bin");
@@ -117,9 +92,7 @@ async function spawnCapture() {
 			await h.call("write_stdin", { session_id: sid, chars, yield_time_ms: 250 });
 		},
 		async finish(): Promise<Buffer> {
-			// Force-kill the cat session so the tmpfile is closed and flushed.
 			await h.call("kill_session", { session_id: sid });
-			// Brief settle.
 			await new Promise((r) => setTimeout(r, 50));
 			const buf = readFileSync(out);
 			await h.emit("session_shutdown");
@@ -132,7 +105,6 @@ async function spawnCapture() {
 describe("write_stdin chars encoding", () => {
 	it("writes a real LF (0x0A) when chars contains a real LF", async () => {
 		const c = await spawnCapture();
-		// JS string literally contains an LF character.
 		await c.send("A\nB");
 		const buf = await c.finish();
 		assert.deepEqual([...buf], [0x41, 0x0a, 0x42], `bytes=${[...buf].map((b) => b.toString(16))}`);
@@ -140,7 +112,6 @@ describe("write_stdin chars encoding", () => {
 
 	it("writes a real ESC (0x1B) when chars contains a real ESC", async () => {
 		const c = await spawnCapture();
-		// "\u001b" in JS source code is one char, U+001B (ESC).
 		await c.send("A\u001bB");
 		const buf = await c.finish();
 		assert.deepEqual([...buf], [0x41, 0x1b, 0x42], `bytes=${[...buf].map((b) => b.toString(16))}`);

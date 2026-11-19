@@ -1,10 +1,3 @@
-/**
- * Unit tests for the CompletionCoordinator (src/completion.ts) — the
- * exactly-once observation invariant, observation leases, suppression paths,
- * batching, and bounded notice metadata. All tests use fake sessions and
- * a fake notice dispatcher; no subprocesses, no long waits (debounce is 5 ms).
- */
-
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import {
@@ -44,7 +37,6 @@ class FakeSession implements CompletionSessionLike {
 		for (const l of this.listeners) l(this);
 	}
 
-	/** Simulate a duplicate exit callback. */
 	fireExitAgain(): void {
 		for (const l of this.listeners) l(this);
 	}
@@ -63,8 +55,6 @@ function makeCoordinator(opts: { failSends?: number; finished?: () => boolean } 
 			}
 			sent.push(message);
 		},
-		// The coordinator owns this fixture's flush timing; dispatcher retries
-		// happen only at the explicit safe boundaries exercised below.
 		setTimeoutFn: () => 1,
 		clearTimeoutFn: () => {},
 		onSendError: (error) => errors.push(error),
@@ -79,7 +69,6 @@ describe("CompletionCoordinator", () => {
 	it("unregistered sessions (on_exit omitted/none) never wake", async () => {
 		const { coordinator, sent } = makeCoordinator();
 		const s = new FakeSession(1);
-		// never registered
 		s.exit(0);
 		coordinator.flushPending();
 		await settle();
@@ -129,7 +118,6 @@ describe("CompletionCoordinator", () => {
 		s.exit(0);
 		await settle();
 		assert.equal(sent.length, 0, "exit held while observed");
-		// Handler returned a terminal result; pi finalizes it successfully.
 		coordinator.markPendingTerminal(1, "call-1");
 		coordinator.handleToolExecutionEnd("call-1", false);
 		await settle();
@@ -167,7 +155,6 @@ describe("CompletionCoordinator", () => {
 		const s = new FakeSession(1);
 		coordinator.register(s);
 		coordinator.beginObservation(1, "call-1");
-		// Handler was cancelled and never released; pi still emits tool_execution_end.
 		coordinator.handleToolExecutionEnd("call-1", true);
 		s.exit(0);
 		await settle();
@@ -211,7 +198,6 @@ describe("CompletionCoordinator", () => {
 		const s = new FakeSession(4);
 		coordinator.register(s);
 		s.exit(7);
-		// Debounce has not fired yet.
 		assert.equal(coordinator.setOnExit(4, "none", s), "disarmed");
 		await settle();
 		assert.equal(sent.length, 0);
@@ -222,9 +208,7 @@ describe("CompletionCoordinator", () => {
 		const s = new FakeSession(5);
 		coordinator.register(s);
 		s.exit(1);
-		// Evict exited session: tombstone keeps the pending wake.
 		coordinator.handleEviction(s);
-		// Disarm by id only (no live session object) — the set_on_exit tool path.
 		assert.equal(coordinator.setOnExit(5, "none", null), "disarmed");
 		await settle();
 		assert.equal(sent.length, 0);
@@ -247,7 +231,6 @@ describe("CompletionCoordinator", () => {
 		const s = new FakeSession(1);
 		coordinator.register(s);
 		coordinator.suppress(1);
-		// kill did NOT land; process still alive
 		coordinator.restoreAfterFailedKill(1);
 		s.exit(0);
 		await settle();
@@ -262,7 +245,6 @@ describe("CompletionCoordinator", () => {
 		coordinator.shutdown(); // before the debounce fires
 		await settle();
 		assert.equal(sent.length, 0);
-		// After reset (new session_start), old records stay gone.
 		coordinator.reset();
 		coordinator.flushPending();
 		await settle();
@@ -308,7 +290,6 @@ describe("CompletionCoordinator", () => {
 		s.exit(0);
 		await settle();
 		assert.equal(sent.length, 1);
-		// The model later drains the exited session's final output.
 		coordinator.beginObservation(1, "call-2");
 		coordinator.markPendingTerminal(1, "call-2");
 		coordinator.handleToolExecutionEnd("call-2", false);

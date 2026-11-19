@@ -1,15 +1,3 @@
-/**
- * ExecSession — wraps a PTY SpawnedChild with:
- *   - a TerminalScreen that renders the child's output as a terminal shows
- *     it (observed by polls, snapshotted for TUI streaming)
- *   - a log file mirroring every raw byte
- *   - state transitions (has_exited / exit_code / signal / failure)
- *   - lifecycle callbacks (onExit fan-out, monitor subscriptions)
- *
- * Mirrors codex's `UnifiedExecProcess` in `unified_exec/process.rs`, simplified
- * to the subset we need for the pi extension.
- */
-
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -30,16 +18,12 @@ export interface SessionSpawnOptions {
 	cols?: number;
 	rows?: number;
 	displayCommand?: string; // human-readable command for list_sessions/UI
-	/** The start title exec_command was given; names the terminal in lists and notices. */
 	title: string;
-	/** The background the session's screen is shown on (default dark), answered to OSC 10/11. */
 	appearance?: () => TerminalAppearance;
-	/** Alert when the screen settles on an unseen input prompt (see fork-features/input-wait.ts). */
 	inputWait?: InputWaitOptions;
 }
 
 export interface InputWaitOptions {
-	/** Output silence before the screen is examined. */
 	readonly quietMs: number;
 	readonly onAlert: (alert: InputWaitAlert) => void;
 }
@@ -49,14 +33,12 @@ export interface SessionState {
 	exitCode: number | null;
 	signal: NodeJS.Signals | null;
 	failureMessage: string | null;
-	/** Epoch ms the session was marked exited; null while running. */
 	exitedAt: number | null;
 }
 
 export class ExecSession {
 	readonly id: number;
 	readonly command: string[];
-	/** Executable actually passed to spawn, not a later host-setting lookup. */
 	get shell(): string | undefined {
 		return this.command[0];
 	}
@@ -65,19 +47,14 @@ export class ExecSession {
 	readonly cwd: string;
 	readonly startedAt: number;
 	readonly pid: number | undefined;
-	/** Path to a log file that receives the full stdout+stderr stream. */
 	readonly logPath: string;
 	private log: SessionLog | undefined;
 
-	/** Rendered terminal; created once the PTY child exists (absent after a spawn failure). */
 	private screen: TerminalScreen | undefined;
 	private terminalKey: string | undefined;
 	private terminalFinalized: Promise<void> | undefined;
-	/** Fired whenever the child produces output. */
 	readonly outputNotify = new Notify();
-	/** Closed when the stream is done (all data flushed after exit). */
 	readonly outputClosed = new Gate();
-	/** Aborts when the process has exited (may still have trailing output). */
 	private readonly exitedAc = new AbortController();
 	get exited(): AbortSignal {
 		return this.exitedAc.signal;
@@ -85,7 +62,6 @@ export class ExecSession {
 
 	private totalOutputBytes = 0;
 	private lastOutputAtMs: number;
-	/** collect() calls in flight: their result will show the screen to the agent. */
 	private attachments = 0;
 
 	private state: SessionState = {
@@ -116,10 +92,9 @@ export class ExecSession {
 	static spawn(id: number, opts: SessionSpawnOptions): ExecSession {
 		const self = new ExecSession(id, opts);
 
-		// The log file exists on disk from t=0, before the child writes anything.
 		try {
 			self.log = SessionLog.open(self.logPath, (err) => {
-				// Log write error (disk full, permissions, etc.). The child is
+				// The child is
 				// still running: record the failure and stop mirroring writes, but
 				// do NOT mark the session exited — that would make it unkillable
 				// (kill() no-ops once hasExited) and orphan the process.
@@ -152,7 +127,6 @@ export class ExecSession {
 			return self;
 		}
 
-		// child's actual pid
 		Object.defineProperty(self, "pid", { value: self.child.pid, enumerable: true });
 
 		// A real terminal answers queries (cursor position, device attributes);
@@ -163,17 +137,12 @@ export class ExecSession {
 			for (const listener of self.readListeners) listener();
 		});
 		self.terminalKey = key;
-		// The output gate closes after the final child bytes and log flush.
-		// freezeTerminal then waits for parsing without consuming observation.
 		self.terminalFinalized = self.outputClosed.closed().then(() => freezeTerminal(key));
 		if (opts.inputWait) self.watchInputWait(screen, opts.inputWait);
 
 		self.child.onData((chunk) => {
 			self.totalOutputBytes += chunk.length;
 			self.lastOutputAtMs = Date.now();
-			// Mirror every byte to the log file first: it is the authority. The
-			// chunk itself is queued (never reused by the PTY); a write error
-			// stops the mirror (see SessionLog).
 			self.log?.write(chunk);
 			screen.write(chunk);
 			self.outputNotify.notifyAll();
@@ -189,11 +158,7 @@ export class ExecSession {
 			};
 			self.exitedAc.abort();
 			self.notifyExitListeners();
-			// Fire a notify so any parked waiters wake up and see the exit.
 			self.outputNotify.notifyAll();
-			// A short tick later, flush the log to disk, then close the output
-			// gate. The tick lets any pending data-handler chunks land in the
-			// screen+log before we declare the session fully done.
 			setImmediate(() => {
 				self.outputNotify.notifyAll();
 				const log = self.log;
@@ -202,7 +167,6 @@ export class ExecSession {
 					self.outputClosed.close();
 					self.outputNotify.notifyAll();
 				};
-				// Consumers that await the drain see a fully written, closed log file.
 				if (log) void log.end().then(finalize);
 				else finalize();
 			});
@@ -211,12 +175,6 @@ export class ExecSession {
 		return self;
 	}
 
-	/**
-	 * After `quietMs` without a parsed change, examine the screen once. Alert
-	 * only when no tool call is attached (its result will show the screen), the
-	 * screen is not what a tool result already showed, it looks like a prompt,
-	 * and that exact screen has not been alerted before.
-	 */
 	private watchInputWait(screen: TerminalScreen, { quietMs, onAlert }: InputWaitOptions): void {
 		let quiet: NodeJS.Timeout | undefined;
 		let alerted: string | undefined;
@@ -238,8 +196,6 @@ export class ExecSession {
 				current: () => !this.hasExited && this.screen === screen && screen.unseen(probe.revision),
 			});
 		};
-		// One timer per quiet period: a parsed change only records its time, and
-		// a timer that fires before `quietMs` of silence waits out the rest.
 		let changedAt = 0;
 		const settle = () => {
 			const silent = performance.now() - changedAt;
@@ -256,10 +212,6 @@ export class ExecSession {
 		});
 	}
 
-	/**
-	 * Record a non-fatal failure (e.g. log mirroring broke) WITHOUT marking the
-	 * session exited. The child keeps running and stays controllable.
-	 */
 	private recordFailure(message: string): void {
 		this.state = {
 			...this.state,
@@ -267,7 +219,6 @@ export class ExecSession {
 		};
 	}
 
-	/** Mark the session as failed-and-exited. Only for spawn-time failures. */
 	private markFailure(message: string): void {
 		this.state = {
 			hasExited: true,
@@ -284,12 +235,10 @@ export class ExecSession {
 			try {
 				listener(this);
 			} catch {
-				// ignore listener failures
 			}
 		}
 	}
 
-	/** Register a listener fired when this session exits. */
 	onExit(listener: (session: ExecSession) => void): () => void {
 		this.exitListeners.add(listener);
 		if (this.hasExited) {
@@ -300,38 +249,31 @@ export class ExecSession {
 		return () => this.exitListeners.delete(listener);
 	}
 
-	/** Called for each term:// read of this terminal while it is stored; returns the unsubscribe. */
 	onTerminalRead(listener: () => void): () => void {
 		this.readListeners.add(listener);
 		return () => this.readListeners.delete(listener);
 	}
 
-	/** Called once when the shell itself exits, which may be long before the terminal closes. */
 	onShellExit(listener: (exit: ProcessExit) => void): () => void {
 		return this.child?.onProcessExit(listener) ?? (() => {});
 	}
 
-	/** What a streaming update shows now, without consuming anything (undefined after a spawn failure). */
 	liveSnapshot(): TerminalSnapshot | undefined {
 		return this.screen?.snapshot();
 	}
 
-	/** The screen with styling for live display (undefined after a spawn failure); consumes nothing. */
 	styledScreen(): StyledScreen | undefined {
 		return this.screen?.styledScreen();
 	}
 
-	/** The screen's parsed-write revision (undefined after a spawn failure or once the screen was released); consumes nothing. */
 	screenRevision(): number | undefined {
 		return this.screen?.parsedRevision();
 	}
 
-	/** Call `listener` whenever new output has been parsed into the screen; returns the unsubscribe. */
 	onScreenChange(listener: () => void): () => void {
 		return this.screen?.onChange(listener) ?? (() => {});
 	}
 
-	/** Establish on the source's boundary; no replay and no speculative subscription. */
 	async subscribeMonitor(
 		listener: MonitorListener,
 		accept: (handle: MonitorSourceHandle) => boolean,
@@ -342,9 +284,6 @@ export class ExecSession {
 		if (this.hasExited || !screen) return "not_running";
 		if (listener.watchesLines) {
 			return screen.subscribeLines(() => !this.hasExited, (lines) => listener.lines(lines), (handle) => {
-				// Register final draining before publishing the subscription. The
-				// gate's freeze callback already queued its projection; this queues
-				// the monitor drain before any release awaiting that freeze.
 				const unsubscribeClose = this.outputClosed.subscribe(async () => {
 					if (await handle.finish()) listener.end();
 				});
@@ -382,15 +321,7 @@ export class ExecSession {
 		return "accepted";
 	}
 
-	/**
-	 * Wait until `deadlineMs` (or exit/abort). A running session then consumes
-	 * an observation of its screen; a completed session returns its immutable
-	 * final active screen. A session whose live terminal was already released
-	 * (shutdown does not wait for the process to die) has nothing to observe.
-	 */
 	async collect(opts: { deadlineMs: number; externalAbort?: AbortSignal }): Promise<CollectResult> {
-		// Held through the observation, so the input-wait watcher never alerts
-		// on a screen this result is about to show.
 		this.attachments++;
 		try {
 			await waitForExitOrDeadline({
@@ -410,7 +341,6 @@ export class ExecSession {
 		}
 	}
 
-	/** The frozen final screen, or nothing when shutdown discarded the unfinished terminal. */
 	private async finalScreenOutput(): Promise<FinalScreenOutput | NoOutput> {
 		await this.terminalFinalized;
 		const key = this.terminalKey;
@@ -422,14 +352,12 @@ export class ExecSession {
 		return this.terminalKey === undefined ? undefined : `term://${this.terminalKey}`;
 	}
 
-	/** Normal removal waits for output closure and the one session-owned freeze. */
 	async release(): Promise<void> {
 		this.detachReader();
 		await this.terminalFinalized;
 		await this.detachScreen()?.release();
 	}
 
-	/** Shutdown need not retain an unfinished projection; completed resources survive. */
 	async releaseForShutdown(): Promise<void> {
 		this.detachReader();
 		if (this.terminalKey !== undefined && discardLiveTerminal(this.terminalKey)) this.terminalKey = undefined;
@@ -442,23 +370,17 @@ export class ExecSession {
 		if (this.terminalKey !== undefined) detachTerminalReader(this.terminalKey);
 	}
 
-	/**
-	 * End the session's ownership of its screen. Observations already queued
-	 * on the screen still run before its release; later callers see no screen.
-	 */
 	private detachScreen(): TerminalScreen | undefined {
 		const screen = this.screen;
 		this.screen = undefined;
 		return screen;
 	}
 
-	/** Write bytes to the PTY input. Returns true on success, false if closed/dead. */
 	write(data: Uint8Array): boolean {
 		if (this.state.hasExited) return false;
 		return this.child.write(data);
 	}
 
-	/** Send a signal. No-op if already exited. */
 	kill(signal: NodeJS.Signals = "SIGTERM"): void {
 		if (this.state.hasExited) return;
 		this.child.kill(signal);
@@ -468,28 +390,18 @@ export class ExecSession {
 		return this.state.hasExited;
 	}
 
-	/**
-	 * The shell process itself has exited. This can be true while
-	 * `hasExited` is still false: a descendant that survives the shell's exit
-	 * (e.g. a SIGHUP-immune background job) still holds the PTY, so the
-	 * terminal-close-based session exit lags (or never arrives). Lets callers
-	 * explain a session that reports "running" although its shell is gone.
-	 */
 	get shellExited(): boolean {
 		return this.child.processExited;
 	}
 
-	/** Signal what is left of the process group after the terminal closed; 0 only probes. Returns whether any member got it. */
 	signalProcessGroup(signal: NodeJS.Signals | 0): boolean {
 		return this.child?.signalGroup(signal) ?? false;
 	}
 
-	/** Whether any of its processes remain: the terminal is open, or its process group still has members. */
 	processesRemain(): boolean {
 		return !this.hasExited || this.signalProcessGroup(0);
 	}
 
-	/** The shell's own exit status once it has exited, even while the terminal is held open. */
 	get shellExit(): ProcessExit | undefined {
 		return this.child?.processExit;
 	}
@@ -506,7 +418,6 @@ export class ExecSession {
 		return this.state.failureMessage;
 	}
 
-	/** Epoch ms the session was marked exited; null while running. */
 	get exitedAt(): number | null {
 		return this.state.exitedAt;
 	}
@@ -515,7 +426,6 @@ export class ExecSession {
 		return this.totalOutputBytes;
 	}
 
-	/** Epoch ms of the last child output (spawn time before any). */
 	get lastOutputAt(): number {
 		return this.lastOutputAtMs;
 	}
@@ -528,9 +438,7 @@ export class ExecSession {
 		this.lastUsedAt = Date.now();
 	}
 
-	/** Terminate + mark closed. Used by session-store LRU eviction / shutdown. */
 	terminate(signal: NodeJS.Signals = "SIGTERM"): void {
 		this.kill(signal);
-		// onExit closes the log; terminate() is idempotent so this is fine.
 	}
 }

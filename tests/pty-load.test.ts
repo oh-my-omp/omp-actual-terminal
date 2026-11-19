@@ -1,5 +1,3 @@
-/** Bun host admission and native PTY callback lifecycle guards. */
-
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { requireBunRuntime, spawnBunPty } from "../src/pty.ts";

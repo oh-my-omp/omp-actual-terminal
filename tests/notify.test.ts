@@ -1,7 +1,3 @@
-/**
- * Unit tests for Notify / Gate / sleep.
- */
-
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { Gate, Notify, sleep } from "../src/notify.ts";
@@ -36,7 +32,6 @@ describe("Notify", () => {
 		const pre = n.notified();
 		n.notifyAll();
 		await pre;
-		// A new waiter after notifyAll should not resolve until the next notify.
 		const post = n.notified();
 		let resolved = false;
 		post.then(() => {

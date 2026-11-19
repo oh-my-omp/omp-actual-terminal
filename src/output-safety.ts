@@ -1,12 +1,3 @@
-/*
- * Convert untrusted child/argument text into inert terminal text.
- *
- * A PTY can emit more than color: OSC clipboard writes, alternate-screen and
- * keyboard-mode CSI sequences, DCS payloads, and other controls can reprogram
- * the host terminal when replayed by a custom TUI renderer. Unified-exec keeps
- * the exact byte stream in log_path; model/session/TUI output is plain text.
- */
-
 const ESC = "\x1b";
 
 function isCsiParam(code: number): boolean {
@@ -23,7 +14,6 @@ function isCsiFinal(code: number): boolean {
 
 type SanitizerState = "text" | "esc" | "esc-intermediate" | "csi-param" | "csi-intermediate" | "osc" | "osc-esc" | "string" | "string-esc";
 
-/** Remove control sequences from `input`, keeping printable text, tabs and newlines. */
 function stripControls(input: string): string {
 	let state: SanitizerState = "text";
 	let output = "";
@@ -94,10 +84,6 @@ function stripControls(input: string): string {
 	return output;
 }
 
-/**
- * Strip ANSI/VT sequences and C0/C1 controls while retaining printable text,
- * tabs, and newlines. Carriage return cannot rewrite an earlier transcript line.
- */
 export function sanitizeOutputText(input: string): string {
 	if (!/[\x00-\x08\x0b-\x1f\x7f-\x9f\ud800-\udfff\ufff9-\ufffb]/.test(input)) return input;
 	return stripControls(input);

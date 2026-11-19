@@ -8,7 +8,6 @@ export type { MonitorEndReason } from "./terminal-notice.ts";
 export type MonitorStart = "accepted" | "not_running" | "cancelled";
 export interface MonitorSourceHandle { cancel(): void }
 export interface MonitorListener {
-	/** Subscribes to rendered lines (a regex monitor), not only to output closure. */
 	readonly watchesLines: boolean;
 	lines(lines: readonly string[]): void;
 	end(): void;
@@ -21,9 +20,7 @@ export interface MonitorSession {
 	readonly signal: string | null;
 	readonly terminalUrl: string | undefined;
 	readonly logPath: string;
-	/** Epoch ms of the last child output (spawn time before any). */
 	readonly lastOutputAt: number;
-	/** Current screen without consuming anything; undefined once the terminal is gone. */
 	liveSnapshot(): TerminalSnapshot | undefined;
 	subscribeMonitor(listener: MonitorListener, accept: (handle: MonitorSourceHandle) => boolean, signal?: AbortSignal): Promise<MonitorStart>;
 }
@@ -33,7 +30,6 @@ export type MonitorCondition =
 	| { readonly kind: "regex"; readonly source: string; readonly regex: RegExp }
 	| { readonly kind: "judge"; readonly intent: string; readonly intervalMs: number };
 
-/** A monitor's watch as the monitor result and list_sessions report it. */
 export type MonitorWatchStatus =
 	| { readonly kind: "end" }
 	| { readonly kind: "regex"; readonly condition: string }
@@ -69,19 +65,13 @@ const MAX_LINE_CHARS = 1024;
 const MAX_BATCH_LINES = 16;
 const WINDOW_MS = 60_000;
 const BATCH_MS = 250;
-/** Default silence before a monitor reminds the agent that it has not returned. */
 export const DEFAULT_REMIND_AFTER_MS = 20 * 60_000;
-/** Default time between a judge monitor's judgments. */
 export const DEFAULT_JUDGE_INTERVAL_MS = 60_000;
-/** setTimeout's largest single delay. */
 export const MAX_TIMER_MS = 2_147_483_647;
-/** Screen lines quoted in a reminder. */
 const REMINDER_SCREEN_LINES = 8;
 
 export interface MonitorConditionInput {
-	/** JavaScript regex source. */
 	readonly condition?: string;
-	/** The intent a judge monitor judges each new screen against. */
 	readonly judge?: string;
 	readonly judgeIntervalMs?: number;
 }
@@ -112,34 +102,16 @@ export function parseRemindAfter(value: number | undefined): number {
 	return value;
 }
 
-/** Hands a notice to the terminal-notice dispatcher; resolves once it was delivered or dropped. */
 export type MonitorSend = (notice: TerminalNotice, current: () => boolean) => Promise<NoticeOutcome>;
 
 type MonitorBody = Extract<NoticeBody, { kind: "monitor_end" | "monitor_match" | "monitor_judge_match" | "monitor_judge_failed" | "monitor_silent" }>;
 
 interface Batch { lines: string[]; omitted: number }
 
-/** The screen's sanitized non-blank lines, each bounded. */
 function screenLines(snapshot: TerminalSnapshot): string[] {
 	return snapshot.text.split("\n").map((line) => sanitizeOutputText(line).trimEnd().slice(0, MAX_LINE_CHARS)).filter((line) => line !== "");
 }
 
-/**
- * One actual source subscription. The coordinator owns its identity and notification routing.
- *
- * Notifications leave through one serialized `flush`, which picks the most
- * informative pending event: End, then a judge failure, then matched lines or
- * a met judgment, then a due reminder. Each becomes a terminal notice; the
- * dispatcher merges and retries delivery. The reminder clock starts at
- * publication (`begin`) and restarts only when a return is delivered; a
- * delivered reminder does not re-arm it, so each silent period yields at most
- * one reminder.
- *
- * A judge monitor judges the screen one interval after publication and one
- * interval after each judgment ends. A screen equal to the last judged one
- * (or to the one shown at publication) is not judged; a judgment the agent
- * cannot get while omp has it parked waits for the next interval.
- */
 export class MonitorSubscription implements MonitorListener {
 	readonly watchesLines: boolean;
 	private readonly watch: MonitorWatch;
@@ -156,15 +128,11 @@ export class MonitorSubscription implements MonitorListener {
 	private recentCount = 0;
 	private reminder: NodeJS.Timeout | undefined;
 	private reminderDue = false;
-	/** Start of the current silent period: publication or the last delivered return. */
 	private silentSince = 0;
 	private judgeTimer: NodeJS.Timeout | undefined;
 	private judging: AbortController | undefined;
-	/** The text of the screen last judged, or shown at publication. */
 	private judgedScreen: string | undefined;
-	/** A met screen's last lines, not yet delivered. */
 	private met: readonly string[] | undefined;
-	/** A failed judgment's detail, not yet delivered; the monitor ends with it. */
 	private failure: string | undefined;
 
 	constructor(
@@ -172,7 +140,6 @@ export class MonitorSubscription implements MonitorListener {
 		private readonly condition: MonitorCondition,
 		private readonly maximum: number,
 		private readonly remindAfterMs: number,
-		/** The judge of the agent's current session; undefined while omp has the agent parked. */
 		private readonly judge: () => ScreenJudge | undefined,
 		private readonly send: MonitorSend,
 		private readonly finish: (subscription: MonitorSubscription, completed: boolean) => void,
@@ -195,16 +162,13 @@ export class MonitorSubscription implements MonitorListener {
 	}
 	setEndReason(reason: MonitorEndReason): void { this.reason = reason; }
 
-	/** Publication: the first silent period and a judge monitor's judgments start now. */
 	begin(): void {
 		this.startReminder();
 		if (this.condition.kind !== "judge") return;
-		// Only output after the call counts: the screen shown now is never judged.
 		this.judgedScreen = this.session.liveSnapshot()?.text;
 		this.scheduleJudgment(this.condition.intervalMs);
 	}
 
-	/** Begin a silent period; called at publication and after each delivered return. */
 	startReminder(): void {
 		clearTimeout(this.reminder);
 		this.reminderDue = false;
@@ -244,7 +208,6 @@ export class MonitorSubscription implements MonitorListener {
 		const judging = new AbortController();
 		this.judging = judging;
 		void judge.judge(condition.intent, lines.join("\n"), judging.signal).then((verdict) => {
-			// Cancel and End abort the judgment and forget it.
 			if (this.judging !== judging) return;
 			this.judging = undefined;
 			switch (verdict.kind) {
@@ -307,7 +270,6 @@ export class MonitorSubscription implements MonitorListener {
 		if (!this.active || this.ended) return;
 		this.ended = true;
 		this.clearTimer();
-		// End is the authoritative outcome; an undelivered reminder or judgment is stale.
 		this.stopReminder();
 		this.stopJudging();
 		this.flush();
@@ -322,7 +284,6 @@ export class MonitorSubscription implements MonitorListener {
 		return { watch: this.watch, returns: this.used, maxReturns: this.maximum, remindAfterMs: this.remindAfterMs };
 	}
 
-	/** One event at a time; the dispatcher owns merging and retry, so a notice resolves only when delivered or dropped. */
 	flush(): void {
 		if (!this.active || !this.isCurrent(this) || this.sending) return;
 		const now = Date.now();
@@ -351,7 +312,6 @@ export class MonitorSubscription implements MonitorListener {
 		void this.send({ identity, body }, () => this.active && this.isCurrent(this)).then((outcome) => {
 			this.sending = false;
 			if (outcome === "dropped" || !this.active || !this.isCurrent(this)) return;
-			// A finished agent will not act on this monitor: end it and consume its ordinary wake.
 			if (outcome === "withheld") { this.finish(this, true); return; }
 			switch (body.kind) {
 				case "monitor_end": this.finish(this, true); return;
@@ -360,7 +320,6 @@ export class MonitorSubscription implements MonitorListener {
 				case "monitor_judge_match":
 					this.used++;
 					if (this.used === this.maximum) { this.finish(this, false); return; }
-					// A delivered return starts a new silent period.
 					this.startReminder();
 					break;
 				case "monitor_silent":
@@ -375,7 +334,6 @@ export class MonitorSubscription implements MonitorListener {
 		});
 	}
 
-	/** Diagnostic reminder: what the session shows now, so a blocked prompt is visible without another call. */
 	private silentBody(monitor: MonitorReturns, now: number): MonitorBody {
 		const snapshot = this.session.liveSnapshot();
 		return {

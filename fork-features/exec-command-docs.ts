@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
 
-/** Read only when omp requests docs, after host admission; Pi's tool type omits this property. */
 export const execCommandDocumentation: { docTopics(): Readonly<Record<string, string>> } = {
 	docTopics: () => ({
 		interactive: readFileSync(new URL("./topics/interactive.md", import.meta.url), "utf8"),

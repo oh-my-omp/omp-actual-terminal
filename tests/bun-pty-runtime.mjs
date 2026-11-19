@@ -47,7 +47,6 @@ async function runInteractiveCase() {
 	const result = await collect(child, "interactive", (output, activeChild) => {
 		if (sent || !output.includes("PTY_START")) return;
 		sent = true;
-		// CR is the portable Enter key: Windows console input does not submit LF.
 		assert.equal(activeChild.write(new TextEncoder().encode("runtime-test\r")), true);
 	});
 	assert.equal(result.exitCode, 0, result.output);
@@ -62,9 +61,6 @@ async function runInteractiveCase() {
 }
 
 async function runShellCase() {
-	// The repository never launches cmd; the fixture proves a POSIX bash reaches a
-	// ConPTY. The resolved absolute path honours PI_UNIFIED_EXEC_BASH and keeps a
-	// bash name off System32's WSL stub, which a bare `bash` spawn would reach.
 	const shell = IS_WINDOWS ? resolveWindowsShell("bash") : "/bin/sh";
 	const child = spawnChild({
 		command: buildShellCommand(shell, "echo SHELL_OK"),

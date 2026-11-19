@@ -47,7 +47,6 @@ function finalScreen(text: string): FinalScreenOutput {
 }
 
 
-// Persisted shapes from the real tool-result survey, with stable fixture paths.
 const exitedDetails: ProcessResultDetails = {
 	chunk_id: "86445f",
 	wall_time_seconds: 0.007,
@@ -379,8 +378,6 @@ describe("host presentation activation", () => {
 		t.after(() => rmSync(temporary, { recursive: true, force: true }));
 		const root = fileURLToPath(new URL("../", import.meta.url));
 		const compiled = join(temporary, "plugin.mjs");
-		// Node's strip-only TS loader cannot parse the HUD's parameter properties.
-		// Compile the real entry without bundling dependencies, then exercise it in Node.
 		const build = spawnSync(process.execPath, [
 			"build", fileURLToPath(new URL("../src/index.ts", import.meta.url)),
 			"--target=node", "--packages=external", "--outfile", compiled,

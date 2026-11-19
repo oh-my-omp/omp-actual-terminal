@@ -34,14 +34,12 @@ function color(value: TerminalColor, fallback: string): string {
 	}
 }
 
-/** xterm glyphs are data, never SVG markup or XML-invalid code points. */
 function xmlText(text: string): string {
 	return text.replace(/[^\u0009\u000a\u000d\u0020-\ud7ff\ue000-\ufffd\u{10000}-\u{10ffff}]/gu, "")
 		.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 		.replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
 
-/** Pure projection of the copied active grid. No child bytes, SGR, history or external assets. */
 export function terminalSvg(projection: TerminalProjection, live: boolean): string {
 	const { cols, rows, cursor } = projection.view;
 	const width = cols * CELL_WIDTH;
@@ -75,15 +73,12 @@ export function terminalSvg(projection: TerminalProjection, live: boolean): stri
 	return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="${width}" height="${height}" fill="${background}"/><g>${backgrounds.join("")}</g><g font-family="monospace" font-size="14" xml:space="preserve">${glyphs.join("")}</g>${caret}</svg>`;
 }
 
-/** Each read gets a private immutable file; the host opens it after locate returns. */
 export async function writeTerminalImage(projection: TerminalProjection, live: boolean): Promise<string> {
 	const { rasterizeSvg } = await import("@oh-my-pi/pi-natives");
 	const width = projection.view.cols * CELL_WIDTH;
 	const height = projection.view.rows * CELL_HEIGHT;
 	const scale = Math.min(1, Math.sqrt(MAX_PIXELS / (width * height)));
 	const png = await rasterizeSvg(new TextEncoder().encode(terminalSvg(projection, live)), Math.floor(width * scale), Math.floor(height * scale));
-	// No overwrite race between concurrent reads, and no image cache standing in
-	// for the terminal. Like session logs, these files rely on OS temp cleanup.
 	const directory = await mkdtemp(join(tmpdir(), "omp-terminal-image-"));
 	const path = join(directory, "screen.png");
 	try {

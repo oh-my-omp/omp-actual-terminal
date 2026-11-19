@@ -1,12 +1,3 @@
-/**
- * Integration tests for input-bearing observation and exec_command's
- * `on_exit: "wake"` through the real tool pipeline.
- *
- * Uses a stub ExtensionAPI that captures pi.sendMessage calls and can emit
- * tool_execution_end / agent_start / agent_end lifecycle events. Subprocess-based tests
- * are kept small and cross-platform (sleep/echo through the default shell).
- */
-
 import { strict as assert } from "node:assert";
 import { readTerminal } from "../fork-features/terminal-resource.ts";
 import { afterEach, describe, it } from "node:test";
@@ -71,14 +62,12 @@ function makeHarness() {
 		},
 	};
 
-	// The fake supplies only the ExtensionAPI surfaces consumed by the tool core.
 	const api = pi as unknown as Parameters<typeof activate>[0];
 	activate(api, undefined, STUB_SHELL_PATH, undefined, undefined, {}, undefined, undefined, undefined, stubShellHost);
 
 	let nextCallId = 1;
 	let shutDown = false;
 	const harness = {
-		/** Call a tool with a fresh toolCallId; returns { result, toolCallId }. */
 		async call(toolName: string, params: any, signal?: AbortSignal, onUpdate?: (partial: any) => void) {
 			const def = tools[toolName];
 			if (!def) throw new Error(`no such tool: ${toolName}`);
@@ -93,7 +82,6 @@ function makeHarness() {
 			for (const h of handlers[event] ?? []) await h(evt, stubCtx);
 			if (event === "session_shutdown") shutDown = true;
 		},
-		/** Simulate pi finalizing a tool result. */
 		async finalizeTool(toolCallId: string, isError = false) {
 			await this.emit("tool_execution_end", { type: "tool_execution_end", toolCallId, toolName: "", result: {}, isError });
 		},
@@ -103,7 +91,6 @@ function makeHarness() {
 			try {
 				await this.emit("session_shutdown");
 			} catch {
-				// best-effort cleanup
 			}
 		},
 		sentMessages,
@@ -144,7 +131,6 @@ describe("exec_command on_exit", () => {
 		assert.equal(r2.details.completion_notification, undefined);
 		await new Promise((r) => setTimeout(r, 1200)); // both exit + debounce window
 		assert.equal(h.sentMessages.length, 0);
-		// Inspect completed sessions without removing their retained terminals.
 		await h.call("list_sessions", {});
 		await h.emit("session_shutdown");
 	});
@@ -163,8 +149,6 @@ describe("exec_command on_exit", () => {
 	it("backgrounded wake session exiting while idle sends exactly one follow-up prompt", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
-		// Output ("BYE") deliberately differs from the command text ("bye") so we
-		// can assert the wake carries command metadata but never raw stdout.
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "sleep 0.4 && echo bye | tr a-z A-Z",
 			yield_time_ms: 250,
 			on_exit: "wake", });
@@ -181,7 +165,6 @@ describe("exec_command on_exit", () => {
 			{ session_id: sid, title: "Test command", kind: "exit_wake" },
 		]);
 		assert.equal(message.display, true);
-		// An aside, which omp turns into an agent-initiated turn for an idle agent.
 		assert.deepEqual(options, { deliverAs: "aside" });
 		assert.match(message.content, new RegExp(`session_id=${sid}`));
 		assert.match(message.content, /exit_code=0/);
@@ -189,10 +172,8 @@ describe("exec_command on_exit", () => {
 		assert.ok(message.content.includes(`read ${r1.details.terminal_url}`));
 		assert.doesNotMatch(message.content, /write_stdin/);
 
-		// After the wake, the exited session's output is still retrievable…
 		const projection = await readTerminal(r1.details.terminal_url.slice(7));
 		assert.ok(projection.screenLines.some((line) => line.includes("BYE")));
-		// Reading leaves the notification count unchanged.
 		await new Promise((res) => setTimeout(res, 600));
 		assert.equal(h.sentMessages.length, 1);
 		await h.emit("session_shutdown");
@@ -251,7 +232,6 @@ describe("exec_command on_exit", () => {
 		const sid = r1.details.session_id;
 		const r2 = await h.call("write_stdin", { session_id: sid, chars: "x", yield_time_ms: 10_000 });
 		assert.equal(r2.details.exit_code, 0);
-		// Pi finalizes the constructed result as an error → wake must fire.
 		await h.finalizeTool(r2.toolCallId, true);
 		assert.ok(await waitFor(() => h.sentMessages.length === 1), "wake despite constructed result");
 		await h.emit("session_shutdown");
@@ -268,7 +248,6 @@ describe("exec_command on_exit", () => {
 		const r2 = await h.call("set_on_exit", { session_id: sid, on_exit: "none" });
 		assert.equal(r2.details.status, "disarmed");
 		assert.equal(r2.details.wake_armed, false);
-		// Wait until listing observes the return; returned sessions remain tracked.
 		assert.ok(
 			await waitFor(async () => {
 				const l = await h.call("list_sessions", {});
@@ -342,7 +321,6 @@ describe("exec_command on_exit", () => {
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "sleep 0.3", yield_time_ms: 250, on_exit: "wake" });
 		const sid = r1.details.session_id;
 		assert.ok(typeof sid === "number");
-		// Poll until list_sessions observes the return (race with debounce).
 		let entry: any;
 		assert.ok(
 			await waitFor(async () => {
@@ -361,7 +339,6 @@ describe("exec_command on_exit", () => {
 		await h.emit("session_start");
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "sleep 0.3", yield_time_ms: 250, on_exit: "wake" });
 		assert.ok(typeof r1.details.session_id === "number");
-		// Shut down before the process exits / the debounce fires.
 		await h.emit("session_shutdown");
 		assert.ok(!(await waitFor(() => h.sentMessages.length > 0, 800)));
 		assert.equal(h.sentMessages.length, 0);
@@ -370,8 +347,6 @@ describe("exec_command on_exit", () => {
 	it("several wake sessions finishing together produce one bounded batch", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
-		// Both processes block on the same marker file so their exits land within
-		// a few tens of ms of each other — inside the wake debounce window.
 		const marker = `${process.env.TMPDIR || "/tmp"}/unified-exec-batch-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 		const waitCmd = `while [ ! -f "${marker}" ]; do sleep 0.05; done`;
 		const a = await h.call("exec_command", { title: "Test command", cmd: waitCmd, yield_time_ms: 250, on_exit: "wake" });
@@ -393,7 +368,6 @@ describe("exec_command on_exit", () => {
 	it("a settled run flushes a wake whose send previously failed", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
-		// Make the first send throw.
 		const originalPush = h.sentMessages.push.bind(h.sentMessages);
 		let failures = 1;
 		(h.sentMessages as any).push = (...args: any[]) => {
@@ -405,7 +379,6 @@ describe("exec_command on_exit", () => {
 		};
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "sleep 0.3", yield_time_ms: 250, on_exit: "wake" });
 		assert.ok(typeof r1.details.session_id === "number");
-		// Wait until the exit's first send attempt has actually failed, not a fixed delay.
 		assert.ok(await waitFor(() => failures === 0), "first send attempt never happened");
 		assert.equal(h.sentMessages.length, 0);
 		await h.emit("agent_start", { type: "agent_start" });

@@ -1,8 +1,3 @@
-/**
- * Unit tests for unescapeChars — the C-style escape decoder used by
- * write_stdin's `chars` parameter.
- */
-
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { unescapeChars } from "../src/unescape.ts";
@@ -33,16 +28,12 @@ describe("unescapeChars", () => {
 		assert.equal(unescapeChars("\\x1b"), "\x1b");
 		assert.equal(unescapeChars("\\x7f"), "\x7f");
 		assert.equal(unescapeChars("\\xFF"), "\xff");
-		// Mixed with surrounding content.
 		assert.equal(unescapeChars("a\\x09b"), "a\tb");
 	});
 
 	it("rejects short or non-hex \\x — leaves \\x literal + rescans rest", () => {
-		// \x1 (only 1 hex digit) → keep "\x" literal, then "1"
 		assert.equal(unescapeChars("\\x1"), "\\x1");
-		// \xZZ — not hex → keep "\x" literal, then "ZZ"
 		assert.equal(unescapeChars("\\xZZ"), "\\xZZ");
-		// \x at EOS
 		assert.equal(unescapeChars("foo\\x"), "foo\\x");
 	});
 
@@ -50,7 +41,6 @@ describe("unescapeChars", () => {
 		assert.equal(unescapeChars("\\u001b"), "\x1b");
 		assert.equal(unescapeChars("\\u0041"), "A");
 		assert.equal(unescapeChars("\\u00e9"), "é");
-		// Rejects non-4-digit \u
 		assert.equal(unescapeChars("\\u41"), "\\u41");
 	});
 
@@ -59,13 +49,9 @@ describe("unescapeChars", () => {
 		assert.equal(unescapeChars("\\u{1b}"), "\x1b");
 		assert.equal(unescapeChars("\\u{1F389}"), "🎉");
 		assert.equal(unescapeChars("\\u{10FFFF}"), "\u{10FFFF}");
-		// Reject > 0x10FFFF
 		assert.equal(unescapeChars("\\u{110000}"), "\\u{110000}");
-		// Reject > 6 hex digits (should stop matching)
 		assert.equal(unescapeChars("\\u{1234567}"), "\\u{1234567}");
-		// Reject empty braces
 		assert.equal(unescapeChars("\\u{}"), "\\u{}");
-		// Reject unterminated braces → fall through
 		assert.equal(unescapeChars("\\u{1b"), "\\u{1b");
 	});
 
@@ -73,18 +59,12 @@ describe("unescapeChars", () => {
 		assert.equal(unescapeChars("\\q"), "\\q");
 		assert.equal(unescapeChars("regex:\\."), "regex:\\.");
 		assert.equal(unescapeChars("\\-"), "\\-");
-		// Windows paths without known-escape letters pass through unchanged.
-		// (Capital \U is not an escape; lowercase \u is.)
 		assert.equal(unescapeChars("C:\\Users\\Documents"), "C:\\Users\\Documents");
 	});
 
 	it("known-escape letters IN unescaped paths get decoded (use \\\\ to preserve)", () => {
-		// \f is FF, so `C:\Users\foo` → `C:\Users<FF>oo`. This is a footgun:
-		// callers who want a literal backslash before known-escape letters
-		// must escape it as `\\`.
 		assert.equal(unescapeChars("C:\\foo"), "C:\x0Coo");
 		assert.equal(unescapeChars("C:\\\\foo"), "C:\\foo"); // correctly escaped
-		// \t is TAB.
 		assert.equal(unescapeChars("C:\\temp"), "C:\temp");
 		assert.equal(unescapeChars("C:\\\\temp"), "C:\\temp"); // correctly escaped
 	});
@@ -106,18 +86,13 @@ describe("unescapeChars", () => {
 	});
 
 	it("\\\\ does not eat the next char (greedy-escape regression)", () => {
-		// If `\\` ate too much we'd see `\n` here; correct output is backslash + n.
 		assert.equal(unescapeChars("\\\\n"), "\\n");
-		// Two escaped backslashes in a row.
 		assert.equal(unescapeChars("\\\\\\\\"), "\\\\");
 	});
 
 	it("real-world sequences: vim :wq and Ctrl-C", () => {
-		// :wq with ESC prefix
 		assert.equal(unescapeChars("\\x1b:wq\\n"), "\x1b:wq\n");
-		// Ctrl-C
 		assert.equal(unescapeChars("\\x03"), "\x03");
-		// Ctrl-D (EOF)
 		assert.equal(unescapeChars("\\x04"), "\x04");
 	});
 

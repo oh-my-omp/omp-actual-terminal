@@ -1,22 +1,8 @@
-/**
- * SessionStore — keyed registry of ExecSession instances with LRU eviction.
- *
- * Mirrors codex's `ProcessStore` + `prune_processes_if_needed`:
- *   - Caps at `maxSessions` entries.
- *   - When inserting would exceed the cap, prune the LRU entry that is NOT in
- *     the N-most-recent "protected" set. Prefer already-exited entries first.
- *   - IDs are monotonic and never reused.
- *
- * The store does NOT own process lifetime beyond terminate-on-evict and
- * terminate-all-on-shutdown. The ExecSession itself drives its child.
- */
-
 import { ExecSession } from "./session.ts";
 
 export interface SessionStoreOptions {
 	maxSessions: number;
 	lruProtectedCount: number;
-	/** Called when a session is evicted (for UI cleanup). */
 	onEvict?: (session: ExecSession, reason: "lru" | "shutdown") => void;
 }
 
@@ -34,7 +20,6 @@ export class SessionStore {
 		this.onEvict = opts.onEvict;
 	}
 
-	/** Allocate a new monotonic session id (never reused). */
 	allocateId(): number {
 		return this.nextId++;
 	}
@@ -52,8 +37,7 @@ export class SessionStore {
 	}
 
 	/**
-	 * Call `listener` after each change to the set of stored sessions (insert,
-	 * remove, eviction, shutdown); returns the unsubscribe. A removed session's
+	 * A removed session's
 	 * terminal emulator is being released by then, so listeners re-read
 	 * `values()` instead of keeping removed sessions.
 	 */
@@ -66,10 +50,6 @@ export class SessionStore {
 		for (const listener of this.membershipListeners) listener();
 	}
 
-	/**
-	 * Insert a session. Returns the evicted session, if any. If inserting the
-	 * new session would exceed the cap, prune an LRU non-protected entry first.
-	 */
 	insert(session: ExecSession): { pruned?: ExecSession; count: number } {
 		let pruned: ExecSession | undefined;
 		if (this.sessions.size >= this.maxSessions) {
@@ -80,7 +60,6 @@ export class SessionStore {
 		return { pruned, count: this.sessions.size };
 	}
 
-	/** Remove a session (e.g., when it exits) and release its terminal emulator. */
 	remove(id: number): ExecSession | undefined {
 		const entry = this.sessions.get(id);
 		if (!entry) return undefined;
@@ -90,7 +69,6 @@ export class SessionStore {
 		return entry;
 	}
 
-	/** Terminate all sessions and clear the store. Used on session_shutdown. */
 	terminateAll(): ExecSession[] {
 		const drained = Array.from(this.sessions.values());
 		this.sessions.clear();
@@ -98,7 +76,6 @@ export class SessionStore {
 			try {
 				s.terminate();
 			} catch {
-				// ignore
 			}
 			void s.releaseForShutdown();
 			this.onEvict?.(s, "shutdown");
@@ -107,23 +84,15 @@ export class SessionStore {
 		return drained;
 	}
 
-	/**
-	 * LRU eviction policy (matches codex's `process_id_to_prune_from_meta`):
-	 *   1. Protect the N most-recently-used entries.
-	 *   2. Among unprotected: prefer already-exited entries (oldest first).
-	 *   3. Otherwise: oldest unprotected entry, alive or not.
-	 */
 	private pruneLru(): ExecSession | null {
 		const entries = Array.from(this.sessions.values());
 		if (entries.length === 0) return null;
 
-		// One ascending sort: the last N entries are the protected (most recent) set.
 		const byRecencyAsc = [...entries].sort((a, b) => a.lastUsed - b.lastUsed);
 		const protectedIds = new Set<number>(
 			this.lruProtectedCount > 0 ? byRecencyAsc.slice(-this.lruProtectedCount).map((e) => e.id) : [],
 		);
 
-		// Prefer oldest exited entries first.
 		const exitedCandidate = byRecencyAsc.find((e) => !protectedIds.has(e.id) && e.hasExited);
 		const victim = exitedCandidate ?? byRecencyAsc.find((e) => !protectedIds.has(e.id));
 		if (!victim) return null;
@@ -133,7 +102,6 @@ export class SessionStore {
 		try {
 			victim.terminate();
 		} catch {
-			// ignore
 		}
 		void victim.release();
 		return victim;

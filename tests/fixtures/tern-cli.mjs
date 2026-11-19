@@ -1,9 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-// Independent stateful simulator of `tern plugin list/remove/unlink`, answering
-// as Tern 0.9.5 does. The plugin directory holds `<id>/` for a copy and
-// `<id>.path` for a link; every other plugin listed stays untouched.
 const args = process.argv.slice(2);
 const env = process.env;
 const config = JSON.parse(fs.readFileSync(env.TERN_TEST_OPTIONS, "utf8"));

@@ -1,9 +1,6 @@
-// Bun-only (module mocking comes from bun:test), so plain JavaScript like the
-// other Bun-specific test files; `bun test` runs it, tsc does not check it.
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { initializeTerminalUrls } from "../fork-features/terminal-url.ts";
 
-/** The router members terminal-url.ts and the shared copy call, over one scheme map. */
 class FakeRouter {
 	static current = new FakeRouter();
 	static instance() {
@@ -27,7 +24,6 @@ class FakeRouter {
 	}
 }
 
-// terminal-url.ts imports this host-only module when initializeTerminalUrls runs, after this mock.
 mock.module("@oh-my-pi/pi-coding-agent/internal-urls", () => ({ InternalUrlRouter: FakeRouter }));
 
 describe("term:// registration", () => {
