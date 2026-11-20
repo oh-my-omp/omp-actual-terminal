@@ -4,6 +4,8 @@ All notable changes to this project. **Newest entries go on top.**
 
 ## [Unreleased]
 
+## [0.15.4] - 2026-11-21
+
 ### Changed
 
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@9d612a1.
