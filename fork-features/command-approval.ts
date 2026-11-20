@@ -1,11 +1,13 @@
+import type { ScopeLike, Setting } from "@oh-my-pi/pi-coding-agent/config/registry";
+import type { BashApprovalPatternRule as HostBashApprovalPatternRule } from "@oh-my-pi/pi-coding-agent/exec/settings";
+import type * as ApprovalHost from "@oh-my-pi/pi-coding-agent/tools/approval";
+import type * as BashHost from "@oh-my-pi/pi-coding-agent/tools/bash";
+import type * as ShellTokenize from "@oh-my-pi/pi-coding-agent/tools/shell-tokenize";
 import { isPosixShell } from "../src/shell.ts";
 import type { HostBindingState, HostSettings, SessionRegistry } from "./session-binding.ts";
 
-export type BashPatternApproval = "allow" | "deny" | "prompt";
-export interface BashApprovalPatternRule {
-	readonly match: string;
-	readonly approval: BashPatternApproval;
-}
+export type BashApprovalPatternRule = Pick<HostBashApprovalPatternRule, "match" | "approval">;
+export type BashPatternApproval = BashApprovalPatternRule["approval"];
 export type CommandApproval =
 	| "exec"
 	| { readonly tier: "write"; readonly policy: "allow" }
@@ -17,16 +19,13 @@ export interface BashPatternViews {
 	readonly authority: readonly BashApprovalPatternRule[];
 }
 
-export interface LiteralShellCommandSegment {
-	readonly text: string;
-	readonly argv: readonly string[];
-}
+export type LiteralShellCommandSegment = ShellTokenize.LiteralShellCommandSegment;
 export interface ApprovalHelpers {
-	readonly criticalPatterns: readonly RegExp[];
-	readonly tokenizeShellSegments: (command: string) => readonly (readonly string[])[];
-	readonly isShellEnvironmentAssignment: (word: string) => boolean;
-	readonly extractLiteralAndChainSegments: (command: string) => readonly LiteralShellCommandSegment[] | null;
-	readonly truncateForPrompt: (command: string) => string;
+	readonly criticalPatterns: readonly (typeof BashHost.CRITICAL_BASH_PATTERNS)[number][];
+	readonly tokenizeShellSegments: typeof ShellTokenize.tokenizeShellSegments;
+	readonly isShellEnvironmentAssignment: typeof ShellTokenize.isShellEnvironmentAssignment;
+	readonly extractLiteralAndChainSegments: typeof ShellTokenize.extractLiteralAndChainSegments;
+	readonly truncateForPrompt: typeof ApprovalHost.truncateForPrompt;
 }
 
 type Segmenting = Pick<ApprovalHelpers, "tokenizeShellSegments" | "isShellEnvironmentAssignment">;
@@ -252,48 +251,40 @@ export function approveBoundCommand(host: CommandApprovalHost, binding: HostBind
 	return approveCommand(approvalCommand(args, ""), views, shell, host.helpers);
 }
 
-function property(value: unknown, name: string): unknown {
-	return typeof value === "object" && value !== null && name in value ? Reflect.get(value, name) : undefined;
+function exportedFunction<M extends object, K extends keyof M>(module: M, name: K, from: string): M[K] {
+	const value = module[name];
+	if (typeof value !== "function") throw new Error(`omp-unified-exec: ${from} lacks ${String(name)}()`);
+	return value;
 }
 
-type HostFunction = (...args: never[]) => unknown;
-
-function exportedFunction(module: unknown, name: string, from: string): HostFunction {
-	const value = property(module, name);
-	if (typeof value !== "function") throw new Error(`omp-unified-exec: ${from} lacks ${name}()`);
-	return value as HostFunction;
-}
-
-function settingReader(module: unknown, name: string): (settings: HostSettings) => unknown {
-	const setting = property(module, name);
-	const get = property(setting, "get");
+function settingReader<T>(setting: Setting<T, string> | undefined, name: string): (scope: ScopeLike) => T {
+	const get = setting?.get;
 	if (typeof get !== "function") throw new Error(`omp-unified-exec: exec/settings lacks ${name}.get()`);
-	return (settings) => get.call(setting, settings);
+	return (scope) => get.call(setting, scope);
 }
 
 export async function loadCommandApprovalHost(): Promise<CommandApprovalHost> {
-	const [root, settings, tokenizer, approvalModule] = await Promise.all([
+	const [root, execSettings, tokenizer, approval] = await Promise.all([
 		import("@oh-my-pi/pi-coding-agent"),
 		import("@oh-my-pi/pi-coding-agent/exec/settings"),
 		import("@oh-my-pi/pi-coding-agent/tools/shell-tokenize"),
 		import("@oh-my-pi/pi-coding-agent/tools/approval"),
 	]);
-	const registryClass: unknown = root.AgentRegistry;
-	const global = typeof registryClass === "function" && "global" in registryClass ? registryClass.global : undefined;
-	if (typeof global !== "function") throw new Error("omp-unified-exec: host lacks AgentRegistry.global()");
-	const registry: unknown = global.call(registryClass);
-	const get = exportedFunction(registry, "get", "AgentRegistry") as (agentId: string) => unknown;
-	const patterns = settingReader(settings, "cfgBashPatterns");
-	const compound = settingReader(settings, "cfgBashAllowCompoundCommands");
-	const criticalPatterns: unknown = root.CRITICAL_BASH_PATTERNS;
+	const registryClass = root.AgentRegistry;
+	const global = registryClass?.global;
+	if (typeof registryClass !== "function" || typeof global !== "function") {
+		throw new Error("omp-unified-exec: host lacks AgentRegistry.global()");
+	}
+	const registry = global.call(registryClass);
+	const get = exportedFunction(registry, "get", "AgentRegistry");
+	const patterns = settingReader(execSettings.cfgBashPatterns, "cfgBashPatterns");
+	const compound = settingReader(execSettings.cfgBashAllowCompoundCommands, "cfgBashAllowCompoundCommands");
+	const criticalPatterns = root.CRITICAL_BASH_PATTERNS;
 	if (!Array.isArray(criticalPatterns) || !criticalPatterns.every((pattern: unknown) => pattern instanceof RegExp)) {
 		throw new Error("omp-unified-exec: host lacks CRITICAL_BASH_PATTERNS");
 	}
 	return {
-		registeredSession: (agentId) => {
-			const ref: unknown = get.call(registry, agentId);
-			return typeof ref === "object" && ref !== null && "session" in ref ? { session: ref.session } : undefined;
-		},
+		get: (agentId) => get.call(registry, agentId),
 		approvalRules: (sessionSettings) => getBashApprovalPatternRules(patterns(sessionSettings)),
 		allowCompoundCommands: (sessionSettings) => {
 			const value = compound(sessionSettings);
@@ -302,10 +293,10 @@ export async function loadCommandApprovalHost(): Promise<CommandApprovalHost> {
 		},
 		helpers: {
 			criticalPatterns,
-			tokenizeShellSegments: exportedFunction(tokenizer, "tokenizeShellSegments", "tools/shell-tokenize") as ApprovalHelpers["tokenizeShellSegments"],
-			isShellEnvironmentAssignment: exportedFunction(tokenizer, "isShellEnvironmentAssignment", "tools/shell-tokenize") as ApprovalHelpers["isShellEnvironmentAssignment"],
-			extractLiteralAndChainSegments: exportedFunction(tokenizer, "extractLiteralAndChainSegments", "tools/shell-tokenize") as ApprovalHelpers["extractLiteralAndChainSegments"],
-			truncateForPrompt: exportedFunction(approvalModule, "truncateForPrompt", "tools/approval") as ApprovalHelpers["truncateForPrompt"],
+			tokenizeShellSegments: exportedFunction(tokenizer, "tokenizeShellSegments", "tools/shell-tokenize"),
+			isShellEnvironmentAssignment: exportedFunction(tokenizer, "isShellEnvironmentAssignment", "tools/shell-tokenize"),
+			extractLiteralAndChainSegments: exportedFunction(tokenizer, "extractLiteralAndChainSegments", "tools/shell-tokenize"),
+			truncateForPrompt: exportedFunction(approval, "truncateForPrompt", "tools/approval"),
 		},
 	};
 }

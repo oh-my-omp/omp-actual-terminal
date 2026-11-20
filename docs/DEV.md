@@ -56,7 +56,10 @@ three. Platform-specific cases and the explicit omp install gate may skip; PTY
 availability never does.
 The Node admission regression compiles the actual
 TypeScript entry before executing it in Node, whose strip-only loader cannot
-parse the HUD's parameter properties.
+parse the HUD's parameter properties; it runs against stub packages for the
+names the bundle imports, because the host packages ship TypeScript source.
+The missing-renderer regression runs the built presentation module in a child
+`bun --no-install` whose `node_modules` lacks `@oh-my-pi/pi-tui`.
 
 ## Repo layout
 
@@ -94,7 +97,7 @@ A sibling view, indexed by concern:
 | Input-wait alerts: prompt detection, quiet watcher, notice | `fork-features/input-wait.ts`; `ExecSession.watchInputWait` in `src/session.ts`; `alertInputWait` in `src/completion.ts` |
 | Session log naming, open-log tracking and seven-day gzip compression | `fork-features/log-archive.ts`; `ExecSession.spawn` in `src/session.ts`; scheduled by `withHostPresentation` |
 | Command approval and host session binding | `fork-features/command-approval.ts`, `fork-features/session-binding.ts` |
-| Structured output schemas and projections | `src/script-result.ts` |
+| `monitor` result details type | `src/script-result.ts` |
 | Tool limits, early-exit grace, session-store limits | top of `src/index.ts` |
 
 ## Dev loop
@@ -143,7 +146,6 @@ omp --no-extensions -e "$PWD/src/index.ts" --mode json --no-session \
 ```bash
 # Pure units (fast, no subprocesses)
 bun test ./tests/notify.test.ts \
-         ./tests/truncate.test.ts \
          ./tests/unescape.test.ts \
          ./tests/session-store.test.ts
 
@@ -232,12 +234,9 @@ in `src/terminal-screen.ts`, `DEFAULT_REMIND_AFTER_MS` and
 2. Populate it in `finalizeProcessResult()` / `finalizeKillResult()`.
 3. Add it to `renderProcessResultText()` / `renderKillResultText()` only when
    the model needs the field in textual content (details are TUI/session data).
-4. Add it to the TypeBox schema, type and projection in `src/script-result.ts`
-   so `structuredContent` carries it, and assert the projection in
-   `tests/script-result.test.ts`.
-5. If the TUI should show it, update the display adapter in
+4. If the TUI should show it, update the display adapter in
    `fork-features/omp-presentation.ts`.
-6. Add a pure assertion in `tests/tool-result.test.ts` and an end-to-end
+5. Add a pure assertion in `tests/tool-result.test.ts` and an end-to-end
    assertion in `tests/e2e.test.ts` when process lifecycle matters; update the
    response example and API tables in both READMEs.
 
@@ -288,14 +287,15 @@ extension API, bash renderer, theme, native rendering and internal-URL seams
 listed in [fork-features/README.md](../fork-features/README.md).
 The host must continue to identify itself through `ExtensionAPI.arktype`.
 
-The retained `@earendil-works/*` imports are compatibility-layer types and
-helpers, not a Pi support promise:
-
-- `pi-coding-agent`: `ExtensionAPI`, `ExtensionContext`, `AgentToolResult`,
-  `AgentToolUpdateCallback`, `ToolDefinition`, `TruncationResult`;
-  `DEFAULT_MAX_BYTES`, `DEFAULT_MAX_LINES`, `formatSize`, `truncateTail`.
-- `pi-tui`: `matchesKey` and `Component` for the Tern HUD's ANSI input/component
-  boundary.
+The host packages are the `@oh-my-pi/*` devDependencies and peerDependencies
+at `latest` / `*`; every type that describes the host comes from their
+exports. Upstream's `@earendil-works/pi-coding-agent` and
+`@earendil-works/pi-tui` import specifiers stay in upstream-owned files and
+`tsconfig.json` `paths` maps them to the `@oh-my-pi` packages, as omp's
+runtime does. CI (`.github/workflows/ci.yml`) upgrades the host packages to
+their newest release after `npm ci` and runs daily, so a host type change
+fails `npm run check` before an omp release reaches users. Refresh the lock
+file with `npm update` when it does.
 
 Run `npm run check` and `npm test`, then validate the actual installed omp
 runtime. Stub-host tests alone do not qualify host compatibility. Confirm

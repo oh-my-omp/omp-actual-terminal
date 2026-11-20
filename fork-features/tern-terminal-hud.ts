@@ -2,7 +2,9 @@ import { homedir } from "node:os";
 import { isAbsolute, relative, sep } from "node:path";
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { matchesKey, type Component } from "@earendil-works/pi-tui";
+import type { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
+import type * as NativeState from "@oh-my-pi/pi-tui/native/state";
+import { matchesKey, type Component, type NativeNode } from "@earendil-works/pi-tui";
 
 import { formatElapsedUi } from "../src/format-time.ts";
 import { sanitizeOutputText } from "../src/output-safety.ts";
@@ -15,25 +17,17 @@ function requalify(change: string): Error {
 	return new Error(`omp-unified-exec: ${change}; requalify fork-features/tern-terminal-hud.ts for this omp version`);
 }
 
-export interface NativeRenderingState {
-	isNativeRendering(): boolean;
-	onNativeRenderingChange(listener: (on: boolean) => void): () => void;
-}
+export type NativeRenderingState = Pick<typeof NativeState, "isNativeRendering" | "onNativeRenderingChange">;
 
-function parseNativeRenderingState(value: { readonly [K in keyof NativeRenderingState]?: unknown }): NativeRenderingState {
+function parseNativeRenderingState(value: Partial<NativeRenderingState>): NativeRenderingState {
 	const { isNativeRendering, onNativeRenderingChange } = value;
 	if (typeof isNativeRendering !== "function" || typeof onNativeRenderingChange !== "function") {
 		throw requalify("@oh-my-pi/pi-tui/native/state no longer provides isNativeRendering/onNativeRenderingChange");
 	}
-	return {
-		isNativeRendering: () => isNativeRendering() === true,
-		onNativeRenderingChange: (listener) => onNativeRenderingChange(listener) as () => void,
-	};
+	return { isNativeRendering, onNativeRenderingChange };
 }
 
-export interface HudPillsPrototype {
-	describeHudPills(this: object): unknown;
-}
+export type HudPillsPrototype = Pick<InteractiveMode, "describeHudPills">;
 
 function isHudPillsPrototype(value: unknown): value is HudPillsPrototype {
 	return typeof value === "object" && value !== null && "describeHudPills" in value && typeof value.describeHudPills === "function";
@@ -51,22 +45,6 @@ export function parseInteractiveModeModule(value: { readonly InteractiveMode?: u
 export interface TernHudHost {
 	readonly native: NativeRenderingState;
 	readonly pills: HudPillsPrototype;
-}
-
-export interface HudNode {
-	readonly k: string;
-	readonly p?: Readonly<Record<string, unknown>>;
-	readonly c?: readonly HudNode[];
-	readonly key?: string;
-}
-
-export type NativeChild = NativeNode | Component;
-
-export interface NativeNode {
-	readonly k: string;
-	readonly p?: Readonly<Record<string, unknown>>;
-	readonly c?: readonly NativeChild[];
-	readonly key?: string;
 }
 
 export const OPEN_ACTION = "unified-exec.terminals.open";
@@ -177,7 +155,7 @@ function parseItemId(item: unknown): number | undefined {
 	return Number.isSafeInteger(id) ? id : undefined;
 }
 
-export function describeTerminalSegment(count: number, running: number): HudNode {
+export function describeTerminalSegment(count: number, running: number): NativeNode {
 	const label = tr(
 		`${count} terminal${count === 1 ? "" : "s"} · ${running} running`,
 		`${count} 个终端 · ${running} 个运行中`,
@@ -193,35 +171,41 @@ export function describeTerminalSegment(count: number, running: number): HudNode
 	};
 }
 
-function isNativeNode(value: unknown): value is NativeNode {
-	return typeof value === "object" && value !== null && "k" in value && typeof value.k === "string";
+type NodeProps<K extends NativeNode["k"]> = NonNullable<Extract<NativeNode, { readonly k: K }>["p"]>;
+type RowNode = Extract<NativeNode, { readonly k: "row" }>;
+type Tone = NonNullable<NodeProps<"row">["tone"]>;
+type KvItem = NodeProps<"kv">["items"][number];
+
+function isRow(value: unknown, role: string): value is RowNode {
+	return typeof value === "object" && value !== null && "k" in value && value.k === "row"
+		&& "p" in value && typeof value.p === "object" && value.p !== null && "role" in value.p && value.p.role === role;
 }
 
-const EMPTY_PILL: NativeNode = { k: "row", key: "running", p: { role: "omp.hud.pill", align: "center" }, c: [] };
+const EMPTY_PILL: RowNode = { k: "row", key: "running", p: { role: "omp.hud.pill", align: "center" }, c: [] };
 
-export function parseHudPillsNode(value: unknown): NativeNode {
-	const pill = isNativeNode(value) ? value.c?.[0] : undefined;
-	if (
-		!isNativeNode(value) || value.k !== "row" || value.p?.role !== "omp.hud" || (value.c?.length ?? 0) > 1
-		|| (pill !== undefined && !(isNativeNode(pill) && pill.k === "row" && pill.p?.role === "omp.hud.pill"))
-	) {
+export function parseHudPillsNode(value: unknown): RowNode {
+	if (!isRow(value, "omp.hud") || (value.c?.length ?? 0) > 1) {
+		throw requalify("InteractiveMode.describeHudPills no longer returns an omp.hud row with one omp.hud.pill");
+	}
+	const pill = value.c?.[0];
+	if (pill !== undefined && !isRow(pill, "omp.hud.pill")) {
 		throw requalify("InteractiveMode.describeHudPills no longer returns an omp.hud row with one omp.hud.pill");
 	}
 	return value;
 }
 
-export function withTerminalSegment(hud: NativeNode, segment: Component): NativeNode {
+export function withTerminalSegment(hud: RowNode, segment: Component): RowNode {
 	const existing = hud.c?.[0];
-	const pill = isNativeNode(existing) ? existing : EMPTY_PILL;
+	const pill = isRow(existing, "omp.hud.pill") ? existing : EMPTY_PILL;
 	return { ...hud, p: { ...hud.p, hidden: undefined }, c: [{ ...pill, c: [...(pill.c ?? []), segment] }] };
 }
 
-function actionButton(label: string, act: string, keys?: string, tone?: string): HudNode {
+function actionButton(label: string, act: string, keys?: string, tone?: Tone): NativeNode {
 	return {
 		k: "row",
 		key: act,
 		p: { role: "omp.btn", gap: "xs", align: "center", title: keys ? `${label}  ${keys}` : label, actions: { click: act }, ...(tone ? { tone } : {}) },
-		c: [{ k: "text", p: { text: label } }, ...(keys ? [{ k: "kbd", p: { keys: [keys] } }] : [])],
+		c: [{ k: "text", p: { text: label } }, ...(keys ? [{ k: "kbd", p: { keys: [keys] } } satisfies NativeNode] : [])],
 	};
 }
 
@@ -242,13 +226,13 @@ function localDateTime(at: number): string {
 	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-function actionsRow(children: readonly HudNode[]): HudNode {
+function actionsRow(children: readonly NativeNode[]): NativeNode {
 	return { k: "row", key: "actions", p: { role: "omp.actions", gap: "sm", align: "center" }, c: children };
 }
 
-const SPACER: HudNode = { k: "spacer", p: { grow: 1 } };
+const SPACER: NativeNode = { k: "spacer", p: { grow: 1 } };
 
-function describeListItem(entry: TerminalSummary, now: number): HudNode {
+function describeListItem(entry: TerminalSummary, now: number): NativeNode {
 	const look = stateLook(entry.state);
 	const elapsed = formatElapsedUi(elapsedMs(entry, now));
 	return {
@@ -268,11 +252,11 @@ function describeListItem(entry: TerminalSummary, now: number): HudNode {
 	};
 }
 
-function describeDetail(entry: TerminalEntry, now: number): HudNode {
+function describeDetail(entry: TerminalEntry, now: number): NativeNode {
 	const look = stateLook(entry.state);
 	const running = entry.state.kind === "running";
 	const age = elapsedMs(entry, now);
-	const facts: { k: string; v: unknown }[] = [
+	const facts: KvItem[] = [
 		{ k: tr("Directory", "目录"), v: [{ t: shortenHome(entry.cwd), s: "path" }] },
 		...(entry.pid !== undefined ? [{ k: "PID", v: [{ t: String(entry.pid), s: "num" }] }] : []),
 		{ k: tr("Size", "大小"), v: [{ t: `${entry.screen.view.cols} × ${entry.screen.view.rows}`, s: "num" }] },
@@ -319,7 +303,7 @@ export function describeTerminalsSheet(
 	entries: readonly TerminalSummary[],
 	selected: TerminalEntry | undefined,
 	now = Date.now(),
-): HudNode {
+): NativeNode {
 	const close = actionButton(tr("Close", "关闭"), CLOSE_ACTION, "esc");
 	if (!selected) {
 		return {
@@ -383,7 +367,7 @@ export function terminalPageFrame(entry: TerminalSummary | undefined, id: number
 	};
 }
 
-export function describeTerminalPage(entry: TerminalEntry | undefined): HudNode {
+export function describeTerminalPage(entry: TerminalEntry | undefined): NativeNode {
 	if (!entry) {
 		return {
 			k: "col",
@@ -474,7 +458,7 @@ function renderTargetOf(mode: object): RenderTarget {
 class TerminalSegment implements Component {
 	constructor(private readonly provider: SegmentProvider) {}
 
-	describe(): HudNode {
+	describe(): NativeNode {
 		return this.provider.segment();
 	}
 
@@ -491,8 +475,8 @@ class TerminalSegment implements Component {
 }
 
 class SegmentProvider {
-	private node: HudNode | undefined;
-	private readonly modes = new WeakMap<object, { readonly segment: TerminalSegment; decorated?: { readonly base: unknown; readonly node: NativeNode } }>();
+	private node: NativeNode | undefined;
+	private readonly modes = new WeakMap<object, { readonly segment: TerminalSegment; decorated?: { readonly base: NativeNode; readonly node: NativeNode } }>();
 	private readonly targets = new Map<object, RenderTarget>();
 	private readonly watch: SessionWatch;
 
@@ -512,7 +496,7 @@ class SegmentProvider {
 		for (const target of this.targets.values()) target.requestRender();
 	}
 
-	segment(): HudNode {
+	segment(): NativeNode {
 		if (!this.node) {
 			let running = 0;
 			for (const session of this.store.values()) if (!session.hasExited) running++;
@@ -521,7 +505,7 @@ class SegmentProvider {
 		return this.node;
 	}
 
-	decorate = (mode: object, base: unknown): unknown => {
+	decorate = (mode: object, base: NativeNode): NativeNode => {
 		if (!this.targets.has(mode)) this.targets.set(mode, renderTargetOf(mode));
 		if (this.store.size === 0) return base;
 		let entry = this.modes.get(mode);
@@ -543,7 +527,7 @@ class SegmentProvider {
 	}
 }
 
-type DecoratePills = (mode: object, base: unknown) => unknown;
+type DecoratePills = (mode: object, base: NativeNode) => NativeNode;
 
 interface PillsRegistry {
 	decorate: DecoratePills | undefined;
@@ -557,7 +541,7 @@ const pillsRegistry: PillsRegistry = processGlobal[pillsRegistrySymbol] ??= { de
 export function wrapHudPills(prototype: HudPillsPrototype): void {
 	if (pillsRegistry.wrapped.has(prototype)) return;
 	const original = prototype.describeHudPills;
-	prototype.describeHudPills = function describeHudPills(this: object): unknown {
+	prototype.describeHudPills = function describeHudPills(this: object): NativeNode {
 		const base = original.call(this);
 		return pillsRegistry.decorate ? pillsRegistry.decorate(this, base) : base;
 	};
@@ -622,7 +606,7 @@ class TerminalsSheet implements Component {
 	get nativeOverlay(): Readonly<Record<string, unknown>> {
 		return viewFrame();
 	}
-	private described: HudNode | undefined;
+	private described: NativeNode | undefined;
 	private shown: { readonly id: number; readonly revision: number; readonly screen: StyledScreen } | undefined;
 	private readonly watch: SessionWatch;
 	private readonly tick: NodeJS.Timeout;
@@ -676,7 +660,7 @@ class TerminalsSheet implements Component {
 		void this.kill(session.id).then(this.changed);
 	}
 
-	describe(): HudNode {
+	describe(): NativeNode {
 		if (!this.described) {
 			const sessions = sortedSessions(this.store).filter((session) => session.screenRevision() !== undefined);
 			const selected = sessions.find((session) => session.id === this.selectedId) ?? sessions[0];
@@ -732,7 +716,7 @@ class TerminalsSheet implements Component {
 const encoder = new TextEncoder();
 
 class TerminalPage implements Component {
-	private described: HudNode | undefined;
+	private described: NativeNode | undefined;
 	private readonly watch: SessionWatch;
 
 	constructor(
@@ -758,7 +742,7 @@ class TerminalPage implements Component {
 		return terminalPageFrame(summaryOf(this.session()), this.id);
 	}
 
-	describe(): HudNode {
+	describe(): NativeNode {
 		this.described ??= describeTerminalPage(entryOf(this.session()));
 		return this.described;
 	}

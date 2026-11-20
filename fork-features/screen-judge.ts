@@ -1,3 +1,4 @@
+import type { BoundSession } from "./session-binding.ts";
 import { detectorSession, judgeChain, type StopHost } from "./stop-gate.ts";
 
 export const JUDGE_DEADLINE_MS = 30_000;
@@ -17,7 +18,7 @@ export interface ScreenJudge {
 	judge(intent: string, screen: string, signal: AbortSignal): Promise<ScreenVerdict>;
 }
 
-export function screenJudge(host: StopHost, session: () => unknown): ScreenJudge {
+export function screenJudge(host: StopHost, session: () => BoundSession | undefined): ScreenJudge {
 	const chain = () => {
 		const bound = detectorSession(session());
 		return bound === undefined ? undefined : judgeChain(host, bound, "unified-exec-monitor");
@@ -33,9 +34,8 @@ export function screenJudge(host: StopHost, session: () => unknown): ScreenJudge
 					state: screen,
 					questions: { screen: { type: "choice", instructions: INSTRUCTIONS + intent, criteria: { met: MET_CRITERION, not_met: NOT_MET_CRITERION } } },
 				}, { signal: deadline });
-				const answers: unknown = typeof result === "object" && result !== null ? Reflect.get(result, "answers") : undefined;
-				const answer: unknown = typeof answers === "object" && answers !== null ? Reflect.get(answers, "screen") : undefined;
-				const choice: unknown = typeof answer === "object" && answer !== null ? Reflect.get(answer, "choice") : undefined;
+				const answer = result.answers.screen;
+				const choice = answer?.choice;
 				if (choice === "met" || choice === "not_met") return { kind: choice };
 				return { kind: "failed", detail: `the judge gave no choice: ${JSON.stringify(answer) ?? "nothing"}` };
 			} catch (error) {

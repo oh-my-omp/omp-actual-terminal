@@ -37,7 +37,7 @@ test("all six registrations own packaged providers and end with full topic point
 	const tools = new Map<string, ToolDefinition>();
 	activate({
 		registerTool: (tool: ToolDefinition) => { tools.set(tool.name, tool); },
-		registerCommand: () => {}, registerFlag: () => {}, on: () => {},
+		registerCommand: () => {}, registerFlag: () => {}, registerMessageRenderer: () => {}, on: () => {},
 	} as unknown as ExtensionAPI);
 	const definitions = [
 		["exec_command", execCommandDocumentation, execCommandTopicPointers, ["interactive", "lifecycle", "waiting"]],

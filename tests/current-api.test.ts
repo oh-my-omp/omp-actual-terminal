@@ -14,7 +14,7 @@ test("session startup preserves builtin bash without a keep-builtin-bash flag", 
 	const flags: string[] = [];
 	let active = ["bash", "read", "exec_command"];
 	activate({
-		registerTool: () => {}, registerCommand: () => {}, registerFlag: (name: string) => { flags.push(name); },
+		registerTool: () => {}, registerCommand: () => {}, registerFlag: (name: string) => { flags.push(name); }, registerMessageRenderer: () => {},
 		on: (name: string, handler: Handler) => { registered.set(name, [...(registered.get(name) ?? []), handler]); },
 		getFlag: () => { throw new Error("startup must not require a builtin-bash flag"); },
 		getActiveTools: () => active,
@@ -38,7 +38,7 @@ test("session startup preserves builtin bash without a keep-builtin-bash flag", 
 
 test("a rejected run-event registration fails activation rather than selecting a legacy fallback", () => {
 	assert.throws(() => activate({
-		registerTool: () => {}, registerCommand: () => {}, registerFlag: () => {},
+		registerTool: () => {}, registerCommand: () => {}, registerFlag: () => {}, registerMessageRenderer: () => {},
 		on: (event: string) => { if (event === "agent_end") throw new Error("registration rejected"); },
 	} as unknown as ExtensionAPI), /registration rejected/);
 });

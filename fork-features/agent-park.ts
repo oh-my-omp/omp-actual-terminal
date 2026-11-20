@@ -1,35 +1,49 @@
-declare const generationBrand: unique symbol;
+import type { AgentLifecycleApi } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
+import type { AgentRegistryApi, AgentRef } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 
-export interface AgentGeneration {
-	readonly [generationBrand]: true;
-}
+/**
+ * One agent generation, as the registry mints it. The lifecycle compares an expected ref by
+ * identity (`adopted.ref === expected`), so the ref object itself is the token.
+ */
+export type AgentGeneration = AgentRef;
 
-export interface AgentIdentity {
-	readonly agentId: string;
+export type AgentIdentity = {
+	readonly agentId: AgentRef["id"];
 	readonly generation: AgentGeneration;
-}
+};
 
 export interface AgentHost {
-	identify(agentId: string): AgentIdentity | undefined;
+	identify(agentId: AgentRef["id"]): AgentIdentity | undefined;
 	isParking(agent: AgentIdentity): boolean;
 	isAdopted(agent: AgentIdentity): boolean;
-	revive(agentId: string): Promise<void>;
+	revive(agentId: AgentRef["id"]): Promise<void>;
 	onEnded(listener: (generation: AgentGeneration) => void): () => void;
 }
 
-function property(value: unknown, name: string): unknown {
-	return (typeof value === "object" || typeof value === "function") && value !== null && name in value ? Reflect.get(value, name) : undefined;
+/** The registry surface the plugin reads, and the lifecycle surface it drives. */
+export type AgentRegistryHost = Pick<AgentRegistryApi, "get" | "onChange">;
+export type AgentLifecycleHost = Pick<AgentLifecycleApi, "has" | "isParking" | "ensureLive">;
+
+/** The two host modules as the loader receives them; each member is optional because an older omp may lack it. */
+export interface AgentHostModules {
+	readonly AgentRegistry?: { global(): Partial<AgentRegistryHost> };
 }
 
-function method(owner: unknown, name: string, from: string): (...args: unknown[]) => unknown {
-	const value = property(owner, name);
-	if (typeof value !== "function") throw new Error(`omp-unified-exec: ${from} lacks ${name}()`);
-	return (...args) => Reflect.apply(value, owner, args);
+export interface AgentLifecycleModules {
+	readonly AgentLifecycleManager?: { global(): Partial<AgentLifecycleHost> };
 }
 
-function singleton(module: unknown, name: string): unknown {
-	const owner = property(module, name);
-	return method(owner, "global", name)();
+function parseRegistry(Class: AgentHostModules["AgentRegistry"]): AgentRegistryHost {
+	if (Class === undefined || typeof Class.global !== "function") {
+		throw new Error("omp-unified-exec: AgentRegistry lacks global()");
+	}
+	const registry: Partial<AgentRegistryHost> = Class.global();
+	const get = registry.get;
+	const onChange = registry.onChange;
+	if (typeof get !== "function") throw new Error("omp-unified-exec: AgentRegistry lacks get()");
+	if (typeof onChange !== "function") throw new Error("omp-unified-exec: AgentRegistry lacks onChange()");
+	// Bound: the host registry keeps its state in private fields, so a detached call would lose it.
+	return { get: get.bind(registry), onChange: onChange.bind(registry) };
 }
 
 export async function loadAgentHost(): Promise<AgentHost> {
@@ -40,30 +54,41 @@ export async function loadAgentHost(): Promise<AgentHost> {
 	return parseAgentHost(root, lifecycleModule);
 }
 
-export function parseAgentHost(root: unknown, lifecycleModule: unknown): AgentHost {
-	const registry = singleton(root, "AgentRegistry");
-	const get = method(registry, "get", "AgentRegistry");
-	const onChange = method(registry, "onChange", "AgentRegistry");
-	const lifecycle = () => singleton(lifecycleModule, "AgentLifecycleManager");
-	for (const name of ["isParking", "has", "ensureLive"]) method(lifecycle(), name, "AgentLifecycleManager");
+export function parseAgentHost(root: AgentHostModules, lifecycleModule: AgentLifecycleModules): AgentHost {
+	const registry = parseRegistry(root.AgentRegistry);
+	const lifecycle = (): AgentLifecycleHost => {
+		const Manager = lifecycleModule.AgentLifecycleManager;
+		if (Manager === undefined || typeof Manager.global !== "function") {
+			throw new Error("omp-unified-exec: AgentLifecycleManager lacks global()");
+		}
+		const manager: Partial<AgentLifecycleHost> = Manager.global();
+		const isParking = manager.isParking;
+		const has = manager.has;
+		const ensureLive = manager.ensureLive;
+		if (typeof isParking !== "function") throw new Error("omp-unified-exec: AgentLifecycleManager lacks isParking()");
+		if (typeof has !== "function") throw new Error("omp-unified-exec: AgentLifecycleManager lacks has()");
+		if (typeof ensureLive !== "function") throw new Error("omp-unified-exec: AgentLifecycleManager lacks ensureLive()");
+		return { isParking: isParking.bind(manager), has: has.bind(manager), ensureLive: ensureLive.bind(manager) };
+	};
+	void lifecycle();
 	return {
 		identify: (agentId) => {
-			const ref = get(agentId);
-			return typeof ref === "object" && ref !== null ? { agentId, generation: ref as AgentGeneration } : undefined;
+			const ref = registry.get(agentId);
+			return ref === undefined ? undefined : { agentId, generation: ref };
 		},
-		isParking: (agent) => method(lifecycle(), "isParking", "AgentLifecycleManager")(agent.agentId, agent.generation) === true,
-		isAdopted: (agent) => method(lifecycle(), "has", "AgentLifecycleManager")(agent.agentId, agent.generation) === true,
+		isParking: (agent) => lifecycle().isParking(agent.agentId, agent.generation) === true,
+		isAdopted: (agent) => lifecycle().has(agent.agentId, agent.generation) === true,
 		revive: async (agentId) => {
-			await method(lifecycle(), "ensureLive", "AgentLifecycleManager")(agentId);
+			await lifecycle().ensureLive(agentId);
 		},
 		onEnded: (listener) => {
-			const unsubscribe = onChange((event: unknown) => {
-				const type = property(event, "type");
-				const ref = property(event, "ref");
-				if (typeof ref !== "object" || ref === null) return;
-				if (type === "removed" || (type === "status_changed" && property(ref, "status") === "aborted")) listener(ref as AgentGeneration);
+			const unsubscribe = registry.onChange((event) => {
+				const { type, ref } = event;
+				if (type === "removed" || (type === "status_changed" && ref.status === "aborted")) listener(ref);
 			});
-			if (typeof unsubscribe !== "function") throw new Error("omp-unified-exec: AgentRegistry.onChange() returned no unsubscribe");
+			if (typeof unsubscribe !== "function") {
+				throw new Error("omp-unified-exec: AgentRegistry.onChange() returned no unsubscribe");
+			}
 			return () => void unsubscribe();
 		},
 	};

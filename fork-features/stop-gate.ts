@@ -2,10 +2,17 @@ import type { TodoReadResult } from "./omomp-shared/todo-read.ts";
 import { fillTemplate, type JudgePromptField, type StopConfig } from "./stop-config.ts";
 import type { StopInput, StopVerdict } from "./terminal-notice.ts";
 import type { ModelFailure } from "./stop-reasons.ts";
+import type { BoundSession } from "./session-binding.ts";
+
+import type * as AgentRoot from "@oh-my-pi/pi-coding-agent";
+import type * as Judgment from "@oh-my-pi/pi-coding-agent/judgment";
+import type * as ModelResolver from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import type * as ModelRoles from "@oh-my-pi/pi-coding-agent/config/model-roles";
+import type * as PiAi from "@oh-my-pi/pi-ai";
+import type { Agent } from "@oh-my-pi/pi-agent-core";
+import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 
 const DETECT_DEADLINE_MS = 30_000;
-const EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
-type Effort = (typeof EFFORTS)[number];
 
 const JUDGE_INSTRUCTIONS =
 	"The state holds a coding agent's final response before it stopped, its todo list and the terminal notices waiting for it. Decide whether the response shows the task it was given is completely finished, so nothing in the notices needs the agent.";
@@ -19,42 +26,22 @@ const LLM_SYSTEM_PROMPT = [
 	"Answer with exactly DONE or NOT_DONE on the first line; one short reason may follow on the next line.",
 ].join("\n");
 
-interface HostModel {
-	readonly provider: string;
-	readonly id: string;
-}
-
-interface RoleCandidate {
-	readonly model: HostModel;
-	readonly thinkingLevel?: string;
-}
-
-export interface ChainJudge {
-	primaryModel(): unknown;
-	judge(request: unknown, options: { signal: AbortSignal }): Promise<unknown>;
-}
-
-interface AssistantReply {
-	readonly stopReason?: string;
-	readonly errorMessage?: string;
-	readonly content?: unknown;
-}
-
 export interface StopHost {
-	readonly getAgentDir: () => string;
-	readonly resolveJudge: (deps: unknown) => ChainJudge;
-	readonly journalJudgmentUsage: (sessionManager: unknown) => unknown;
-	readonly sharedJudgmentCache: () => unknown;
-	readonly kindOf: (candidate: RoleCandidate) => string;
-	readonly resolveRoleChain: (role: string, settings: unknown, pool: unknown) => readonly RoleCandidate[];
-	readonly roleCandidatePool: (role: string, settings: unknown, registry: unknown) => unknown;
-	readonly completeSimple: (model: HostModel, context: unknown, options: unknown) => Promise<AssistantReply>;
+	readonly getAgentDir: typeof AgentRoot.getAgentDir;
+	readonly resolveJudge: typeof Judgment.resolveJudge;
+	readonly journalJudgmentUsage: typeof Judgment.journalJudgmentUsage;
+	readonly sharedJudgmentCache: typeof Judgment.sharedJudgmentCache;
+	readonly kindOf: typeof Judgment.kindOf;
+	readonly resolveRoleChain: typeof ModelResolver.resolveRoleChain;
+	readonly roleCandidatePool: typeof ModelRoles.roleCandidatePool;
+	readonly completeSimple: typeof PiAi.completeSimple;
+	/** The host's thinking levels, least to most intensive; the role chain's level is looked up in them. */
+	readonly thinkingLevels: typeof PiAi.THINKING_EFFORTS;
 }
 
-function functionOf(module: unknown, name: string, from: string): (...args: never[]) => unknown {
-	const value: unknown = typeof module === "object" && module !== null ? Reflect.get(module, name) : undefined;
+function hostFunction<T>(value: T | undefined, name: string, from: string): T {
 	if (typeof value !== "function") throw new Error(`omp-unified-exec: ${from} lacks ${name}`);
-	return value as (...args: never[]) => unknown;
+	return value;
 }
 
 export async function loadStopHost(): Promise<StopHost> {
@@ -65,42 +52,56 @@ export async function loadStopHost(): Promise<StopHost> {
 		import("@oh-my-pi/pi-coding-agent/config/model-roles"),
 		import("@oh-my-pi/pi-ai"),
 	]);
+	const thinkingLevels = ai.THINKING_EFFORTS;
+	if (!Array.isArray(thinkingLevels)) {
+		throw new Error("omp-unified-exec: @oh-my-pi/pi-ai lacks THINKING_EFFORTS");
+	}
 	return {
-		getAgentDir: functionOf(agent, "getAgentDir", "@oh-my-pi/pi-coding-agent") as StopHost["getAgentDir"],
-		resolveJudge: functionOf(judgment, "resolveJudge", "judgment") as StopHost["resolveJudge"],
-		journalJudgmentUsage: functionOf(judgment, "journalJudgmentUsage", "judgment") as StopHost["journalJudgmentUsage"],
-		sharedJudgmentCache: functionOf(judgment, "sharedJudgmentCache", "judgment") as StopHost["sharedJudgmentCache"],
-		kindOf: functionOf(judgment, "kindOf", "judgment") as StopHost["kindOf"],
-		resolveRoleChain: functionOf(resolver, "resolveRoleChain", "config/model-resolver") as StopHost["resolveRoleChain"],
-		roleCandidatePool: functionOf(roles, "roleCandidatePool", "config/model-roles") as StopHost["roleCandidatePool"],
-		completeSimple: functionOf(ai, "completeSimple", "@oh-my-pi/pi-ai") as StopHost["completeSimple"],
+		getAgentDir: hostFunction(agent.getAgentDir, "getAgentDir", "@oh-my-pi/pi-coding-agent"),
+		resolveJudge: hostFunction(judgment.resolveJudge, "resolveJudge", "judgment"),
+		journalJudgmentUsage: hostFunction(judgment.journalJudgmentUsage, "journalJudgmentUsage", "judgment"),
+		sharedJudgmentCache: hostFunction(judgment.sharedJudgmentCache, "sharedJudgmentCache", "judgment"),
+		kindOf: hostFunction(judgment.kindOf, "kindOf", "judgment"),
+		resolveRoleChain: hostFunction(resolver.resolveRoleChain, "resolveRoleChain", "config/model-resolver"),
+		roleCandidatePool: hostFunction(roles.roleCandidatePool, "roleCandidatePool", "config/model-roles"),
+		completeSimple: hostFunction(ai.completeSimple, "completeSimple", "@oh-my-pi/pi-ai"),
+		thinkingLevels,
 	};
 }
 
+/**
+ * The session surface the detectors read. `BoundSession` declares the session's settings and
+ * manager; the registry's ref is typed as the minimal cross-agent handle, so these members are
+ * read off the same object and validated here.
+ */
 export interface DetectorSession {
-	readonly settings: unknown;
-	readonly sessionManager: unknown;
+	readonly settings: AgentRoot.Settings;
+	readonly sessionManager: BoundSession["sessionManager"];
 	readonly sessionId: string;
-	readonly registry: { resolver(model: HostModel, sessionId?: string): unknown };
-	readonly metadataForProvider: (provider: string) => unknown;
-	readonly telemetry: unknown;
+	readonly registry: ModelRegistry;
+	readonly metadataForProvider: Agent["metadataForProvider"];
+	readonly telemetry: Agent["telemetry"];
 }
 
-export function detectorSession(session: unknown): DetectorSession | undefined {
-	if (typeof session !== "object" || session === null) return undefined;
-	const registry: unknown = Reflect.get(session, "modelRegistry");
-	const agent: unknown = Reflect.get(session, "agent");
-	const sessionId: unknown = Reflect.get(session, "sessionId");
-	if (typeof registry !== "object" || registry === null || typeof Reflect.get(registry, "resolver") !== "function") return undefined;
-	if (typeof agent !== "object" || agent === null || typeof Reflect.get(agent, "metadataForProvider") !== "function") return undefined;
+type SessionExtras = {
+	readonly sessionId: string;
+	readonly modelRegistry: ModelRegistry;
+	readonly agent: Pick<Agent, "metadataForProvider" | "telemetry">;
+};
+
+export function detectorSession(session: (BoundSession & Partial<SessionExtras>) | undefined): DetectorSession | undefined {
+	if (session === undefined) return undefined;
+	const { sessionId, modelRegistry, agent } = session;
 	if (typeof sessionId !== "string") return undefined;
+	if (typeof modelRegistry?.resolver !== "function") return undefined;
+	if (typeof agent?.metadataForProvider !== "function") return undefined;
 	return {
-		settings: Reflect.get(session, "settings"),
-		sessionManager: Reflect.get(session, "sessionManager"),
+		settings: session.settings,
+		sessionManager: session.sessionManager,
 		sessionId,
-		registry: registry as DetectorSession["registry"],
-		metadataForProvider: (provider) => (Reflect.get(agent, "metadataForProvider") as (p: string) => unknown).call(agent, provider),
-		telemetry: Reflect.get(agent, "telemetry"),
+		registry: modelRegistry,
+		metadataForProvider: (provider) => agent.metadataForProvider(provider),
+		telemetry: agent.telemetry,
 	};
 }
 
@@ -145,14 +146,12 @@ function todoText(todo: TodoReadResult): string {
 	}
 }
 
-function textOf(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.filter((block): block is { type: "text"; text: string } =>
-			typeof block === "object" && block !== null && block.type === "text" && typeof block.text === "string")
-		.map((block) => block.text)
-		.join("");
+function isTextBlock(block: PiAi.AssistantMessage["content"][number]): block is PiAi.TextContent {
+	return block.type === "text";
+}
+
+function textOf(content: PiAi.AssistantMessage["content"]): string {
+	return content.filter(isTextBlock).map((block) => block.text).join("");
 }
 
 export function parseLlmAnswer(text: string): "done" | "not_done" | undefined {
@@ -162,7 +161,7 @@ export function parseLlmAnswer(text: string): "done" | "not_done" | undefined {
 	return undefined;
 }
 
-export function judgeChain(host: StopHost, session: DetectorSession, purpose: string): ChainJudge | undefined {
+export function judgeChain(host: StopHost, session: DetectorSession, purpose: string): Judgment.ChainJudge | undefined {
 	const chain = host.resolveJudge({
 		settings: session.settings,
 		registry: session.registry,
@@ -176,30 +175,37 @@ export function judgeChain(host: StopHost, session: DetectorSession, purpose: st
 	return chain.primaryModel() === undefined ? undefined : chain;
 }
 
-async function runJudge(chain: ChainJudge, prompt: string, signal: AbortSignal): Promise<StopVerdict> {
+async function runJudge(chain: Judgment.ChainJudge, prompt: string, signal: AbortSignal): Promise<StopVerdict> {
 	const result = await chain.judge({
 		state: prompt,
 		questions: { finished: { type: "choice", instructions: JUDGE_INSTRUCTIONS, criteria: { done: DONE_CRITERION, not_done: NOT_DONE_CRITERION } } },
 	}, { signal });
-	const answers: unknown = typeof result === "object" && result !== null ? Reflect.get(result, "answers") : undefined;
-	const finished: unknown = typeof answers === "object" && answers !== null ? Reflect.get(answers, "finished") : undefined;
-	const choice: unknown = typeof finished === "object" && finished !== null ? Reflect.get(finished, "choice") : undefined;
-	if (choice === "done" || choice === "not_done") return { kind: choice, detector: "judge" };
+	const finished = result.answers.finished;
+	if (finished.choice === "done" || finished.choice === "not_done") return { kind: finished.choice, detector: "judge" };
 	return { kind: "undecided", cause: "failed", reason: { kind: "judge_no_choice", payload: JSON.stringify(finished) } };
 }
 
-function smolModels(host: StopHost, session: DetectorSession): readonly RoleCandidate[] {
+/** The host's `low` thinking level; a role that names none runs at it. */
+function defaultEffort(levels: typeof PiAi.THINKING_EFFORTS): PiAi.Effort {
+	const low = levels.find((level) => String(level) === "low");
+	if (low === undefined) {
+		throw new Error("omp-unified-exec: @oh-my-pi/pi-ai offers no low thinking level; requalify fork-features/stop-gate.ts for this omp version");
+	}
+	return low;
+}
+
+function smolModels(host: StopHost, session: DetectorSession): readonly ModelResolver.RoleChainCandidate[] {
 	const pool = host.roleCandidatePool("smol", session.settings, session.registry);
 	return host.resolveRoleChain("smol", session.settings, pool).filter((candidate) => host.kindOf(candidate) === "online");
 }
 
-async function runLlm(host: StopHost, session: DetectorSession, models: readonly RoleCandidate[], prompt: string, signal: AbortSignal): Promise<StopVerdict> {
+async function runLlm(host: StopHost, session: DetectorSession, models: readonly ModelResolver.RoleChainCandidate[], prompt: string, signal: AbortSignal): Promise<StopVerdict> {
 	const failures: ModelFailure[] = [];
 	for (const { model, thinkingLevel } of models) {
 		if (signal.aborted) return { kind: "undecided", cause: "failed", reason: { kind: "aborted" } };
 		const label = `${model.provider}/${model.id}`;
 		const apiKey = session.registry.resolver(model, session.sessionId);
-		const effort: Effort = EFFORTS.find((level) => level === thinkingLevel) ?? "low";
+		const effort = host.thinkingLevels.find((level) => level === thinkingLevel) ?? defaultEffort(host.thinkingLevels);
 		try {
 			const reply = await host.completeSimple(
 				model,
@@ -224,7 +230,7 @@ async function runLlm(host: StopHost, session: DetectorSession, models: readonly
 
 export interface StopDetectorDeps {
 	readonly host: StopHost;
-	readonly session: () => unknown;
+	readonly session: () => BoundSession | undefined;
 	readonly readTodo: () => TodoReadResult;
 }
 

@@ -2,10 +2,10 @@ import { randomBytes } from "node:crypto";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
-	formatSize,
 	truncateTail,
 	type TruncationResult,
 } from "@earendil-works/pi-coding-agent";
+import { formatBytes } from "@oh-my-pi/pi-utils";
 
 import type { CollectResult } from "./collect.ts";
 import type { OnExitPolicy } from "./completion.ts";
@@ -282,14 +282,14 @@ export function truncationMarker(t: TruncationResult | undefined, logPath: strin
 	if (!t?.truncated) return null;
 	const full = logPath ? `. Full output: ${safeMeta(logPath)}` : "";
 	if (t.lastLinePartial) {
-		return `[Showing last ${formatSize(t.outputBytes)} of final line (line ${t.totalLines} is larger than the ${formatSize(DEFAULT_MAX_BYTES)} limit)${full}]`;
+		return `[Showing last ${formatBytes(t.outputBytes ?? Buffer.byteLength(t.content, "utf-8"))} of final line (line ${t.totalLines} is larger than the ${formatBytes(DEFAULT_MAX_BYTES)} limit)${full}]`;
 	}
-	const startLine = t.totalLines - t.outputLines + 1;
+	const startLine = t.totalLines - (t.outputLines ?? t.content.split("\n").length) + 1;
 	const endLine = t.totalLines;
 	if (t.truncatedBy === "lines") {
 		return `[Showing lines ${startLine}-${endLine} of ${t.totalLines}${full}]`;
 	}
-	return `[Showing lines ${startLine}-${endLine} of ${t.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit)${full}]`;
+	return `[Showing lines ${startLine}-${endLine} of ${t.totalLines} (${formatBytes(DEFAULT_MAX_BYTES)} limit)${full}]`;
 }
 
 function appendOutputSection(lines: string[], shape: OutputResultDetails): string {

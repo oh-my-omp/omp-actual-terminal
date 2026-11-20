@@ -47,7 +47,7 @@ omp plugin install https://github.com/oh-my-omp/omp-unified-exec#release --force
 - **会话，而不是调用。** `exec_command` 在 PTY 中启动进程，在等待窗口内返回已有输出和一个 `session_id`；之后的轮次里，`write_stdin` 把字节原样写给它（文本、`\x03` Ctrl-C、方向键）。状态与内容用 `read terminal_url` 读取，事件与完成用 `monitor` 等待。取消调用永远不会杀掉进程。没有命令截止时间，退出的进程也不会被重启。
 - **宿主的 shell。** 调用没有指定 `shell` 时，命令使用 omp 的 `shellPath` 设置，未设置时用环境变量 `SHELL`，再没有则用平台默认值：Windows 上是 omp 自带的 pi-shell（`omp bash`，bash 5.3 语法），其他平台是 `bash`。`cmd` 会被拒绝，不会被启动。每个结果都写明启动所用的 shell，模型据此按该 shell 的语法写命令。
 - **输出就是终端上看到的内容。** 每个会话都经过无头终端模拟器。运行中的结果返回当前屏幕、自上次调用以来滚出的未见历史与光标位置，而不是叠加每次重绘；退出结果只返回最终活动屏，其余保留行通过 `terminal_url` 读取。模拟器会像真实终端一样回应光标位置、设备属性与默认颜色查询，因此等待回应或选择配色的程序表现与真实终端一致。
-- **输出有上限，完整内容可找回。** 模型看到的每个结果都从尾部截取，最多 50 KiB / 2000 行，并去掉终端控制序列；每个会话的完整原始输出都写入 `log_path`。
+- **输出有上限，完整内容可找回。** 模型看到的每个结果都从尾部截取，最多 50 KiB / 3000 行，并去掉终端控制序列；每个会话的完整原始输出都写入 `log_path`。
 - **终端生命周期。** 后台终端的命令返回后，终端仍保留在列表里，直到被回收。正常返回且已没有任何进程的终端，保留 5 分钟后静默回收，读没读过都一样；其 `term://` 和日志仍可读。异常返回立即提醒；对异常返回的终端、或正常返回但仍有进程的终端，返回或最近一次读取 30 分钟后，从未读过的收到一条读取提醒，读过的收到一条即将回收提醒，并有 5 分钟反悔期，期满仍未再读就结束其剩余进程并回收；除非打开插件设置 `notice.graceReclaim`，回收不另发通知。见[终端生命周期](#terminal-lifecycle)。
 - **统一的通知通道。** 完成唤醒、monitor 的返回与提醒、等待输入提醒和生命周期通知都是终端通知：每条用 `session_id` 和传给 `exec_command` 的标题指明终端，并附一句简短原因。运行中的 agent 在下一个步骤边界读到通知，与 omp-todo-more 投递提醒的方式相同；空闲的 agent 被唤醒、开始一轮，而不是等到用户下一次发言才看到。
 - **工作完成后保持安静。** 主 agent 停下时，任何通知发出之前先判定它的最终回复（OMP 的 judge，否则 `@smol`，否则 Todo 列表）；工作已完成时，已返回的终端被回收，并且直到下一次运行开始，只有终端出问题（`abnormal_return`）才触发新的轮次。已完成的子 agent 遵循同一规则。见[完成的工作](#finished-work)。
@@ -128,7 +128,7 @@ history_lines: 2                   (running, optional: lines scrolled off above 
 <the full current screen, trailing blank rows removed>
 ```
 
-输出超过上限（50 KiB / 2000 行）时，末尾会附上一行说明：
+输出超过上限（50 KiB / 3000 行）时，末尾会附上一行说明：
 
 ```
 ...tail of output...
@@ -169,7 +169,7 @@ switch 与 branch 只复核身份。绑定不可用或失败时，审批返回�
 
 `powershell` / `pwsh` 使用 `-NoProfile -NoLogo -Command`；其他 shell（包括 pi-shell）都以 `<shell> -c <cmd>` 运行。命令文本原样传入，所以要按结果中写明的 shell 的语法来写；pi-shell 就是 bash 5.3，POSIX 语法可直接运行。
 
-结果头、`details` 和 `structuredContent` 都以 `shell` 字段给出解析后的可执行文件：短命令、已启动的会话和启动失败都一样。`write_stdin` 结果、流式更新、`kill_session` 结果和 `list_sessions` 条目沿用会话启动时的 shell，不会重新选择。shell 只是元数据，从不加入 `output`。
+结果头和 `details` 都以 `shell` 字段给出解析后的可执行文件：短命令、已启动的会话和启动失败都一样。`write_stdin` 结果、流式更新、`kill_session` 结果和 `list_sessions` 条目沿用会话启动时的 shell，不会重新选择。shell 只是元数据，从不加入 `output`。
 
 <a id="init-file"></a>
 
@@ -200,7 +200,7 @@ alias omp='omp --hide-thinking'
 
 - **运行中历史加屏幕。** 先给出自上次调用以来从顶部滚出、且尚未报告过的行，再给出完整的当前屏幕。回车刷新的进度条和重绘只显示最终状态。
 - **运行中屏幕未变。** 屏幕、光标和历史都没变化时，结果带 `screen_changed: false` 和 `(no output)`。
-- **退出只返回一屏。** 每一种退出结果（包括短命令和确认终止）都返回冻结的最终活动屏，即使屏幕没有变化。`terminal_url` 保留在结果根层；`terminal.retained_rows`、`terminal.rows` 与 `terminal.history_may_be_truncated` 描述正常屏的保留投影，最终元数据不含 `screen_changed` 或 `history_lines`。结果仍受 50 KiB / 2000 行上限约束；通过 URL 的 `/screen` 读取完整屏幕，通过 `/page/N` 读取更早的保留行。
+- **退出只返回一屏。** 每一种退出结果（包括短命令和确认终止）都返回冻结的最终活动屏，即使屏幕没有变化。`terminal_url` 保留在结果根层；`terminal.retained_rows`、`terminal.rows` 与 `terminal.history_may_be_truncated` 描述正常屏的保留投影，最终元数据不含 `screen_changed` 或 `history_lines`。结果仍受 50 KiB / 3000 行上限约束；通过 URL 的 `/screen` 读取完整屏幕，通过 `/page/N` 读取更早的保留行。
 - **全屏程序**（备用屏幕，比如 `top`、编辑器、`tmux`）报告为 `terminal: alternate screen …`；退出后恢复普通屏幕。
 - **子进程看到的是 `TERM=xterm-256color`**，即它实际绘制所在的终端，与 omp 自身运行在哪个终端里无关；命令仍可自行设置 `TERM`。
 - **工具结果只有纯文本和光标。** exec/write/kill 文本里没有颜色；Tern 的终端页和显式 `read term://…/screen.png` 会显示颜色。
@@ -516,7 +516,7 @@ TERMINAL_HISTORY_CELLS       = 240_000 (history between calls: cells / cols rows
 MAX_SESSIONS                 = 64
 LRU_PROTECTED_COUNT          = 8
 DEFAULT_MAX_BYTES            = 50 KiB  (model-visible per-call cap)
-DEFAULT_MAX_LINES            = 2000
+DEFAULT_MAX_LINES            = 3000
 DEFAULT_REMIND_AFTER_MS      = 1_200_000 (monitor silence before one reminder)
 DEFAULT_JUDGE_INTERVAL_MS    = 60_000 (judge monitor: time between judgments)
 JUDGE_DEADLINE_MS            = 30_000 (judge monitor: one judgment's deadline)
@@ -636,7 +636,7 @@ src/
 ├── output-safety.ts      # terminal-control stripping
 ├── terminal-screen.ts    # headless terminal: observations, styled screens, query answers
 ├── tool-result.ts        # bounded envelopes + model-visible text
-├── script-result.ts      # tool outputSchema / structuredContent
+├── script-result.ts      # monitor result details
 └── unescape.ts           # C-style escape decoder for `chars`
 fork-features/
 ├── omp-presentation.ts   # omp host detection, bash-renderer delegation, theme appearance, shellPath setting
@@ -644,7 +644,6 @@ fork-features/
 ├── shell-host.ts         # omp's cmd.exe test, loaded at factory time
 ├── agent-park.ts         # omp's agent registry/lifecycle reader; parked subagents' terminal runtimes
 ├── session-binding.ts    # activation-local AgentSession identity for approval settings and stop detectors
-├── omp-tools.d.ts        # types of the omp modules loaded at runtime
 ├── tern-terminal-hud.ts  # terminals segment in omp's pill, Terminals view, terminal page
 ├── terminal-resource.ts  # process-global terminal keys, live/frozen projections
 ├── terminal-url.ts       # omp `term://` read handler; reports reads to the terminal's owner

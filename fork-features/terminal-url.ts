@@ -1,39 +1,35 @@
+import type * as InternalUrls from "@oh-my-pi/pi-coding-agent/internal-urls";
+
 import { sanitizeOutputText } from "../src/output-safety.ts";
 import { registerInternalScheme } from "./omomp-shared/internal-url.ts";
 import { writeTerminalImage } from "./terminal-image.ts";
 import { getTerminalResource, noteTerminalRead, parseTerminalTarget, readTerminal, terminalText } from "./terminal-resource.ts";
-import type { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
 
 const handlerBrand = Symbol.for("omp-unified-exec.term-handler");
 
-interface TerminalUrlHandler {
-	readonly [handlerBrand]: true;
+type TerminalUrlHandler = InternalUrls.ProtocolHandler & {
 	readonly scheme: "term";
-	readonly spec: { readonly backing: "file"; readonly selectors: "lines"; readonly immutable: false };
-	resolve(url: URL): Promise<{ url: string; content: string; contentType: "text/plain"; immutable: false }>;
-	locate(url: URL): Promise<string | null>;
-}
+	readonly spec: InternalUrls.SchemeSpec & {
+		readonly backing: "file";
+		readonly selectors: "lines";
+		readonly immutable: false;
+	};
+	readonly [handlerBrand]: true;
+};
 
-const ROUTER_MEMBERS = ["register", "isBuiltin", "unregister", "getHandler", "specs"] as const;
+type InternalUrlRouterHost = Pick<typeof InternalUrls, "InternalUrlRouter">;
 
-function isInternalUrlRouter(value: unknown): value is InternalUrlRouter {
-	if (typeof value !== "object" || value === null) return false;
-	for (const member of ROUTER_MEMBERS) {
-		if (!(member in value) || typeof Reflect.get(value, member) !== "function") return false;
+export function parseInternalUrlRouterHost(value: Partial<InternalUrlRouterHost>): InternalUrlRouterHost {
+	const { InternalUrlRouter } = value;
+	if (typeof InternalUrlRouter !== "function" || typeof InternalUrlRouter.instance !== "function") {
+		throw new Error("omp-unified-exec: internal-urls lacks InternalUrlRouter.instance; requalify term:// integration");
 	}
-	return true;
+	return { InternalUrlRouter };
 }
 
 export async function initializeTerminalUrls(): Promise<void> {
-	const module = await import("@oh-my-pi/pi-coding-agent/internal-urls");
-	const Router: unknown = module.InternalUrlRouter;
-	if (typeof Router !== "function" || !("instance" in Router) || typeof Router.instance !== "function") {
-		throw new Error("omp-unified-exec: internal-urls lacks InternalUrlRouter.instance; requalify term:// integration");
-	}
-	const router: unknown = Router.instance();
-	if (!isInternalUrlRouter(router)) {
-		throw new Error("omp-unified-exec: InternalUrlRouter lacks register/isBuiltin/getHandler/unregister/specs; requalify term:// integration");
-	}
+	const { InternalUrlRouter } = parseInternalUrlRouterHost(await import("@oh-my-pi/pi-coding-agent/internal-urls"));
+	const router = InternalUrlRouter.instance();
 	const handler: TerminalUrlHandler = {
 		[handlerBrand]: true,
 		scheme: "term",
@@ -56,8 +52,8 @@ export async function initializeTerminalUrls(): Promise<void> {
 			return image;
 		},
 	};
-	const existing: unknown = router.getHandler("term");
-	if (typeof existing === "object" && existing !== null && Reflect.get(existing, handlerBrand) === true) router.unregister("term");
+	const existing = router.getHandler("term");
+	if (existing !== undefined && handlerBrand in existing && existing[handlerBrand] === true) router.unregister("term");
 	const outcome = registerInternalScheme(router, "omp-unified-exec/term", handler);
 	switch (outcome.kind) {
 		case "registered":

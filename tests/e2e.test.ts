@@ -22,7 +22,7 @@ interface ToolDef {
 		signal: AbortSignal | undefined,
 		onUpdate: any,
 		ctx: any,
-	) => Promise<{ content: Array<{ type: string; text: string }>; details: any; structuredContent?: unknown }>;
+	) => Promise<{ content: Array<{ type: string; text: string }>; details: any }>;
 	renderCall?: (...args: any[]) => unknown;
 	renderResult?: (...args: any[]) => unknown;
 }
@@ -100,12 +100,12 @@ function makeHarness(shellPath: () => string | undefined = STUB_SHELL_PATH) {
 }
 
 function assertReportedShell(
-	result: { content: Array<{ text: string }>; details: { shell?: string }; structuredContent?: unknown },
+	result: { content: Array<{ text: string }>; details: { shell?: string } },
 	shell: string,
 ) {
 	assert.equal(result.details.shell, shell);
-	assert.ok(result.structuredContent && typeof result.structuredContent === "object" && "shell" in result.structuredContent);
-	assert.equal(result.structuredContent.shell, shell);
+	assert.ok(result.details && typeof result.details === "object" && "shell" in result.details);
+	assert.equal(result.details.shell, shell);
 	assert.ok(result.content[0].text.split("\n").includes(`shell: ${shell}`), result.content[0].text);
 }
 
@@ -324,10 +324,10 @@ describe("unified-exec e2e", () => {
 			const entries: Array<{ session_id: number; shell?: string }> = listed.details.sessions;
 			assert.equal(entries.find((entry) => entry.session_id === sid)?.shell, "/bin/sh");
 			assert.ok(
-				listed.structuredContent && typeof listed.structuredContent === "object" && "sessions" in listed.structuredContent,
+				listed.details && typeof listed.details === "object" && "sessions" in listed.details,
 			);
-			assert.ok(Array.isArray(listed.structuredContent.sessions));
-			const structuredEntry: unknown = listed.structuredContent.sessions.find(
+			assert.ok(Array.isArray(listed.details.sessions));
+			const structuredEntry: unknown = listed.details.sessions.find(
 				(entry: unknown) => typeof entry === "object" && entry !== null && "session_id" in entry && entry.session_id === sid,
 			);
 			assert.ok(structuredEntry && typeof structuredEntry === "object" && "shell" in structuredEntry);
