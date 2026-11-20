@@ -1,9 +1,9 @@
 import { constants as osConstants } from "node:os";
 import { statSync } from "node:fs";
 import { resolve } from "node:path";
-import { type AgentToolResult, type AgentToolUpdateCallback, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Box, Text, type Component } from "@earendil-works/pi-tui";
-import { Type, type TUnsafe } from "typebox";
+import { type AgentToolResult, type AgentToolUpdateCallback, type ExtensionAPI, type ExtensionContext, type SessionStopEvent, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Box, Text } from "@earendil-works/pi-tui";
+import { Type, type TUnsafe } from "@oh-my-pi/omptype/typebox";
 
 import { type AgentHost, type AgentIdentity, type ParkedRuntime, parkedRuntimes } from "../fork-features/agent-park.ts";
 import { type ActivatedExtension, withHostPresentation } from "../fork-features/omp-presentation.ts";
@@ -36,19 +36,7 @@ import { waitForExitOrDeadline } from "./long-wait.ts";
 import { sleep } from "./notify.ts";
 import { sanitizeOutputText } from "./output-safety.ts";
 import { DEFAULT_PTY_ROWS } from "./pty.ts";
-import {
-	killNotFoundScriptResult,
-	killScriptResult,
-	killScriptResultSchema,
-	listSessionsScriptResult,
-	listSessionsScriptResultSchema,
-	monitorScriptResultSchema,
-	type MonitorScriptResult,
-	processScriptResult,
-	processScriptResultSchema,
-	setOnExitScriptResult,
-	setOnExitScriptResultSchema,
-} from "./script-result.ts";
+import type { MonitorScriptResult } from "./script-result.ts";
 import { ExecSession } from "./session.ts";
 import { SessionStore } from "./session-store.ts";
 import { IS_WINDOWS, resolveBinary, resolveDefaultShell, resolveWindowsShell, shellArgv, type LaunchShell, type ShellSource } from "./shell.ts";
@@ -837,13 +825,12 @@ function startStreaming(
 	};
 }
 
-function finalResponseText(event: unknown): string | undefined {
-	const message: unknown = typeof event === "object" && event !== null ? Reflect.get(event, "last_assistant_message") : undefined;
-	const content: unknown = typeof message === "object" && message !== null ? Reflect.get(message, "content") : undefined;
-	const text = typeof content === "string" ? content : Array.isArray(content)
-		? content.filter((block): block is { type: "text"; text: string } =>
-			typeof block === "object" && block !== null && block.type === "text" && typeof block.text === "string").map((block) => block.text).join("")
-		: "";
+function finalResponseText(event: SessionStopEvent): string | undefined {
+	const message = event.last_assistant_message;
+	if (message === undefined || !("content" in message)) return undefined;
+	let text = "";
+	if (typeof message.content === "string") text = message.content;
+	else for (const block of message.content) if (block.type === "text") text += block.text;
 	return text.trim() ? text : undefined;
 }
 
@@ -1031,17 +1018,10 @@ export function activate(
 			}
 		},
 	};
-	const sendOmpMessage = (pi as ExtensionAPI & {
-		sendMessage(
-			message: { customType: string; content: string; display: boolean; details: unknown },
-			options: { deliverAs: "aside" },
-		): void;
-	}).sendMessage;
 	const attachment: RuntimeHost = {
 		kind: "attached",
 		send: (message) => {
-			sendOmpMessage.call(
-				pi,
+			pi.sendMessage(
 				{ customType: "unified-exec-notice", content: message.content, display: true, details: message.details },
 				{ deliverAs: "aside" },
 			);
@@ -1077,18 +1057,11 @@ export function activate(
 	};
 	const parked = parkedRuntimes<ExtensionCtx>();
 	let ctx = createRuntime({ attachment, agentHost, lifecycleClock, appearance, shellPath, shellHost, invalidateGithubCache, pluginSettings });
-	const registerMessageRenderer = (pi as ExtensionAPI & {
-		registerMessageRenderer?: (
-			customType: string,
-			renderer: (message: { readonly details?: unknown }, options: { readonly outputPad: number }, theme: unknown) => Component | undefined,
-		) => void;
-	}).registerMessageRenderer;
-	registerMessageRenderer?.call(pi, "unified-exec-notice", (message, { outputPad }) => {
-		const box = new Box(outputPad, 1);
+	pi.registerMessageRenderer("unified-exec-notice", (message) => {
+		const box = new Box(1, 1);
 		box.addChild(new Text(buildNoticeDisplayMessage(message.details), 0, 0));
 		return box;
 	});
-
 
 	pi.on("tool_execution_end", async (event) => {
 		ctx.lifecycle.commitToolReads(event.toolCallId, event.isError === true);
@@ -1098,8 +1071,8 @@ export function activate(
 		ctx.notices.agentStarted();
 	});
 	pi.on("agent_end", async (event) => {
-		const willContinue = Reflect.get(event, "willContinue") === true;
-		const awaitingAsyncWork = Reflect.get(event, "awaitingAsyncWork") === true;
+		const willContinue = event.willContinue === true;
+		const awaitingAsyncWork = event.awaitingAsyncWork === true;
 		if (willContinue && !awaitingAsyncWork) return;
 		ctx.coordinator.flushPending();
 		ctx.notices.agentStopped(awaitingAsyncWork ? "awaiting" : "final");
@@ -1126,17 +1099,13 @@ export function activate(
 		updateRunningSessionsUi(ctx);
 	});
 
-	const onHostEvent = (pi as ExtensionAPI & {
-		on(event: "session_switch" | "session_branch" | "session_stop",
-			handler: (event: unknown, context: unknown) => Promise<void>): void;
-	}).on;
-	for (const event of ["session_switch", "session_branch"] as const) {
-		onHostEvent.call(pi, event, async (_event, eventCtx) => {
-			binding = recheckBinding(binding, bindingContext(eventCtx));
-			ctx.notices.forgetResponse();
-		});
-	}
-	onHostEvent.call(pi, "session_stop", async (event) => {
+	const rebind = (eventCtx: ExtensionContext): void => {
+		binding = recheckBinding(binding, bindingContext(eventCtx));
+		ctx.notices.forgetResponse();
+	};
+	pi.on("session_switch", async (_event, eventCtx) => rebind(eventCtx));
+	pi.on("session_branch", async (_event, eventCtx) => rebind(eventCtx));
+	pi.on("session_stop", async (event) => {
 		const text = finalResponseText(event);
 		if (text !== undefined) ctx.notices.recordResponse(text);
 	});
@@ -1255,7 +1224,6 @@ export function activate(
 		description:
 			"Run a command in a PTY for long-running, interactive (REPL, TUI, ssh, sudo), concurrent or daemon work; bash for one-shot commands. No command deadline. Returns session_id if running, else exit_code. " +
 			execCommandTopicPointers,
-		outputSchema: processScriptResultSchema,
 		parameters: execCommandParameters,
 		async execute(toolCallId, params, signal, onUpdate, eventCtx) {
 			ctx.ui ??= eventCtx.ui;
@@ -1264,7 +1232,6 @@ export function activate(
 			return {
 				content: [{ type: "text", text: renderProcessResultText(shape) }],
 				details: shape,
-				structuredContent: processScriptResult(shape),
 			};
 		},
 	} satisfies ToolDefinition<typeof execCommandParameters> & { docTopics(): Readonly<Record<string, string>> });
@@ -1288,7 +1255,6 @@ export function activate(
 		description:
 			"Send input to a running session's PTY; returns output like exec_command." +
 			writeStdinTopicPointers,
-		outputSchema: processScriptResultSchema,
 		parameters: writeStdinParameters,
 		async execute(toolCallId, params, signal, onUpdate, eventCtx) {
 			ctx.ui ??= eventCtx.ui;
@@ -1297,7 +1263,6 @@ export function activate(
 			return {
 				content: [{ type: "text", text: renderProcessResultText(shape) }],
 				details: shape,
-				structuredContent: processScriptResult(shape),
 			};
 		},
 	} satisfies ToolDefinition<typeof writeStdinParameters> & { docTopics(): Readonly<Record<string, string>> });
@@ -1315,7 +1280,6 @@ export function activate(
 		label: tr("Set exit wake", "设置退出唤醒"),
 		description:
 			"Change a session's on_exit policy without stopping the process." + setOnExitTopicPointers,
-		outputSchema: setOnExitScriptResultSchema,
 		parameters: setOnExitParameters,
 		async execute(_toolCallId, params, _signal, _onUpdate, eventCtx) {
 			ctx.ui ??= eventCtx.ui;
@@ -1325,7 +1289,6 @@ export function activate(
 				return {
 					content: [{ type: "text", text: missingSessionText(ctx, sid, `No such session: ${sid}`) }],
 					details: { session_id: sid, found: false },
-					structuredContent: setOnExitScriptResult({ session_id: sid, found: false }),
 				};
 			}
 			const status = ctx.coordinator.setOnExit(sid, policy, session);
@@ -1333,7 +1296,6 @@ export function activate(
 				return {
 					content: [{ type: "text", text: missingSessionText(ctx, sid, `No such session: ${sid}`) }],
 					details: { session_id: sid, found: false },
-					structuredContent: setOnExitScriptResult({ session_id: sid, found: false }),
 				};
 			}
 			const running = session ? !session.hasExited : false;
@@ -1344,14 +1306,6 @@ export function activate(
 				(armed ? "; wake armed" : "; wake not armed");
 			return {
 				content: [{ type: "text", text }],
-				structuredContent: setOnExitScriptResult({
-					session_id: sid,
-					found: true,
-					on_exit: policy,
-					status,
-					running,
-					wake_armed: armed,
-				}),
 				details: {
 					session_id: sid,
 					found: true,
@@ -1384,7 +1338,6 @@ export function activate(
 			"Wait for a running session's future output: each batch matching condition or each new screen the judge finds meets your intent wakes you; with neither, its end wakes you once." +
 			monitorTopicPointers,
 		parameters: monitorParameters,
-		outputSchema: monitorScriptResultSchema,
 		async execute(_toolCallId, params, signal) {
 			let details: MonitorScriptResult;
 			try {
@@ -1405,7 +1358,7 @@ export function activate(
 			}
 			return {
 				content: [{ type: "text", text: JSON.stringify(details) }],
-				details, structuredContent: details,
+				details,
 				...(details.status === "error" ? { isError: true } : {}),
 			};
 		},
@@ -1424,7 +1377,6 @@ export function activate(
 		description:
 			"Terminate a session: SIGTERM, then SIGKILL after 2 s; on Windows any signal force-kills the process tree." +
 			killSessionTopicPointers,
-		outputSchema: killScriptResultSchema,
 		parameters: killSessionParameters,
 		async execute(toolCallId, params, _signal, _onUpdate, eventCtx) {
 			ctx.ui ??= eventCtx.ui;
@@ -1442,7 +1394,6 @@ export function activate(
 						session_id: sid,
 						found: false,
 					} as const,
-					structuredContent: killNotFoundScriptResult(sid),
 				};
 			}
 			const { session, escalated, collected, killed } = outcome;
@@ -1476,7 +1427,6 @@ export function activate(
 			return {
 				content: [{ type: "text", text: renderKillResultText(details) }],
 				details,
-				structuredContent: killScriptResult(details),
 			};
 		},
 	} satisfies ToolDefinition<typeof killSessionParameters> & { docTopics(): Readonly<Record<string, string>> });
@@ -1487,7 +1437,6 @@ export function activate(
 		...listSessionsDocumentation,
 		label: tr("List sessions", "列出会话"),
 		description: "List this omp run's unified-exec terminals: running ones, and returned ones not yet reclaimed, with their titles and lifecycle state." + listSessionsTopicPointers,
-		outputSchema: listSessionsScriptResultSchema,
 		parameters: listSessionsParameters,
 		async execute(_toolCallId, _params, _signal, _onUpdate, eventCtx) {
 			ctx.ui ??= eventCtx.ui;
@@ -1538,12 +1487,6 @@ export function activate(
 			return {
 				content: [{ type: "text", text: `${header}\n${lines.join("\n")}\ntool_time_utc: ${toolTimeUtc}` }],
 				details: { sessions, running_count: runningCount, returned_count: returnedCount, tool_time_utc: toolTimeUtc },
-				structuredContent: listSessionsScriptResult({
-					sessions,
-					running_count: runningCount,
-					returned_count: returnedCount,
-					tool_time_utc: toolTimeUtc,
-				}),
 			};
 		},
 	} satisfies ToolDefinition<typeof listSessionsParameters> & { docTopics(): Readonly<Record<string, string>> });

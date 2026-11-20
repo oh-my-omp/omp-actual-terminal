@@ -1,3 +1,5 @@
+import type * as PiUtils from "@oh-my-pi/pi-utils";
+
 export interface ShellHost {
 	readonly isCmdShell: (shell: string) => boolean;
 }
@@ -9,11 +11,11 @@ export const noShellHost: ShellHost = {
 };
 
 export async function loadShellHost(): Promise<ShellHost> {
-	const utils: unknown = await import("@oh-my-pi/pi-utils");
-	const procmgr: unknown = typeof utils === "object" && utils !== null && "procmgr" in utils ? utils.procmgr : undefined;
-	const isCmdShell: unknown = typeof procmgr === "object" && procmgr !== null && "isCmdShell" in procmgr ? procmgr.isCmdShell : undefined;
+	// `Partial` says what the guard below checks: the installed omp may not export `procmgr` at all.
+	const utils: Partial<typeof PiUtils> = await import("@oh-my-pi/pi-utils");
+	const isCmdShell = utils.procmgr?.isCmdShell;
 	if (typeof isCmdShell !== "function") {
 		throw new Error("omp-unified-exec: @oh-my-pi/pi-utils procmgr lacks isCmdShell(); requalify fork-features/shell-host.ts for this omp version");
 	}
-	return { isCmdShell: isCmdShell as (shell: string) => boolean };
+	return { isCmdShell };
 }

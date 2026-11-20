@@ -1,11 +1,18 @@
 import { strict as assert } from "node:assert";
 import { afterEach, describe, it } from "node:test";
+import type { AgentRef, AgentStatus, RegistryEvent } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import type { AgentSessionHandle } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { type AgentGeneration, type AgentHost, type AgentIdentity, parkedRuntimes, parseAgentHost } from "../fork-features/agent-park.ts";
 import { activate } from "../src/index.ts";
 import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";
 
 const MINUTE = 60_000;
 const AGENT = "0-Worker";
+
+/** One registry ref as the host mints it: a fresh object per generation. */
+function agentRef(status: AgentStatus, generation = 1): AgentRef {
+	return { id: AGENT, generation, displayName: AGENT, kind: "sub", status, session: null, sessionFile: null, createdAt: 0, lastActivity: 0 };
+}
 
 interface ListedSession { session_id: number; pid?: number; running: boolean }
 interface ToolResult { details: { session_id?: number; killed?: boolean; sessions?: ListedSession[] } }
@@ -17,7 +24,8 @@ interface Sent { message: { details: { notices: Array<{ session_id: number; kind
 type Handler = (event: object, ctx: object) => unknown;
 
 class FakeOmp implements AgentHost {
-	generation = {} as AgentGeneration;
+	private nextGeneration = 1;
+	generation: AgentGeneration = agentRef("idle");
 	adopted = false;
 	parking = false;
 	revives = 0;
@@ -47,7 +55,7 @@ class FakeOmp implements AgentHost {
 	}
 	reset(): void {
 		this.release();
-		this.generation = {} as AgentGeneration;
+		this.generation = agentRef("idle", ++this.nextGeneration);
 		this.adopted = false;
 		this.parking = false;
 		this.revives = 0;
@@ -226,20 +234,22 @@ describe("a subagent's terminals across omp's park", { skip: process.platform ==
 
 describe("omp's agent registry and lifecycle exports", () => {
 	it("are read as omp exports them: classes with a static global()", async () => {
-		type Event = { type: string; ref: object };
-		const ref = { status: "idle" };
-		const listeners = new Set<(event: Event) => void>();
+		const ref = agentRef("idle");
+		const listeners = new Set<(event: RegistryEvent) => void>();
 		const calls: string[] = [];
 		class AgentRegistry {
 			static global() { return new AgentRegistry(); }
 			get(id: string) { return id === AGENT ? ref : undefined; }
-			onChange(listener: (event: Event) => void) { listeners.add(listener); return () => listeners.delete(listener); }
+			onChange(listener: (event: RegistryEvent) => void) { listeners.add(listener); return () => listeners.delete(listener); }
 		}
 		class AgentLifecycleManager {
 			static global() { return new AgentLifecycleManager(); }
-			isParking(id: string, expected: object) { return id === AGENT && expected === ref; }
+			isParking(id: string, expected?: AgentRef) { return id === AGENT && expected === ref; }
 			has() { return false; }
-			async ensureLive(id: string) { calls.push(id); }
+			async ensureLive(id: string): Promise<AgentSessionHandle> {
+				calls.push(id);
+				throw new Error("the test has no live session");
+			}
 		}
 		const host = parseAgentHost({ AgentRegistry }, { AgentLifecycleManager });
 		const agent = host.identify(AGENT);
@@ -247,13 +257,13 @@ describe("omp's agent registry and lifecycle exports", () => {
 		assert.equal(host.identify("other"), undefined);
 		assert.equal(host.isParking(agent), true);
 		assert.equal(host.isAdopted(agent), false);
-		await host.revive(AGENT);
+		await assert.rejects(() => host.revive(AGENT), /the test has no live session/);
 		assert.deepEqual(calls, [AGENT]);
-		const ended: object[] = [];
+		const ended: AgentGeneration[] = [];
 		const unsubscribe = host.onEnded((generation) => ended.push(generation));
 		for (const listener of listeners) {
-			listener({ type: "status_changed", ref: { status: "parked" } });
-			listener({ type: "status_changed", ref: { status: "aborted" } });
+			listener({ type: "status_changed", ref: agentRef("parked") });
+			listener({ type: "status_changed", ref: agentRef("aborted") });
 			listener({ type: "removed", ref });
 		}
 		assert.equal(ended.length, 2, "aborted and removed end a generation; parked does not");

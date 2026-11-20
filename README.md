@@ -101,7 +101,7 @@ results remain in English.
   attributes, default colours), so programs that wait for them, or pick a light
   or dark palette from them, behave as in a real terminal.
 - **Bounded output, complete recovery.** Every result the model sees is
-  tail-capped at 50 KiB / 2000 lines and stripped of terminal controls; the
+  tail-capped at 50 KiB / 3000 lines and stripped of terminal controls; the
   complete raw stream of every session is written to `log_path`.
 - **Terminal lifecycle.** A background terminal stays listed after its
   command returns until it is reclaimed. A normal return with no process left
@@ -251,7 +251,7 @@ history_lines: 2                   (running, optional: lines scrolled off above 
 <the full current screen, trailing blank rows removed>
 ```
 
-When output exceeds the caps (50 KiB / 2000 lines), a footer is appended:
+When output exceeds the caps (50 KiB / 3000 lines), a footer is appended:
 
 ```
 ...tail of output...
@@ -310,7 +310,7 @@ pi-shell included, runs as `<shell> -c <cmd>`. The command text is passed
 unchanged, so write it in the syntax of the shell the result names; pi-shell is
 bash 5.3, so POSIX syntax runs there.
 
-The result header, `details` and `structuredContent` carry the
+The result header and `details` carry the
 resolved executable as `shell`: for short commands, started sessions and spawn
 failures alike. `write_stdin` results, streaming updates, `kill_session`
 results and `list_sessions` entries repeat the shell the session started
@@ -384,7 +384,7 @@ size; the raw stream goes only to `log_path`.
   `terminal_url` stays at the result root; `terminal.retained_rows`,
   `terminal.rows` and `terminal.history_may_be_truncated` describe the retained
   normal-screen projection. Final metadata has no `screen_changed` or
-  `history_lines`. The 50 KiB / 2000-line result cap still applies; read the URL's
+  `history_lines`. The 50 KiB / 3000-line result cap still applies; read the URL's
   `/screen` for the complete screen and `/page/N` for earlier retained rows.
 - **Full-screen programs** (alternate screen, e.g. `top`, editors, `tmux`) are
   reported as `terminal: alternate screen …`; leaving it restores the normal screen.
@@ -909,7 +909,7 @@ TERMINAL_HISTORY_CELLS       = 240_000 (history between calls: cells / cols rows
 MAX_SESSIONS                 = 64
 LRU_PROTECTED_COUNT          = 8
 DEFAULT_MAX_BYTES            = 50 KiB  (model-visible per-call cap)
-DEFAULT_MAX_LINES            = 2000
+DEFAULT_MAX_LINES            = 3000
 DEFAULT_REMIND_AFTER_MS      = 1_200_000 (monitor silence before one reminder)
 DEFAULT_JUDGE_INTERVAL_MS    = 60_000 (judge monitor: time between judgments)
 JUDGE_DEADLINE_MS            = 30_000 (judge monitor: one judgment's deadline)
@@ -1080,7 +1080,7 @@ src/
 ├── output-safety.ts      # terminal-control stripping
 ├── terminal-screen.ts    # headless terminal: observations, styled screens, query answers
 ├── tool-result.ts        # bounded envelopes + model-visible text
-├── script-result.ts      # tool outputSchema / structuredContent
+├── script-result.ts      # monitor result details
 └── unescape.ts           # C-style escape decoder for `chars`
 fork-features/
 ├── omp-presentation.ts   # omp host detection, bash-renderer delegation, theme appearance, shellPath setting
@@ -1088,7 +1088,6 @@ fork-features/
 ├── shell-host.ts         # omp's cmd.exe test, loaded at factory time
 ├── agent-park.ts         # omp's agent registry/lifecycle reader; parked subagents' terminal runtimes
 ├── session-binding.ts    # activation-local AgentSession identity for approval settings and stop detectors
-├── omp-tools.d.ts        # types of the omp modules loaded at runtime
 ├── tern-terminal-hud.ts  # terminals segment in omp's pill, Terminals view, terminal page
 ├── terminal-resource.ts  # process-global terminal keys, live/frozen projections
 ├── terminal-url.ts       # omp `term://` read handler; reports reads to the terminal's owner

@@ -10,7 +10,11 @@
 		"esModuleInterop": true,
 		"allowImportingTsExtensions": true,
 		"resolveJsonModule": true,
-		"types": ["node"]
+		"types": ["bun", "node"],
+		"paths": {
+			"@earendil-works/pi-coding-agent": ["./node_modules/@oh-my-pi/pi-coding-agent"],
+			"@earendil-works/pi-tui": ["./node_modules/@oh-my-pi/pi-tui"]
+		}
 	},
 	"include": ["src/**/*.ts", "fork-features/**/*.ts", "tests/**/*.ts"]
 }

@@ -1,11 +1,13 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { AgentRef } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import {
 	approveBoundCommand, approveCommand, getBashApprovalPatternRules, type ApprovalHelpers, type BashApprovalPatternRule,
 	type BashPatternViews, type CommandApproval, type CommandApprovalHost,
 } from "../fork-features/command-approval.ts";
-import { bindSession, bindingContext, recheckBinding, type BoundSession, type HostSettings } from "../fork-features/session-binding.ts";
+import { bindSession, bindingContext, recheckBinding, type HostSettings } from "../fork-features/session-binding.ts";
 import { activate } from "../src/index.ts";
 import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";
 
@@ -24,6 +26,56 @@ const helpers: ApprovalHelpers = {
 };
 
 const single = (rules: readonly BashApprovalPatternRule[]): BashPatternViews => ({ session: rules, authority: rules });
+
+function unusedSessionMember(): never {
+	throw new Error("unused session-manager member");
+}
+
+const sessionManager = {
+	getCwd: () => process.cwd(),
+	getSessionId: () => "main",
+	getSessionFile: () => undefined,
+	getArtifactsDir: () => null,
+	getUsageStatistics: () => ({
+		input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+		orchestrationInput: 0, orchestrationOutput: 0, orchestrationCacheRead: 0,
+		premiumRequests: 0, cost: 0, subagentCost: 0,
+	}),
+};
+
+function agentSessionStub() {
+	return {
+		instanceKey: "test:main",
+		agent: { isPaused: false, state: { messages: [], streamMessage: null, pendingToolCalls: new Set<string>() } },
+		sessionManager,
+		isStreaming: false,
+		runStartedAt: undefined,
+		ircWakesPending: false,
+		hasPendingWake: false,
+		messages: [],
+		sessionFile: undefined,
+		model: undefined,
+		thinkingLevel: undefined,
+		servingModel: undefined,
+		effectiveExtensionRoots: { explicit: [], mode: "merge" as const, configured: [], configuredLevel: "user" as const },
+		hindsightActive: false,
+		subscribe: unusedSessionMember,
+		subscribeRunState: unusedSessionMember,
+		getSessionStats: unusedSessionMember,
+		getAdvisorStatusOverview: unusedSessionMember,
+		getSessionAgents: unusedSessionMember,
+		hasQueuedIrcFrom: unusedSessionMember,
+		hasIrcInterrupts: unusedSessionMember,
+		emitIrcRelayObservation: unusedSessionMember,
+		deliverIrcMessage: unusedSessionMember,
+		waitForIrcReplies: unusedSessionMember,
+		prompt: unusedSessionMember,
+		steer: unusedSessionMember,
+		abort: unusedSessionMember,
+		setWorkPoolYieldItems: unusedSessionMember,
+		dispose: unusedSessionMember,
+	};
+}
 
 const segmentHelpers: ApprovalHelpers = {
 	criticalPatterns: [/rm -rf/, /git reset/],
@@ -166,18 +218,18 @@ describe("command approval host precedence", () => {
 	});
 
 	it("reads the operator layers from the bound session's grantAuthority view", () => {
-		const operator: HostSettings = { getShellConfig: () => ({ shell: "/bin/bash" }) };
-		const session: HostSettings = { getShellConfig: () => ({ shell: "/bin/bash" }), grantAuthority: () => operator };
+		const session = Settings.isolated();
+		const operator = session.grantAuthority();
 		const rulesBySettings = new Map<HostSettings, readonly BashApprovalPatternRule[]>([
 			[session, [allowNpm]], [operator, [{ match: "npm publish *", approval: "deny" }]],
 		]);
 		const host: CommandApprovalHost = {
-			registeredSession: () => undefined,
+			get: () => undefined,
 			approvalRules: (settings) => rulesBySettings.get(settings) ?? [],
 			allowCompoundCommands: () => false,
 			helpers: segmentHelpers,
 		};
-		assert.deepEqual(approveBoundCommand(host, { kind: "bound", agentId: "main", session: { settings: session, sessionManager: {} } }, { cmd: "npm publish pkg" }), {
+		assert.deepEqual(approveBoundCommand(host, { kind: "bound", agentId: "main", session: { settings: session, sessionManager } }, { cmd: "npm publish pkg" }), {
 			tier: "exec", override: true, policy: "deny", reason: "Blocked by bash pattern: npm publish *",
 		});
 	});
@@ -197,7 +249,7 @@ describe("approval session binding via activate", () => {
 
 	async function runPendingAndUnbound() {
 		const host: CommandApprovalHost = {
-			registeredSession: () => undefined,
+			get: () => undefined,
 			approvalRules() { throw new Error("must not read rules"); },
 			allowCompoundCommands() { throw new Error("must not read compound setting"); }, helpers,
 		};
@@ -216,44 +268,58 @@ describe("approval session binding via activate", () => {
 	}
 
 	it("binds once, reads live settings, and only rechecks identity on switches/branches", async () => {
-		const manager = {};
-		const initial = { getShellConfig() { throw new Error("compound disabled: no shell read"); } };
-		const replacement = { getShellConfig() { return { shell: "/bin/zsh" }; } };
-		const session: BoundSession = { settings: initial, sessionManager: manager };
+		const initial = Settings.isolated();
+		const replacement = Settings.isolated();
+		const compoundProbe: ApprovalHelpers = {
+			...helpers,
+			extractLiteralAndChainSegments() { throw new Error("compound disabled: no shell read"); },
+		};
+		const session = { ...agentSessionStub(), settings: initial };
+		const ref: AgentRef = {
+			id: "main", generation: 1, displayName: "main", kind: "sub", status: "idle",
+			session, sessionFile: null, createdAt: 0, lastActivity: 0,
+		};
 		let lookups = 0;
 		let rules: BashApprovalPatternRule[] = [{ match: "true", approval: "allow" }];
-		let lastSettings: unknown;
+		const seen: HostSettings[] = [];
 		const h = harness({
-			registeredSession(id) { assert.equal(id, "main"); lookups++; return { session }; },
-			approvalRules(settings) { lastSettings = settings; return rules; },
-			allowCompoundCommands: () => false, helpers,
+			get(id) { assert.equal(id, "main"); lookups++; return ref; },
+			approvalRules(settings) { seen.push(settings); return rules; },
+			allowCompoundCommands: () => false, helpers: compoundProbe,
 		});
-		await h.emit("session_start", manager);
+		await h.emit("session_start", sessionManager);
 		assert.deepEqual(h.tool.approval!({ cmd: "true" }), { tier: "write", policy: "allow" });
-		assert.equal(lastSettings, initial);
+		assert.equal(seen[0], initial);
 		rules = [{ match: "true", approval: "deny" }];
 		Object.assign(session, { settings: replacement });
-		await h.emit("session_switch", manager);
-		await h.emit("session_branch", manager);
-		await h.emit("session_start", manager);
+		await h.emit("session_switch", sessionManager);
+		await h.emit("session_branch", sessionManager);
+		await h.emit("session_start", sessionManager);
 		assert.equal(lookups, 1);
 		assert.deepEqual(h.tool.approval!({ cmd: "true" }), { tier: "exec", override: true, policy: "deny", reason: "Blocked by bash pattern: true" });
-		assert.equal(lastSettings, replacement);
+		assert.ok(seen.includes(replacement));
 		await h.emit("session_branch", {});
 		assert.equal(h.tool.approval!({ cmd: "true" }), "exec");
-		await h.emit("session_switch", manager);
+		await h.emit("session_switch", sessionManager);
 		assert.equal(h.tool.approval!({ cmd: "true" }), "exec");
 		assert.equal(lookups, 1);
 	});
 
 	it("rejects missing entries and mismatched managers without reading settings", () => {
-		const manager = {};
-		const session = { sessionManager: manager, get settings() { throw new Error("must not read settings during bind"); } };
-		const host = { registeredSession: () => ({ session }) };
-		assert.deepEqual(bindSession(host, { agentId: undefined, sessionManager: manager }), { kind: "unbound", reason: "no-registry-entry" });
-		assert.deepEqual(bindSession(host, { agentId: "main", sessionManager: {} }), { kind: "unbound", reason: "identity-mismatch" });
+		const session = {
+			...agentSessionStub(),
+			get settings() { throw new Error("must not read settings during bind"); },
+		};
+		const ref: AgentRef = {
+			id: "main", generation: 1, displayName: "main", kind: "sub", status: "idle",
+			session, sessionFile: null, createdAt: 0, lastActivity: 0,
+		};
+		const host = { get: () => ref };
+		assert.deepEqual(bindSession(host, { agentId: undefined, sessionManager }), { kind: "unbound", reason: "no-registry-entry" });
+		assert.deepEqual(bindSession(host, { agentId: "main", sessionManager: { ...sessionManager, getSessionId: () => "other" } }), { kind: "unbound", reason: "identity-mismatch" });
 		const pending = { kind: "pending" } as const;
-		assert.equal(recheckBinding(pending, { agentId: "main", sessionManager: manager }), pending);
-		assert.deepEqual(bindingContext({ agent: { id: "main" }, sessionManager: manager }), { agentId: "main", sessionManager: manager });
+		assert.equal(recheckBinding(pending, { agentId: "main", sessionManager }), pending);
+		const agent = { kind: "main", id: "main", name: "main", depth: 0 } as const;
+		assert.deepEqual(bindingContext({ agent, sessionManager }), { agentId: "main", sessionManager });
 	});
 });

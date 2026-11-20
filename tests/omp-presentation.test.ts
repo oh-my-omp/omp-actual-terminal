@@ -4,13 +4,14 @@ import { TerminalGrid } from "../src/terminal-screen.ts";
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { builtinModules } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
 import { DEFAULT_MAX_LINES, type ExtensionAPI, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { Type } from "@oh-my-pi/omptype/typebox";
 
 import {
 	execShellArgs,
@@ -178,7 +179,8 @@ describe("omp shell result presentation", () => {
 		});
 		const marker = truncationMarker(details.truncation, details.log_path);
 		assert.equal(details.truncation?.truncated, true);
-		assert.equal(marker, `[Showing lines 1001-3000 of 3000. Full output: ${details.log_path}]`);
+		const total = DEFAULT_MAX_LINES + 1000;
+		assert.equal(marker, `[Showing lines 1001-${total} of ${total}. Full output: ${details.log_path}]`);
 		const result = toShellResult(processView(details));
 		assert.equal(result.content[0].text, `${details.output.replace(/\n+$/, "")}\n\n${marker}`);
 		assert.equal(result.content[0].text.split("\n").at(-1), marker);
@@ -230,7 +232,7 @@ describe("omp shell result presentation", () => {
 
 	it("shows SIGKILL escalation without making a successful kill an error", () => {
 		const details = finalizeKillResult({ ...killInput, escalated: true, signal: "SIGKILL" });
-		const view = parseResultView({ details }, false);
+		const view = parseResultView({ details, content: [] }, false);
 		assert.equal(view.kind, "killed");
 		assert.deepEqual(toShellResult(view), {
 			content: [{ type: "text", text: "last output\n\n[escalated to SIGKILL]" }],
@@ -242,7 +244,7 @@ describe("omp shell result presentation", () => {
 	it("shows failed kill diagnostics and marks the result as an error", () => {
 		const failure = "process still running; session remains registered";
 		const details = finalizeKillResult({ ...killInput, killed: false, signal: null, failure, escalated: true });
-		const view = parseResultView({ details }, false);
+		const view = parseResultView({ details, content: [] }, false);
 		assert.equal(view.kind, "kill_failed");
 		assert.deepEqual(toShellResult(view), {
 			content: [{ type: "text", text: `last output\n\n[kill failed: ${failure}]` }],
@@ -315,7 +317,7 @@ describe("omp shell result presentation", () => {
 			const marker = truncationMarker(details.truncation, details.log_path);
 			assert.equal(details.truncation?.truncated, true);
 			assert.ok(marker);
-			const text = toShellResult(parseResultView({ details }, false)).content[0].text;
+			const text = toShellResult(parseResultView({ details, content: [] }, false)).content[0].text;
 			assert.equal(text.split("\n").at(-1), marker);
 			assert.ok(text.startsWith(`${details.output.replace(/\n+$/, "")}\n\n`), "notices must follow a blank line");
 		});
@@ -380,10 +382,71 @@ describe("host presentation activation", () => {
 		const compiled = join(temporary, "plugin.mjs");
 		const build = spawnSync(process.execPath, [
 			"build", fileURLToPath(new URL("../src/index.ts", import.meta.url)),
-			"--target=node", "--packages=external", "--outfile", compiled,
+			"--target=node", "--packages=external", "--external", "@earendil-works/*", "--outfile", compiled,
 		], { cwd: root, encoding: "utf8" });
 		assert.equal(build.status, 0, `${build.stdout}\n${build.stderr}`);
-		symlinkSync(join(root, "node_modules"), join(dirname(compiled), "node_modules"), "junction");
+		// --external "@earendil-works/*" keeps the bundle's imports external, but
+		// Node cannot load them: those packages are not installed, and the
+		// @oh-my-pi packages ship TypeScript source. Stage a temporary
+		// node_modules mirroring the specifiers the bundle actually imports so
+		// Node reaches the factory's Bun guard; the guard throws before any of
+		// these exports is invoked, so a universal stub export is sufficient.
+		// @xterm/headless is real because the bundle reads its default export at
+		// module scope.
+		const writeStubModules = (modules: string): void => {
+			const bundle = readFileSync(compiled, "utf8");
+			const specifiers = new Map<string, Set<string>>();
+			for (const match of bundle.matchAll(/^(?:import|export)\s+[^"']*?from\s*["']([^"']+)["']/gm)) {
+				const specifier = match[1];
+				if (specifier === "@xterm/headless" || specifier.startsWith("node:")) continue;
+				const names = specifiers.get(specifier) ?? new Set<string>();
+				const clause = match[0].slice(0, match[0].lastIndexOf("from"));
+				const namespace = /\*\s+as\s+(\w+)/.exec(clause);
+				if (namespace) {
+					for (const use of bundle.matchAll(new RegExp(`\\b${namespace[1]}\\.(\\w+)`, "g"))) names.add(use[1]);
+				}
+				const named = /\{([\s\S]*)\}/.exec(clause);
+				if (named) {
+					for (const part of named[1].split(",")) {
+						const member = part.trim().replace(/^type\s+/, "");
+						if (!member) continue;
+						const name = /\bas\s+(\w+)\s*$/.exec(member)?.[1] ?? member;
+						if (name !== "default") names.add(name);
+					}
+				}
+				specifiers.set(specifier, names);
+			}
+			const stubSource = "const base = function () {};\n" +
+				"const stub = new Proxy(base, {\n" +
+				"\tget: (target, prop) => prop === Symbol.toPrimitive ? () => 0 : prop === \"then\" ? undefined : stub,\n" +
+				"\tapply: () => stub,\n" +
+				"\tconstruct: () => stub,\n" +
+				"});\nexport default stub;\n";
+			const packages = new Map<string, Map<string, string>>();
+			for (const [specifier, names] of specifiers) {
+				const segments = specifier.split("/");
+				const packageName = specifier.startsWith("@") ? segments.slice(0, 2).join("/") : (segments[0] ?? specifier);
+				const subpath = specifier.startsWith("@") ? segments.slice(2).join("/") : segments.slice(1).join("/");
+				const file = subpath === "" ? "index.mjs" : `${subpath}.mjs`;
+				const target = join(modules, packageName, file);
+				mkdirSync(dirname(target), { recursive: true });
+				writeFileSync(target, stubSource + [...names].map((name) => `export const ${name} = stub;`).join("\n") + "\n");
+				const exportsMap = packages.get(packageName) ?? new Map<string, string>();
+				exportsMap.set(subpath === "" ? "." : `./${subpath}`, `./${file}`);
+				packages.set(packageName, exportsMap);
+			}
+			for (const [packageName, exportsMap] of packages) {
+				writeFileSync(join(modules, packageName, "package.json"), JSON.stringify({
+					name: packageName,
+					type: "module",
+					exports: Object.fromEntries(exportsMap),
+				}));
+			}
+		};
+		const modules = join(dirname(compiled), "node_modules");
+		writeStubModules(modules);
+		mkdirSync(join(modules, "@xterm"), { recursive: true });
+		symlinkSync(join(root, "node_modules", "@xterm", "headless"), join(modules, "@xterm", "headless"), "junction");
 		const result = spawnSync("node", ["--input-type=module", "--eval", `
 			import assert from "node:assert/strict";
 			import factory from ${JSON.stringify(pathToFileURL(compiled).href)};
@@ -399,25 +462,72 @@ describe("host presentation activation", () => {
 		assert.match(result.stdout, /NODE_HOST_REJECTED/);
 	});
 
-	it("rejects omp activation when its required renderer module is absent, without fallback", async () => {
-		const registered: Array<typeof definition> = [];
-		const api = {
-			arktype: {},
-			registerTool: (tool: typeof definition) => registered.push(tool),
-		} as unknown as ExtensionAPI;
-		let activations = 0;
-		const activate = withHostPresentation((host): ActivatedExtension => {
-			activations++;
-			host.registerTool(definition);
-			return { store: () => new SessionStore({ maxSessions: 10, lruProtectedCount: 2 }), kill: async () => false };
-		});
-		const result = activate(api);
-		assert.ok(result instanceof Promise);
-		await assert.rejects(result, {
-			code: "ERR_MODULE_NOT_FOUND",
-			message: /@oh-my-pi\/pi-tui/,
-		});
-		assert.equal(activations, 0);
-		assert.deepEqual(registered, []);
+	it("rejects omp activation when its required renderer module is absent, without fallback", (t) => {
+		const temporary = mkdtempSync(join(tmpdir(), "omp-missing-renderer-"));
+		t.after(() => rmSync(temporary, { recursive: true, force: true }));
+		const root = fileURLToPath(new URL("../", import.meta.url));
+		const compiled = join(temporary, "presentation.mjs");
+		const build = spawnSync(process.execPath, [
+			"build", fileURLToPath(new URL("../fork-features/omp-presentation.ts", import.meta.url)),
+			"--target=bun", "--packages=external", "--external", "@earendil-works/*", "--outfile", compiled,
+		], { cwd: root, encoding: "utf8" });
+		assert.equal(build.status, 0, `${build.stdout}\n${build.stderr}`);
+		// --external "@earendil-works/*" leaves the bundle's imports verbatim.
+		// Stage a node_modules that links every imported package to the
+		// repository's real copy — @earendil-works/* names to the @oh-my-pi/*
+		// packages they are resolved to on the real host — except the
+		// @oh-my-pi/pi-tui specifier, which must stay absent so the
+		// wrapper's own import("@oh-my-pi/pi-tui/tools") fails with
+		// ERR_MODULE_NOT_FOUND (@earendil-works/pi-tui is still linked: the
+		// bundle reads it at module scope). Linked host packages resolve
+		// their own dependencies from their real locations, so the staged
+		// dir only needs the packages the bundle itself imports. Bun's
+		// fallback/auto-install would otherwise satisfy the missing package
+		// from its global cache; the child runs with --no-install to keep
+		// it genuinely unresolved.
+		const linkRealModules = (modules: string): void => {
+			const bundle = readFileSync(compiled, "utf8");
+			const staged = new Set<string>();
+			for (const match of bundle.matchAll(/(?:import|export)\s+[^"']*?from\s*["']([^"']+)["']|import\(\s*["']([^"']+)["']/g)) {
+				const specifier = match[1] ?? match[2];
+				if (specifier.startsWith(".") || specifier.startsWith("node:")) continue;
+				const segments = specifier.split("/");
+				const base = specifier.startsWith("@") ? segments.slice(0, 2).join("/") : (segments[0] ?? specifier);
+				if (specifier.startsWith("node:") || builtinModules.includes(base)) continue;
+				const realName = base.startsWith("@earendil-works/") ? base.replace("@earendil-works/", "@oh-my-pi/") : base;
+				if (base === "@oh-my-pi/pi-tui" || staged.has(base)) continue;
+				staged.add(base);
+				const source = join(root, "node_modules", realName);
+				if (!existsSync(source)) continue;
+				mkdirSync(dirname(join(modules, base)), { recursive: true });
+				symlinkSync(source, join(modules, base), "junction");
+			}
+		};
+		const modules = join(dirname(compiled), "node_modules");
+		linkRealModules(modules);
+		const driver = join(temporary, "driver.mjs");
+		writeFileSync(driver, `
+			import assert from "node:assert/strict";
+			import { withHostPresentation } from ${JSON.stringify(pathToFileURL(compiled).href)};
+			let activations = 0;
+			let registrations = 0;
+			const activate = withHostPresentation((host) => {
+				activations++;
+				host.registerTool({ name: "exec_command" });
+				return { store: () => null, kill: async () => false };
+			});
+			const result = activate({ arktype: {}, registerTool() { registrations++; } });
+			assert.ok(result instanceof Promise);
+			await assert.rejects(result, {
+				code: "ERR_MODULE_NOT_FOUND",
+				message: /@oh-my-pi\\/pi-tui/,
+			});
+			assert.equal(activations, 0);
+			assert.equal(registrations, 0);
+			console.log("MISSING_RENDERER_REJECTED");
+		`);
+		const result = spawnSync(process.execPath, ["--no-install", driver], { cwd: temporary, encoding: "utf8" });
+		assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+		assert.match(result.stdout, /MISSING_RENDERER_REJECTED/);
 	});
 });

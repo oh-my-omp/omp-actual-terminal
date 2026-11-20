@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join, parse, sep } from "node:path";
 import { describe, it, type TestContext } from "node:test";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { NativeChild, NativeNode } from "@earendil-works/pi-tui";
 import {
 	BACK_ACTION,
 	CLOSE_ACTION,
@@ -18,7 +19,6 @@ import {
 	VIEW_FRAME,
 	terminalPageFrame,
 	withTerminalSegment,
-	type HudNode,
 	type NativeRenderingState,
 	type TerminalEntry,
 	type TerminalState,
@@ -26,11 +26,23 @@ import {
 import { ExecSession } from "../src/session.ts";
 import { SessionStore } from "../src/session-store.ts";
 
-function nodesOfKind(node: HudNode, kind: string): HudNode[] {
-	return [...(node.k === kind ? [node] : []), ...(node.c ?? []).flatMap((child) => nodesOfKind(child, kind))];
+function isNode(child: NativeChild): child is NativeNode {
+	return "k" in child;
 }
 
-function onlyNode(node: HudNode, kind: string): HudNode {
+function childNodes(node: NativeNode): NativeNode[] {
+	return (node.c ?? []).filter(isNode);
+}
+
+function isKind<K extends NativeNode["k"]>(node: NativeNode, kind: K): node is Extract<NativeNode, { readonly k: K }> {
+	return node.k === kind;
+}
+
+function nodesOfKind<K extends NativeNode["k"]>(node: NativeNode, kind: K): Extract<NativeNode, { readonly k: K }>[] {
+	return [...(isKind(node, kind) ? [node] : []), ...childNodes(node).flatMap((child) => nodesOfKind(child, kind))];
+}
+
+function onlyNode<K extends NativeNode["k"]>(node: NativeNode, kind: K): Extract<NativeNode, { readonly k: K }> {
 	const matches = nodesOfKind(node, kind);
 	assert.equal(matches.length, 1, `expected one ${kind} node`);
 	return matches[0]!;
@@ -70,13 +82,13 @@ function exited(exitCode: number | null, ranMs = 2500): Extract<TerminalState, {
 	return { kind: "exited", exitCode, signal: null, failure: null, exitedAt: new Date(2026, 0, 2, 3, 4, 5).getTime() + ranMs };
 }
 
-function ansiText(node: HudNode): string {
+function ansiText(node: NativeNode): string {
 	const text = onlyNode(node, "ansi").p?.text;
 	assert.ok(typeof text === "string");
 	return text;
 }
 
-function terminalCount(segment: HudNode): number {
+function terminalCount(segment: NativeNode): number {
 	assert.equal(segment.p?.role, "omp.hud.seg");
 	const spans = onlyNode(segment, "text").p?.spans;
 	assert.ok(Array.isArray(spans));
@@ -87,7 +99,7 @@ function terminalCount(segment: HudNode): number {
 	return Number(span.t);
 }
 
-function ompSegment(key: string, icon: string, act: string): HudNode {
+function ompSegment(key: string, icon: string, act: string): NativeNode {
 	return {
 		k: "row",
 		key,
@@ -96,8 +108,8 @@ function ompSegment(key: string, icon: string, act: string): HudNode {
 	};
 }
 
-function ompPillsRow(segments: readonly HudNode[]): HudNode {
-	const pills = segments.length > 0 ? [{ k: "row", p: { role: "omp.hud.pill", align: "center" }, c: [...segments], key: "running" }] : [];
+function ompPillsRow(segments: readonly NativeNode[]): NativeNode {
+	const pills: NativeNode[] = segments.length > 0 ? [{ k: "row", p: { role: "omp.hud.pill", align: "center" }, c: [...segments], key: "running" }] : [];
 	return { k: "row", p: { role: "omp.hud", justify: "end", hidden: pills.length === 0 || undefined }, c: pills };
 }
 
@@ -114,40 +126,50 @@ function pillChildren(row: unknown): readonly unknown[] {
 	return pill.c;
 }
 
-function withRole(node: HudNode, role: string): HudNode[] {
-	return [...(node.p?.role === role ? [node] : []), ...(node.c ?? []).flatMap((child) => withRole(child, role))];
+function withRole(node: NativeNode, role: string): NativeNode[] {
+	return [...(node.p?.role === role ? [node] : []), ...childNodes(node).flatMap((child) => withRole(child, role))];
 }
 
-function onlyRole(node: HudNode, role: string): HudNode {
+function onlyRole(node: NativeNode, role: string): NativeNode {
 	const matches = withRole(node, role);
 	assert.equal(matches.length, 1, `expected one ${role} node`);
 	return matches[0]!;
 }
 
-function selectedOf(view: HudNode): unknown {
+function onlyRoleOf<K extends NativeNode["k"]>(node: NativeNode, role: string, kind: K): Extract<NativeNode, { readonly k: K }> {
+	const match = onlyRole(node, role);
+	assert.ok(isKind(match, kind), `${role} is a ${kind} node`);
+	return match;
+}
+
+function selectedOf(view: NativeNode): unknown {
 	const lists = nodesOfKind(view, "list");
 	return lists.length === 0 ? null : lists[0]!.p?.selected;
 }
 
-function listItems(view: HudNode): { readonly key: string | undefined; readonly tone: unknown; readonly value: unknown }[] {
+function listItems(view: NativeNode): { readonly key: string | undefined; readonly tone: unknown; readonly value: unknown }[] {
 	return nodesOfKind(onlyNode(view, "list"), "item").map((item) => ({ key: item.key, tone: item.p?.tone, value: item.p?.value }));
 }
 
-function outputOf(view: HudNode): { readonly kind: "ansi" | "none"; readonly text: unknown; readonly node: HudNode } {
+function outputOf(view: NativeNode): { readonly kind: "ansi" | "none"; readonly text: unknown; readonly node: NativeNode } {
 	const out = onlyRole(view, "omp.jobs.out");
 	const ansi = withRole(out, "omp.jobs.output");
-	if (ansi.length > 0) return { kind: "ansi", text: ansi[0]!.p?.text, node: ansi[0]! };
-	const none = onlyRole(out, "omp.jobs.nooutput");
+	const output = ansi[0];
+	if (output !== undefined) {
+		assert.ok(isKind(output, "ansi"));
+		return { kind: "ansi", text: output.p?.text, node: output };
+	}
+	const none = onlyRoleOf(out, "omp.jobs.nooutput", "text");
 	return { kind: "none", text: none.p?.text, node: none };
 }
 
-function factsOf(view: HudNode): { readonly k: string; readonly v: unknown }[] {
-	const items = onlyRole(view, "omp.jobs.facts").p?.items;
-	assert.ok(Array.isArray(items));
-	return items as { readonly k: string; readonly v: unknown }[];
+function factsOf(view: NativeNode) {
+	const items = onlyRoleOf(view, "omp.jobs.facts", "kv").p?.items;
+	assert.ok(items);
+	return items;
 }
 
-function buttonActs(node: HudNode): unknown[] {
+function buttonActs(node: NativeNode): unknown[] {
 	return nodesOfKind(node, "row").filter((row) => row.p?.role === "omp.btn").map((row) => row.p?.actions);
 }
 
@@ -221,7 +243,7 @@ describe("terminal HUD view description", () => {
 		const now = entries[0]!.startedAt + 4500;
 		const view = describeTerminalsSheet(entries, entries[0], now);
 		const split = onlyRole(view, "omp.jobs.split");
-		assert.deepEqual(split.c?.map((child) => child.p?.role), ["omp.jobs.master", "omp.jobs.detail"]);
+		assert.deepEqual(childNodes(split).map((child) => child.p?.role), ["omp.jobs.master", "omp.jobs.detail"]);
 		assert.equal(selectedOf(view), "s3", "the first session is selected by default");
 		assert.deepEqual(listItems(view), [
 			{ key: "s3", tone: "pending", value: [{ t: "4s", s: "mono" }] },
@@ -229,10 +251,10 @@ describe("terminal HUD view description", () => {
 			{ key: "s19", tone: "error", value: [{ t: "1m05s", s: "mono" }] },
 		]);
 		assert.deepEqual(onlyNode(view, "list").p?.actions, { click: "select", dblclick: "activate" });
-		const footer = view.c?.at(-1);
+		const footer = childNodes(view).at(-1);
 		assert.ok(footer);
 		assert.equal(footer.p?.role, "omp.actions");
-		assert.equal(onlyRole(footer, "omp.jobs.summary").p?.text, "1 running · 3 stored");
+		assert.equal(onlyRoleOf(footer, "omp.jobs.summary", "text").p?.text, "1 running · 3 stored");
 		assert.deepEqual(buttonActs(footer), [{ click: CLOSE_ACTION }]);
 	});
 
@@ -249,11 +271,10 @@ describe("terminal HUD view description", () => {
 			const selected = entry(7, state);
 			const view = describeTerminalsSheet([selected], selected, now);
 			const status = onlyRole(view, "omp.jobs.status");
-			const chip = onlyRole(status, "omp.jobs.state");
+			const chip = onlyRoleOf(status, "omp.jobs.state", "text");
 			assert.deepEqual(chip.p?.spans, [glyph, { t: ` ${label}` }]);
 			assert.equal(chip.p?.tone, tone);
-			const age = onlyRole(status, "omp.jobs.age");
-			assert.equal(age.k, "elapsed");
+			const age = onlyRoleOf(status, "omp.jobs.age", "elapsed");
 			if (state.kind === "running") {
 				assert.equal(age.p?.age, 9000);
 				assert.equal(age.p?.stopped, undefined, "a running age keeps ticking");
@@ -261,7 +282,7 @@ describe("terminal HUD view description", () => {
 				assert.equal(age.p?.age, 2500);
 				assert.equal(age.p?.stopped, 2500, "an exited age is frozen at its exit");
 			}
-			assert.deepEqual(onlyRole(status, "omp.jobs.id").p?.spans, [{ t: "exec · #7", s: "mono" }]);
+			assert.deepEqual(onlyRoleOf(status, "omp.jobs.id", "text").p?.spans, [{ t: "exec · #7", s: "mono" }]);
 			assert.deepEqual(buttonActs(status), [
 				...(state.kind === "running" ? [{ click: KILL_ACTION }] : []),
 				{ click: OPEN_TERMINAL_ACTION },
@@ -274,8 +295,8 @@ describe("terminal HUD view description", () => {
 		assert.equal(selectedOf(view), null);
 		assert.equal(withRole(view, "omp.jobs.split").length, 0);
 		const empty = onlyRole(view, "omp.jobs.empty");
-		assert.equal(onlyRole(empty, "omp.jobs.empty.title").p?.text, "No terminals");
-		assert.match(String(onlyRole(empty, "omp.jobs.empty.note").p?.text), /exec_command/);
+		assert.equal(onlyRoleOf(empty, "omp.jobs.empty.title", "text").p?.text, "No terminals");
+		assert.match(String(onlyRoleOf(empty, "omp.jobs.empty.note", "text").p?.text), /exec_command/);
 		assert.deepEqual(buttonActs(view), [{ click: CLOSE_ACTION }]);
 	});
 
@@ -372,7 +393,7 @@ describe("terminal HUD page description", () => {
 });
 
 interface HudComponent {
-	describe(): HudNode;
+	describe(): NativeNode;
 	handleNativeEvent(event: unknown): void;
 	invalidate(): void;
 	dispose?(): void;
@@ -420,10 +441,10 @@ function waitFor(
 }
 
 class FakeInteractiveMode {
-	ompSegments: readonly HudNode[] = [];
+	ompSegments: readonly NativeNode[] = [];
 	renders = 0;
 	readonly ui = { requestRender: () => { this.renders++; } };
-	private cached: { readonly segments: readonly HudNode[]; readonly node: HudNode } | undefined;
+	private cached: { readonly segments: readonly NativeNode[]; readonly node: NativeNode } | undefined;
 
 	describeHudPills(): unknown {
 		if (this.cached?.segments !== this.ompSegments) this.cached = { segments: this.ompSegments, node: ompPillsRow(this.ompSegments) };
@@ -846,8 +867,9 @@ describe("terminal HUD lifecycle with real sessions", () => {
 		assert.ok(h.renders > before);
 		assert.notStrictEqual(exitedView, initial);
 		assert.deepEqual(listItems(exitedView).map(({ key, tone }) => ({ key, tone })), [{ key: `s${session.id}`, tone: "success" }]);
-		assert.equal(onlyRole(exitedView, "omp.jobs.summary").p?.text, "0 running · 1 stored");
-		assert.equal(onlyRole(exitedView, "omp.jobs.age").p?.stopped, onlyRole(exitedView, "omp.jobs.age").p?.age, "a real exit freezes the age");
+		assert.equal(onlyRoleOf(exitedView, "omp.jobs.summary", "text").p?.text, "0 running · 1 stored");
+		const exitedAge = onlyRoleOf(exitedView, "omp.jobs.age", "elapsed");
+		assert.equal(exitedAge.p?.stopped, exitedAge.p?.age, "a real exit freezes the age");
 		assert.equal(h.mounted, true);
 		assert.equal(terminalCount(h.segment.describe()), 1, "exited sessions remain in the pill count");
 		assert.equal(h.segment.describe().p?.title, "1 terminal · 0 running", "the segment re-describes on a real exit");
@@ -1018,6 +1040,6 @@ describe("terminal HUD lifecycle with real sessions", () => {
 		await pageCall.promise;
 		await h.waitForCustom(3);
 		assert.equal(selectedOf(h.sheet.describe()), null);
-		assert.equal(onlyRole(h.sheet.describe(), "omp.jobs.empty.title").p?.text, "No terminals");
+		assert.equal(onlyRoleOf(h.sheet.describe(), "omp.jobs.empty.title", "text").p?.text, "No terminals");
 	});
 });

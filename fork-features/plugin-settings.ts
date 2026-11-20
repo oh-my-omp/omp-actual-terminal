@@ -1,4 +1,5 @@
 import manifest from "../package.json";
+import type * as Loader from "@oh-my-pi/pi-coding-agent/extensibility/plugins/loader";
 
 export const PLUGIN_NAME = "omp-unified-exec";
 
@@ -16,15 +17,11 @@ export function parseGraceReclaim(settings: Readonly<Record<string, unknown>>): 
 }
 
 export async function loadPluginSettingsReader(): Promise<PluginSettingsReader> {
-	const module: unknown = await import("@oh-my-pi/pi-coding-agent/extensibility/plugins/loader");
-	if (typeof module !== "object" || module === null ||
-		!("getPluginSettings" in module) || typeof module.getPluginSettings !== "function") {
+	// `Partial` says what the guard below checks: the installed omp may not export `getPluginSettings`.
+	const loader: Partial<typeof Loader> = await import("@oh-my-pi/pi-coding-agent/extensibility/plugins/loader");
+	const getPluginSettings = loader.getPluginSettings;
+	if (typeof getPluginSettings !== "function") {
 		throw new Error("omp-unified-exec: extensibility/plugins/loader lacks getPluginSettings");
 	}
-	const getPluginSettings = module.getPluginSettings as (plugin: string, cwd: string) => Promise<unknown>;
-	return async (cwd) => {
-		const value = await getPluginSettings(PLUGIN_NAME, cwd);
-		if (typeof value !== "object" || value === null) throw new Error("omp-unified-exec: getPluginSettings returned no settings object");
-		return value as Readonly<Record<string, unknown>>;
-	};
+	return async (cwd) => getPluginSettings(PLUGIN_NAME, cwd);
 }

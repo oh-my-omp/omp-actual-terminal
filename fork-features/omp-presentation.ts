@@ -1,4 +1,15 @@
-import type { ExtensionAPI, ToolDefinition, TruncationResult } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	Settings,
+	ToolDefinition,
+	ToolRenderResultOptions,
+	TruncationResult,
+} from "@earendil-works/pi-coding-agent";
+import type * as Registry from "@oh-my-pi/pi-coding-agent/config/registry";
+import type * as GhCache from "@oh-my-pi/pi-coding-agent/tools/gh-cache-invalidation";
+import type * as ThemeModule from "@oh-my-pi/pi-tui/theme";
+import type * as PiTuiTools from "@oh-my-pi/pi-tui/tools";
+import type { Component } from "@earendil-works/pi-tui";
 
 import { sanitizeOutputText } from "../src/output-safety.ts";
 import { tr } from "./omomp-shared/i18n.ts";
@@ -36,53 +47,52 @@ export interface ShellResult {
 	readonly isError: boolean;
 }
 
-interface RenderOptions {
-	readonly isPartial?: boolean;
-}
-
-type HostValue = unknown;
-
-interface OmpShellRenderer {
-	renderCall(args: ShellArgs, options: RenderOptions, theme: HostValue): HostValue;
-	renderResult(result: ShellResult, options: RenderOptions, theme: HostValue, args?: ShellArgs): HostValue;
-	describeCall(args: ShellArgs, options: RenderOptions): HostValue;
-	describeResult(result: ShellResult, options: RenderOptions, args?: ShellArgs): HostValue;
-	readonly mergeCallAndResult: boolean;
-	readonly inline: boolean;
-}
-
 type StreamedArgs<K extends string> = { readonly [P in K]?: unknown } | undefined;
 
-export interface HostResult {
-	readonly content?: unknown;
-	readonly details?: unknown;
-	readonly isError?: unknown;
+function streamedArgs<K extends string>(args: unknown): StreamedArgs<K> {
+	return typeof args === "object" ? (args ?? undefined) : undefined;
 }
 
-interface OmpToolHooks<K extends string> {
-	renderCall(args: StreamedArgs<K>, options: RenderOptions, theme: HostValue): HostValue;
-	renderResult(result: HostResult, options: RenderOptions, theme: HostValue, args?: StreamedArgs<K>): HostValue;
-	describeCall(args: StreamedArgs<K>, options: RenderOptions): HostValue;
-	describeResult(result: HostResult, options: RenderOptions, args?: StreamedArgs<K>): HostValue;
-	readonly mergeCallAndResult: boolean;
-	readonly inline: boolean;
-}
+/**
+ * The bash entry of `toolRenderers` with the members the delegate below
+ * requires. `describeCall`/`describeResult`/`mergeCallAndResult`/`inline` are
+ * optional on the host `ToolRenderer`; {@link parseShellRenderer} proves them
+ * present and narrows the entry to this shape.
+ */
+type BashRenderer = Required<
+	Pick<PiTuiTools.ToolRenderer, "renderCall" | "renderResult" | "describeCall" | "describeResult" | "mergeCallAndResult" | "inline">
+>;
 
-function parseShellRenderer(value: unknown): OmpShellRenderer {
-	const bash = value as Partial<Record<keyof OmpShellRenderer, unknown>> | undefined;
+/**
+ * Renderer hooks spliced onto a presented tool definition, typed by the host's
+ * `ToolDefinition` hook signatures. `mergeCallAndResult` and `inline` are
+ * forwarded for `applyToolProxy` (they are `ToolRenderer` members, absent from
+ * `ToolDefinition`).
+ */
+type OmpToolHooks = Required<Pick<ToolDefinition, "renderCall" | "renderResult" | "describeCall" | "describeResult">> &
+	Required<Pick<PiTuiTools.ToolRenderer, "mergeCallAndResult" | "inline">>;
+
+function parseShellRenderer(value: Partial<Pick<typeof PiTuiTools, "toolRenderers">>): BashRenderer {
+	const bash = value.toolRenderers?.bash;
+	if (!bash) {
+		throw new Error(
+			"omp-unified-exec: @oh-my-pi/pi-tui/tools toolRenderers.bash no longer provides renderCall/renderResult/describeCall/describeResult/mergeCallAndResult/inline; requalify fork-features/omp-presentation.ts for this omp version",
+		);
+	}
+	const { renderCall, renderResult, describeCall, describeResult, mergeCallAndResult, inline } = bash;
 	if (
-		typeof bash?.renderCall !== "function" ||
-		typeof bash.renderResult !== "function" ||
-		typeof bash.describeCall !== "function" ||
-		typeof bash.describeResult !== "function" ||
-		typeof bash.mergeCallAndResult !== "boolean" ||
-		typeof bash.inline !== "boolean"
+		typeof renderCall !== "function" ||
+		typeof renderResult !== "function" ||
+		typeof describeCall !== "function" ||
+		typeof describeResult !== "function" ||
+		typeof mergeCallAndResult !== "boolean" ||
+		typeof inline !== "boolean"
 	) {
 		throw new Error(
 			"omp-unified-exec: @oh-my-pi/pi-tui/tools toolRenderers.bash no longer provides renderCall/renderResult/describeCall/describeResult/mergeCallAndResult/inline; requalify fork-features/omp-presentation.ts for this omp version",
 		);
 	}
-	return bash as OmpShellRenderer;
+	return { renderCall, renderResult, describeCall, describeResult, mergeCallAndResult, inline };
 }
 
 export type ResultView =
@@ -136,15 +146,11 @@ type PersistedDetails = {
 		| "found"]?: unknown;
 };
 
-function messageView(result: HostResult, isError: boolean): ResultView {
-	const text = Array.isArray(result.content)
-		? result.content
-				.map((block: { readonly type?: unknown; readonly text?: unknown } | null) =>
-					block?.type === "text" && typeof block.text === "string" ? block.text : "",
-				)
-				.filter((text) => text.length > 0)
-				.join("\n")
-		: "";
+function messageView(result: PiTuiTools.ToolRenderResult, isError: boolean): ResultView {
+	const text = result.content
+		.map((block) => (block.type === "text" && typeof block.text === "string" ? block.text : ""))
+		.filter((text) => text.length > 0)
+		.join("\n");
 	return { kind: "message", text: sanitizeOutputText(text), isError };
 }
 
@@ -156,9 +162,27 @@ function optionalNumber(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-export function parseResultView(result: HostResult, isPartial: boolean): ResultView {
-	const details =
-		typeof result.details === "object" && result.details !== null ? (result.details as PersistedDetails) : undefined;
+/**
+ * A `details.truncation` value persisted by this plugin's own tool results,
+ * parsed at the boundary against the host's `TruncationResult` contract
+ * (required fields only; optional fields are read through the interface).
+ */
+function isTruncationResult(value: unknown): value is TruncationResult {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"content" in value &&
+		typeof value.content === "string" &&
+		"totalLines" in value &&
+		typeof value.totalLines === "number" &&
+		"totalBytes" in value &&
+		typeof value.totalBytes === "number"
+	);
+}
+
+export function parseResultView(result: PiTuiTools.ToolRenderResult, isPartial: boolean): ResultView {
+	const details: PersistedDetails | undefined =
+		typeof result.details === "object" && result.details !== null ? result.details : undefined;
 	if (details?.operation === "kill_session" && details.found === false) return messageView(result, true);
 	if (typeof details?.output !== "string") return messageView(result, result.isError === true);
 	const output = sanitizeOutputText(details.output);
@@ -167,7 +191,7 @@ export function parseResultView(result: HostResult, isPartial: boolean): ResultV
 	const wallSeconds = optionalNumber(details.wall_time_seconds);
 	const wallTimeMs = wallSeconds === undefined ? undefined : wallSeconds * 1000;
 	const marker = truncationMarker(
-		details.truncation as TruncationResult | undefined,
+		isTruncationResult(details.truncation) ? details.truncation : undefined,
 		typeof details.log_path === "string" ? details.log_path : undefined,
 	);
 	const failure = optionalString(details.failure_message);
@@ -315,20 +339,35 @@ export function killShellArgs(args: StreamedArgs<"session_id" | "signal">): Shel
 	return { command: tr(`# kill ${target} (${signal})`, `# 结束 ${target}（${signal}）`) };
 }
 
+/**
+ * `ToolDefinition` render hooks return a `Component`, but the host
+ * `ToolRenderer` signature permits `undefined`. The presented tools cannot
+ * paint nothing silently; fail loudly instead of discarding the result.
+ */
+function requireComponent(component: Component | undefined): Component {
+	if (component === undefined) {
+		throw new Error(
+			"omp-unified-exec: @oh-my-pi/pi-tui/tools toolRenderers.bash rendered no component; requalify fork-features/omp-presentation.ts for this omp version",
+		);
+	}
+	return component;
+}
+
 function delegateToShell<K extends string>(
-	bash: OmpShellRenderer,
+	bash: BashRenderer,
 	adaptArgs: (args: StreamedArgs<K>) => ShellArgs,
-): OmpToolHooks<K> {
-	const adaptResult = (result: HostResult, options: RenderOptions): ShellResult =>
-		toShellResult(parseResultView(result, options.isPartial === true));
+): OmpToolHooks {
+	const adaptResult = (result: PiTuiTools.ToolRenderResult, options: ToolRenderResultOptions): ShellResult =>
+		toShellResult(parseResultView(result, options.isPartial));
 	return {
-		renderCall: (args, options, theme) => bash.renderCall(adaptArgs(args), options, theme),
+		renderCall: (args, options, theme) =>
+			requireComponent(bash.renderCall(adaptArgs(streamedArgs(args)), options, theme)),
 		renderResult: (result, options, theme, args) =>
-			bash.renderResult(adaptResult(result, options), options, theme, adaptArgs(args)),
-		describeCall: (args, options) => bash.describeCall(adaptArgs(args), options),
+			requireComponent(bash.renderResult(adaptResult(result, options), options, theme, adaptArgs(streamedArgs(args)))),
+		describeCall: (args, options) => bash.describeCall(adaptArgs(streamedArgs(args)), options),
 		describeResult: (result, options, args) => {
 			const shell = adaptResult(result, options);
-			const view = bash.describeResult(shell, options, adaptArgs(args)) as { readonly tone?: unknown } | undefined;
+			const view = bash.describeResult(shell, options, adaptArgs(streamedArgs(args)));
 			return shell.isError && view !== undefined ? { ...view, tone: view.tone ?? "error" } : view;
 		},
 		mergeCallAndResult: bash.mergeCallAndResult,
@@ -347,19 +386,19 @@ function isShellPresented(name: string): name is ShellPresentedTool {
  * The bash renderer is required; a missing or reshaped one fails plugin loading.
  */
 async function presentOnOmp(pi: ExtensionAPI): Promise<ExtensionAPI> {
-	const { toolRenderers } = await import("@oh-my-pi/pi-tui/tools");
-	const bash = parseShellRenderer(toolRenderers.bash);
-	const hooks: Record<ShellPresentedTool, OmpToolHooks<string>> = {
+	const bash = parseShellRenderer(await import("@oh-my-pi/pi-tui/tools"));
+	const hooks: Record<ShellPresentedTool, OmpToolHooks> = {
 		exec_command: delegateToShell(bash, execShellArgs),
 		write_stdin: delegateToShell(bash, writeStdinShellArgs),
 		kill_session: delegateToShell(bash, killShellArgs),
 	};
 	const registerTool: ExtensionAPI["registerTool"] = (definition) => {
-		const topLevel = { ...definition, loadMode: "essential" };
+		const topLevel = { ...definition, loadMode: "essential" as const };
 		const presented = isShellPresented(definition.name) ? { ...topLevel, ...hooks[definition.name] } : topLevel;
-		pi.registerTool(presented as unknown as ToolDefinition);
+		pi.registerTool(presented);
 	};
-	return Object.create(pi, { registerTool: { value: registerTool } }) as ExtensionAPI;
+	const wrapped: ExtensionAPI = Object.create(pi, { registerTool: { value: registerTool } });
+	return wrapped;
 }
 
 export interface ActivatedExtension {
@@ -368,41 +407,36 @@ export interface ActivatedExtension {
 }
 
 async function loadOmpAppearance(): Promise<() => TerminalAppearance> {
-	const themeModule: unknown = await import("@oh-my-pi/pi-tui/theme");
-	if (
-		typeof themeModule !== "object" ||
-		themeModule === null ||
-		!("isLightTheme" in themeModule) ||
-		typeof themeModule.isLightTheme !== "function" ||
-		!("getCurrentThemeName" in themeModule) ||
-		typeof themeModule.getCurrentThemeName !== "function"
-	) {
+	const themeModule: Partial<Pick<typeof ThemeModule, "isLightTheme" | "getCurrentThemeName">> =
+		await import("@oh-my-pi/pi-tui/theme");
+	const { isLightTheme, getCurrentThemeName } = themeModule;
+	if (typeof isLightTheme !== "function" || typeof getCurrentThemeName !== "function") {
 		throw new Error("omp-unified-exec: @oh-my-pi/pi-tui/theme lacks isLightTheme/getCurrentThemeName");
 	}
-	const isLightTheme = themeModule.isLightTheme as (name?: string) => boolean;
-	const getCurrentThemeName = themeModule.getCurrentThemeName as () => string | undefined;
 	return () => (isLightTheme(getCurrentThemeName()) ? "light" : "dark");
 }
 
 async function loadOmpShellPath(host: ExtensionAPI): Promise<() => string | undefined> {
-	const registry: unknown = await import("@oh-my-pi/pi-coding-agent/config/registry");
-	if (typeof registry !== "object" || registry === null ||
-		!("lookup" in registry) || typeof registry.lookup !== "function") {
+	const registry: Partial<Pick<typeof Registry, "lookup">> =
+		await import("@oh-my-pi/pi-coding-agent/config/registry");
+	const { lookup } = registry;
+	if (typeof lookup !== "function") {
 		throw new Error("omp-unified-exec: settings registry lacks lookup");
 	}
-	const handle: unknown = registry.lookup("shellPath");
-	const runtime: unknown = "pi" in host ? host.pi : undefined;
-	if (typeof handle !== "object" || handle === null ||
-		!("get" in handle) || typeof handle.get !== "function" ||
-		typeof runtime !== "object" || runtime === null || !("settings" in runtime)) {
+	const handle = lookup("shellPath");
+	const settings =
+		"pi" in host && typeof host.pi === "object" && host.pi !== null && "settings" in host.pi
+			? host.pi.settings
+			: undefined;
+	if (handle == null || typeof handle.get !== "function" || settings === undefined) {
 		throw new Error("omp-unified-exec: host lacks shellPath setting or pi.settings scope");
 	}
-	return shellPathReader(handle.get.bind(handle), runtime);
+	return shellPathReader(handle.get.bind(handle), settings);
 }
 
-function shellPathReader(get: (settings: unknown) => unknown, runtime: { readonly settings: unknown }): () => string | undefined {
+function shellPathReader(get: (scope: Registry.ScopeLike) => unknown, settings: Settings): () => string | undefined {
 	return () => {
-		const value: unknown = get(runtime.settings);
+		const value = get(settings);
 		if (value === undefined) return undefined;
 		if (typeof value !== "string") throw new Error("omp-unified-exec: shellPath must be a string or undefined");
 		return value.trim() || undefined;
@@ -410,12 +444,13 @@ function shellPathReader(get: (settings: unknown) => unknown, runtime: { readonl
 }
 
 async function loadGithubCacheInvalidation(): Promise<(command: string) => void> {
-	const module: unknown = await import("@oh-my-pi/pi-coding-agent/tools/gh-cache-invalidation");
-	if (typeof module !== "object" || module === null ||
-		!("invalidateGithubCacheForBashCommand" in module) || typeof module.invalidateGithubCacheForBashCommand !== "function") {
+	const { invalidateGithubCacheForBashCommand }: Partial<
+		Pick<typeof GhCache, "invalidateGithubCacheForBashCommand">
+	> = await import("@oh-my-pi/pi-coding-agent/tools/gh-cache-invalidation");
+	if (typeof invalidateGithubCacheForBashCommand !== "function") {
 		throw new Error("omp-unified-exec: tools/gh-cache-invalidation lacks invalidateGithubCacheForBashCommand");
 	}
-	return module.invalidateGithubCacheForBashCommand as (command: string) => void;
+	return invalidateGithubCacheForBashCommand;
 }
 
 export function withHostPresentation(
