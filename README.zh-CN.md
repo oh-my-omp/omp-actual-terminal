@@ -460,7 +460,7 @@ omomp 中 `omp-unified-exec` 段的 `stop` 选择判定方式：
 | `auto`（默认） | OMP 的 judge 角色解析到模型时用 `judge`，否则 `@smol` 解析到模型时用 `llm`，否则用 `todo` |
 | `judge` | 经 OMP 的 judge 角色链做一次“完成 / 未完成”选择题，像 OMP 自己的判定一样计入会话用量 |
 | `llm` | 依次用 `@smol` 角色的聊天模型，在第一行回答 `DONE` 或 `NOT_DONE`；provider 报错时换下一个 |
-| `todo` | omp-todo-more 的列表有项目且每一项都是 completed 或 abandoned 时算完成；有 pending、in_progress 或 blocked 项则未完成；列表为空或没有 omp-todo-more 时无法判定 |
+| `todo` | omp-todo-more 的列表有项目且每一项都是 completed 或 abandoned 时算完成；有 pending 或 in_progress 项则未完成；列表为空或没有 omp-todo-more 时无法判定 |
 | `off` | 不判定；生命周期通知（`abnormal_return`、`unread`、`reclaim_due`、`reclaimed`）不送达，monitor、唤醒和等待输入通知照常送达 |
 
 显式选择的判定方式不可用时不判定；判定出错或超过 30 秒时还会显示一条警告。判定为已完成时显示一条注明判定方式的提示。
