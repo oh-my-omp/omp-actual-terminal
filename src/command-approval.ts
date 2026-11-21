@@ -3,7 +3,7 @@ import type { BashApprovalPatternRule as HostBashApprovalPatternRule } from "@oh
 import type * as ApprovalHost from "@oh-my-pi/pi-coding-agent/tools/approval";
 import type * as BashHost from "@oh-my-pi/pi-coding-agent/tools/bash";
 import type * as ShellTokenize from "@oh-my-pi/pi-coding-agent/tools/shell-tokenize";
-import { isPosixShell } from "../src/shell.ts";
+import { isPosixShell } from "./shell.ts";
 import type { HostBindingState, HostSettings, SessionRegistry } from "./session-binding.ts";
 
 export type BashApprovalPatternRule = Pick<HostBashApprovalPatternRule, "match" | "approval">;
@@ -253,13 +253,13 @@ export function approveBoundCommand(host: CommandApprovalHost, binding: HostBind
 
 function exportedFunction<M extends object, K extends keyof M>(module: M, name: K, from: string): M[K] {
 	const value = module[name];
-	if (typeof value !== "function") throw new Error(`omp-unified-exec: ${from} lacks ${String(name)}()`);
+	if (typeof value !== "function") throw new Error(`omp-actual-terminal: ${from} lacks ${String(name)}()`);
 	return value;
 }
 
 function settingReader<T>(setting: Setting<T, string> | undefined, name: string): (scope: ScopeLike) => T {
 	const get = setting?.get;
-	if (typeof get !== "function") throw new Error(`omp-unified-exec: exec/settings lacks ${name}.get()`);
+	if (typeof get !== "function") throw new Error(`omp-actual-terminal: exec/settings lacks ${name}.get()`);
 	return (scope) => get.call(setting, scope);
 }
 
@@ -273,7 +273,7 @@ export async function loadCommandApprovalHost(): Promise<CommandApprovalHost> {
 	const registryClass = root.AgentRegistry;
 	const global = registryClass?.global;
 	if (typeof registryClass !== "function" || typeof global !== "function") {
-		throw new Error("omp-unified-exec: host lacks AgentRegistry.global()");
+		throw new Error("omp-actual-terminal: host lacks AgentRegistry.global()");
 	}
 	const registry = global.call(registryClass);
 	const get = exportedFunction(registry, "get", "AgentRegistry");
@@ -281,14 +281,14 @@ export async function loadCommandApprovalHost(): Promise<CommandApprovalHost> {
 	const compound = settingReader(execSettings.cfgBashAllowCompoundCommands, "cfgBashAllowCompoundCommands");
 	const criticalPatterns = root.CRITICAL_BASH_PATTERNS;
 	if (!Array.isArray(criticalPatterns) || !criticalPatterns.every((pattern: unknown) => pattern instanceof RegExp)) {
-		throw new Error("omp-unified-exec: host lacks CRITICAL_BASH_PATTERNS");
+		throw new Error("omp-actual-terminal: host lacks CRITICAL_BASH_PATTERNS");
 	}
 	return {
 		get: (agentId) => get.call(registry, agentId),
 		approvalRules: (sessionSettings) => getBashApprovalPatternRules(patterns(sessionSettings)),
 		allowCompoundCommands: (sessionSettings) => {
 			const value = compound(sessionSettings);
-			if (typeof value !== "boolean") throw new Error("omp-unified-exec: bash.allowCompoundCommands must be boolean");
+			if (typeof value !== "boolean") throw new Error("omp-actual-terminal: bash.allowCompoundCommands must be boolean");
 			return value;
 		},
 		helpers: {

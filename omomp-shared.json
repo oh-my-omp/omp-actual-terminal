@@ -1,4 +1,4 @@
 {
-	"directory": "fork-features/omomp-shared",
+	"directory": "src/omomp-shared",
 	"files": ["i18n.ts", "internal-url.ts", "tern-plugin.ts", "todo-read.ts"]
 }

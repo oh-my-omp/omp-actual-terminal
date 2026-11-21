@@ -2,8 +2,8 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { detectInputPrompt, inputWaitNotice, type InputPrompt, type InputWaitAlert } from "../fork-features/input-wait.ts";
-import { buildNoticeMessage, NoticeDispatcher, type NoticeMessage } from "../fork-features/terminal-notice.ts";
+import { detectInputPrompt, inputWaitNotice, type InputPrompt, type InputWaitAlert } from "../src/input-wait.ts";
+import { buildNoticeMessage, NoticeDispatcher, type NoticeMessage } from "../src/terminal-notice.ts";
 import { CompletionCoordinator } from "../src/completion.ts";
 import { ExecSession } from "../src/session.ts";
 import { TerminalScreen } from "../src/terminal-screen.ts";

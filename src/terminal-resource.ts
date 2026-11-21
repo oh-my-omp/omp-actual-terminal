@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { TerminalProjection, TerminalScreen } from "../src/terminal-screen.ts";
+import type { TerminalProjection, TerminalScreen } from "./terminal-screen.ts";
 
 export type TerminalResource =
 	| { readonly kind: "live"; readonly screen: TerminalScreen; readonly onRead?: () => void }
@@ -10,7 +10,7 @@ interface TerminalRegistry {
 	readonly resources: Map<string, TerminalResource>;
 }
 
-const registrySymbol = Symbol.for("omp-unified-exec.terminal-resources");
+const registrySymbol = Symbol.for("omp-actual-terminal.terminal-resources");
 const processGlobal = globalThis as typeof globalThis & { [registrySymbol]?: TerminalRegistry };
 export const terminalRegistry: TerminalRegistry = processGlobal[registrySymbol] ??= {
 	resources: new Map(),

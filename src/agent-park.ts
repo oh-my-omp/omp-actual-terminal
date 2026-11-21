@@ -35,13 +35,13 @@ export interface AgentLifecycleModules {
 
 function parseRegistry(Class: AgentHostModules["AgentRegistry"]): AgentRegistryHost {
 	if (Class === undefined || typeof Class.global !== "function") {
-		throw new Error("omp-unified-exec: AgentRegistry lacks global()");
+		throw new Error("omp-actual-terminal: AgentRegistry lacks global()");
 	}
 	const registry: Partial<AgentRegistryHost> = Class.global();
 	const get = registry.get;
 	const onChange = registry.onChange;
-	if (typeof get !== "function") throw new Error("omp-unified-exec: AgentRegistry lacks get()");
-	if (typeof onChange !== "function") throw new Error("omp-unified-exec: AgentRegistry lacks onChange()");
+	if (typeof get !== "function") throw new Error("omp-actual-terminal: AgentRegistry lacks get()");
+	if (typeof onChange !== "function") throw new Error("omp-actual-terminal: AgentRegistry lacks onChange()");
 	// Bound: the host registry keeps its state in private fields, so a detached call would lose it.
 	return { get: get.bind(registry), onChange: onChange.bind(registry) };
 }
@@ -59,15 +59,15 @@ export function parseAgentHost(root: AgentHostModules, lifecycleModule: AgentLif
 	const lifecycle = (): AgentLifecycleHost => {
 		const Manager = lifecycleModule.AgentLifecycleManager;
 		if (Manager === undefined || typeof Manager.global !== "function") {
-			throw new Error("omp-unified-exec: AgentLifecycleManager lacks global()");
+			throw new Error("omp-actual-terminal: AgentLifecycleManager lacks global()");
 		}
 		const manager: Partial<AgentLifecycleHost> = Manager.global();
 		const isParking = manager.isParking;
 		const has = manager.has;
 		const ensureLive = manager.ensureLive;
-		if (typeof isParking !== "function") throw new Error("omp-unified-exec: AgentLifecycleManager lacks isParking()");
-		if (typeof has !== "function") throw new Error("omp-unified-exec: AgentLifecycleManager lacks has()");
-		if (typeof ensureLive !== "function") throw new Error("omp-unified-exec: AgentLifecycleManager lacks ensureLive()");
+		if (typeof isParking !== "function") throw new Error("omp-actual-terminal: AgentLifecycleManager lacks isParking()");
+		if (typeof has !== "function") throw new Error("omp-actual-terminal: AgentLifecycleManager lacks has()");
+		if (typeof ensureLive !== "function") throw new Error("omp-actual-terminal: AgentLifecycleManager lacks ensureLive()");
 		return { isParking: isParking.bind(manager), has: has.bind(manager), ensureLive: ensureLive.bind(manager) };
 	};
 	void lifecycle();
@@ -87,7 +87,7 @@ export function parseAgentHost(root: AgentHostModules, lifecycleModule: AgentLif
 				if (type === "removed" || (type === "status_changed" && ref.status === "aborted")) listener(ref);
 			});
 			if (typeof unsubscribe !== "function") {
-				throw new Error("omp-unified-exec: AgentRegistry.onChange() returned no unsubscribe");
+				throw new Error("omp-actual-terminal: AgentRegistry.onChange() returned no unsubscribe");
 			}
 			return () => void unsubscribe();
 		},
@@ -130,7 +130,7 @@ export class ParkedRuntimes<T extends ParkedRuntime> {
 	}
 }
 
-const registrySymbol = Symbol.for("omp-unified-exec.parked-runtimes");
+const registrySymbol = Symbol.for("omp-actual-terminal.parked-runtimes");
 const processGlobal = globalThis as typeof globalThis & { [registrySymbol]?: ParkedRuntimes<ParkedRuntime> };
 
 export function parkedRuntimes<T extends ParkedRuntime>(): ParkedRuntimes<T> {

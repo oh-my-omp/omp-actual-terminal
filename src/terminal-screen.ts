@@ -1,8 +1,8 @@
 import xtermHeadless from "@xterm/headless";
 import type { IBufferCell, IMarker } from "@xterm/headless";
 
-import type { InputScreen } from "../fork-features/input-wait.ts";
-import type { MonitorStart } from "../fork-features/monitor-subscription.ts";
+import type { InputScreen } from "./input-wait.ts";
+import type { MonitorStart } from "./monitor-subscription.ts";
 
 const { Terminal } = xtermHeadless;
 type Terminal = InstanceType<typeof Terminal>;

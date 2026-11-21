@@ -1,8 +1,8 @@
 import { strict as assert } from "node:assert";
-import { readTerminal } from "../fork-features/terminal-resource.ts";
+import { readTerminal } from "../src/terminal-resource.ts";
 import { afterEach, describe, it } from "node:test";
 import { activate, EmptyPollRemovedError } from "../src/index.ts";
-import type { NoticeMessage } from "../fork-features/terminal-notice.ts";
+import type { NoticeMessage } from "../src/terminal-notice.ts";
 import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";
 
 
@@ -160,7 +160,7 @@ describe("exec_command on_exit", () => {
 
 		assert.ok(await waitFor(() => h.sentMessages.length === 1), "expected one wake");
 		const { message, options } = h.sentMessages[0];
-		assert.equal(message.customType, "unified-exec-notice");
+		assert.equal(message.customType, "omp-actual-terminal-notice");
 		assert.deepEqual((message as NoticeMessage).details.notices.map((notice) => ({ session_id: notice.session_id, title: notice.title, kind: notice.kind })), [
 			{ session_id: sid, title: "Test command", kind: "exit_wake" },
 		]);
@@ -310,7 +310,7 @@ describe("exec_command on_exit", () => {
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "sleep 30", yield_time_ms: 250, on_exit: "wake" });
 		const sid = r1.details.session_id;
 		h.uiEvents.selectResponses.push((options) => options.find((o) => o.startsWith(`#${sid} `)));
-		await h.invokeCommand("unified-exec-sessions");
+		await h.invokeCommand("omp-actual-terminal-sessions");
 		assert.ok(!(await waitFor(() => h.sentMessages.length > 0, 600)));
 		assert.equal(h.sentMessages.length, 0);
 	});
@@ -347,7 +347,7 @@ describe("exec_command on_exit", () => {
 	it("several wake sessions finishing together produce one bounded batch", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
-		const marker = `${process.env.TMPDIR || "/tmp"}/unified-exec-batch-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		const marker = `${process.env.TMPDIR || "/tmp"}/omp-actual-terminal-batch-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 		const waitCmd = `while [ ! -f "${marker}" ]; do sleep 0.05; done`;
 		const a = await h.call("exec_command", { title: "Test command", cmd: waitCmd, yield_time_ms: 250, on_exit: "wake" });
 		const b = await h.call("exec_command", { title: "Test command", cmd: waitCmd, yield_time_ms: 250, on_exit: "wake" });

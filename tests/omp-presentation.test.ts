@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
-import { DEFAULT_MAX_LINES, type ExtensionAPI, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { DEFAULT_MAX_LINES, type ExtensionAPI, type ToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import { Type } from "@oh-my-pi/omptype/typebox";
 
 import {
@@ -21,7 +21,7 @@ import {
 	type ActivatedExtension,
 	withHostPresentation,
 	writeStdinShellArgs,
-} from "../fork-features/omp-presentation.ts";
+} from "../src/omp-presentation.ts";
 import { SessionStore } from "../src/session-store.ts";
 import {
 	finalizeKillResult,
@@ -369,7 +369,7 @@ describe("host presentation activation", () => {
 		});
 		assert.throws(() => factory(api), {
 			name: "Error",
-			message: /^omp-unified-exec only supports omp \(oh-my-pi\).*current host is not omp/,
+			message: /^omp-actual-terminal only supports omp \(oh-my-pi\).*current host is not omp/,
 		});
 		assert.equal(activations, 0);
 		assert.deepEqual(registered, []);
@@ -382,12 +382,12 @@ describe("host presentation activation", () => {
 		const compiled = join(temporary, "plugin.mjs");
 		const build = spawnSync(process.execPath, [
 			"build", fileURLToPath(new URL("../src/index.ts", import.meta.url)),
-			"--target=node", "--packages=external", "--external", "@earendil-works/*", "--outfile", compiled,
+			"--target=node", "--packages=external", "--outfile", compiled,
 		], { cwd: root, encoding: "utf8" });
 		assert.equal(build.status, 0, `${build.stdout}\n${build.stderr}`);
-		// --external "@earendil-works/*" keeps the bundle's imports external, but
-		// Node cannot load them: those packages are not installed, and the
-		// @oh-my-pi packages ship TypeScript source. Stage a temporary
+		// --packages=external keeps the bundle's package imports external, but
+		// Node cannot load them: the @oh-my-pi packages ship TypeScript
+		// source. Stage a temporary
 		// node_modules mirroring the specifiers the bundle actually imports so
 		// Node reaches the factory's Bun guard; the guard throws before any of
 		// these exports is invoked, so a universal stub export is sufficient.
@@ -468,23 +468,21 @@ describe("host presentation activation", () => {
 		const root = fileURLToPath(new URL("../", import.meta.url));
 		const compiled = join(temporary, "presentation.mjs");
 		const build = spawnSync(process.execPath, [
-			"build", fileURLToPath(new URL("../fork-features/omp-presentation.ts", import.meta.url)),
-			"--target=bun", "--packages=external", "--external", "@earendil-works/*", "--outfile", compiled,
+			"build", fileURLToPath(new URL("../src/omp-presentation.ts", import.meta.url)),
+			"--target=bun", "--packages=external", "--outfile", compiled,
 		], { cwd: root, encoding: "utf8" });
 		assert.equal(build.status, 0, `${build.stdout}\n${build.stderr}`);
-		// --external "@earendil-works/*" leaves the bundle's imports verbatim.
+		// --packages=external leaves the bundle's package imports verbatim.
 		// Stage a node_modules that links every imported package to the
-		// repository's real copy — @earendil-works/* names to the @oh-my-pi/*
-		// packages they are resolved to on the real host — except the
-		// @oh-my-pi/pi-tui specifier, which must stay absent so the
-		// wrapper's own import("@oh-my-pi/pi-tui/tools") fails with
-		// ERR_MODULE_NOT_FOUND (@earendil-works/pi-tui is still linked: the
-		// bundle reads it at module scope). Linked host packages resolve
-		// their own dependencies from their real locations, so the staged
-		// dir only needs the packages the bundle itself imports. Bun's
-		// fallback/auto-install would otherwise satisfy the missing package
-		// from its global cache; the child runs with --no-install to keep
-		// it genuinely unresolved.
+		// repository's real copy. @oh-my-pi/pi-tui is staged as a package
+		// whose root re-exports the real one but which has no ./tools
+		// subpath, so the bundle's static root imports load and only the
+		// wrapper's own import("@oh-my-pi/pi-tui/tools") fails. Linked host
+		// packages resolve their own dependencies from their real
+		// locations, so the staged dir only needs the packages the bundle
+		// itself imports. Bun's fallback/auto-install would otherwise
+		// satisfy the missing subpath from its global cache; the child runs
+		// with --no-install to keep it genuinely unresolved.
 		const linkRealModules = (modules: string): void => {
 			const bundle = readFileSync(compiled, "utf8");
 			const staged = new Set<string>();
@@ -494,10 +492,21 @@ describe("host presentation activation", () => {
 				const segments = specifier.split("/");
 				const base = specifier.startsWith("@") ? segments.slice(0, 2).join("/") : (segments[0] ?? specifier);
 				if (specifier.startsWith("node:") || builtinModules.includes(base)) continue;
-				const realName = base.startsWith("@earendil-works/") ? base.replace("@earendil-works/", "@oh-my-pi/") : base;
-				if (base === "@oh-my-pi/pi-tui" || staged.has(base)) continue;
+				if (staged.has(base)) continue;
 				staged.add(base);
-				const source = join(root, "node_modules", realName);
+				if (base === "@oh-my-pi/pi-tui") {
+					const stub = join(modules, base);
+					mkdirSync(stub, { recursive: true });
+					writeFileSync(join(stub, "package.json"), JSON.stringify({
+						name: base,
+						type: "module",
+						exports: { ".": "./index.mjs" },
+					}));
+					const real = pathToFileURL(join(root, "node_modules", base, "src", "index.ts")).href;
+					writeFileSync(join(stub, "index.mjs"), `export * from ${JSON.stringify(real)};\n`);
+					continue;
+				}
+				const source = join(root, "node_modules", base);
 				if (!existsSync(source)) continue;
 				mkdirSync(dirname(join(modules, base)), { recursive: true });
 				symlinkSync(source, join(modules, base), "junction");

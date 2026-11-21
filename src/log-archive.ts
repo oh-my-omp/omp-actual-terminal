@@ -8,7 +8,7 @@ import { createGzip } from "node:zlib";
 
 export const LOG_ARCHIVE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const SCAN_INTERVAL_MS = 24 * 60 * 60 * 1000;
-const LOG_PREFIX = "pi-unified-exec-";
+const LOG_PREFIX = "omp-actual-terminal-";
 
 interface LogArchiveRegistry {
 	readonly openLogs: Set<string>;
@@ -16,14 +16,14 @@ interface LogArchiveRegistry {
 	scan: Promise<readonly ArchiveResult[]> | undefined;
 }
 
-const registrySymbol = Symbol.for("omp-unified-exec.log-archive");
+const registrySymbol = Symbol.for("omp-actual-terminal.log-archive");
 const processGlobal = globalThis as typeof globalThis & { [registrySymbol]?: LogArchiveRegistry };
 const registry: LogArchiveRegistry = processGlobal[registrySymbol] ??= { openLogs: new Set(), timer: undefined, scan: undefined };
 export const openSessionLogs: ReadonlySet<string> = registry.openLogs;
 
-export type LogName =
-	| { readonly kind: "owned"; readonly pid: number }
-	| { readonly kind: "legacy" };
+export interface LogName {
+	readonly pid: number;
+}
 
 export type SkipReason =
 	| "not_regular"
@@ -51,10 +51,8 @@ export function sessionLogName(sessionId: number): string {
 }
 
 export function parseLogName(name: string): LogName | undefined {
-	const owned = /^pi-unified-exec-(\d+)-\d+-[0-9a-f]{8}\.log$/.exec(name);
-	if (owned) return { kind: "owned", pid: Number(owned[1]) };
-	if (/^pi-unified-exec-\d+-[0-9a-f]{8}\.log$/.test(name)) return { kind: "legacy" };
-	return undefined;
+	const owned = /^omp-actual-terminal-(\d+)-\d+-[0-9a-f]{8}\.log$/.exec(name);
+	return owned ? { pid: Number(owned[1]) } : undefined;
 }
 
 const WRITEV_MAX_BUFFERS = 1024;
@@ -170,11 +168,7 @@ export function pidExists(pid: number): boolean {
 
 function writerGone(path: string, name: LogName, mtimeMs: number, policy: ArchivePolicy): boolean {
 	if (mtimeMs < policy.bootTime) return true;
-	switch (name.kind) {
-		case "legacy": return false;
-		case "owned":
-			return name.pid === policy.selfPid ? !policy.openLogs.has(path) : !policy.pidExists(name.pid);
-	}
+	return name.pid === policy.selfPid ? !policy.openLogs.has(path) : !policy.pidExists(name.pid);
 }
 
 function sameFile(a: Stats, b: Stats): boolean {

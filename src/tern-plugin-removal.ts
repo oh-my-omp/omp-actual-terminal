@@ -1,4 +1,4 @@
-import { sanitizeOutputText } from "../src/output-safety.ts";
+import { sanitizeOutputText } from "./output-safety.ts";
 import { findTern, type TernPluginCli } from "./omomp-shared/tern-plugin.ts";
 
 export const TERN_PLUGIN_ID = "omp-unified-exec";
@@ -57,9 +57,9 @@ function diagnostic(text: string): string {
 function formatFailure(failure: RemovalFailure): string {
 	switch (failure.kind) {
 		case "tern":
-			return `omp-unified-exec: removing the old Tern plugin failed at ${failure.stage}: ${diagnostic(failure.message)}`;
+			return `omp-actual-terminal: removing the old Tern plugin failed at ${failure.stage}: ${diagnostic(failure.message)}`;
 		case "verification":
-			return `omp-unified-exec: removing the old Tern plugin failed: ${diagnostic(failure.message)}`;
+			return `omp-actual-terminal: removing the old Tern plugin failed: ${diagnostic(failure.message)}`;
 	}
 }
 

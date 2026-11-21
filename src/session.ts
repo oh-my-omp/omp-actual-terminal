@@ -1,10 +1,10 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { SessionLog, sessionLogName } from "../fork-features/log-archive.ts";
-import { detachTerminalReader, discardLiveTerminal, freezeTerminal, readTerminal, registerTerminal } from "../fork-features/terminal-resource.ts";
-import { detectInputPrompt, inputWaitNotice, type InputWaitAlert } from "../fork-features/input-wait.ts";
-import type { MonitorListener, MonitorSourceHandle, MonitorStart } from "../fork-features/monitor-subscription.ts";
+import { SessionLog, sessionLogName } from "./log-archive.ts";
+import { detachTerminalReader, discardLiveTerminal, freezeTerminal, readTerminal, registerTerminal } from "./terminal-resource.ts";
+import { detectInputPrompt, inputWaitNotice, type InputWaitAlert } from "./input-wait.ts";
+import type { MonitorListener, MonitorSourceHandle, MonitorStart } from "./monitor-subscription.ts";
 import { type CollectResult, type FinalScreenOutput, NO_OUTPUT, type NoOutput } from "./collect.ts";
 import { waitForExitOrDeadline } from "./long-wait.ts";
 import { Gate, Notify } from "./notify.ts";

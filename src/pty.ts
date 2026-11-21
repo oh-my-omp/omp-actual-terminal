@@ -76,7 +76,7 @@ type BunRuntime = {
 export function requireBunRuntime(
 	candidate: unknown = Reflect.get(globalThis, "Bun"),
 ): BunRuntime {
-	const requirement = "omp-unified-exec requires a Bun host with Bun.Terminal";
+	const requirement = "omp-actual-terminal requires a Bun host with Bun.Terminal";
 	if ((typeof candidate !== "object" || candidate === null) && typeof candidate !== "function") {
 		throw new Error(`${requirement}; the current runtime is not Bun. Load this plugin in omp.`);
 	}

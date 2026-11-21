@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { resolveInitPath, shellScript } from "../fork-features/exec-init.ts";
-import type { PluginSettingsReader } from "../fork-features/plugin-settings.ts";
+import { resolveInitPath, shellScript } from "../src/exec-init.ts";
+import type { PluginSettingsReader } from "../src/plugin-settings.ts";
 import { activate } from "../src/index.ts";
 import { findOnPath, IS_WINDOWS } from "../src/shell.ts";
 import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";

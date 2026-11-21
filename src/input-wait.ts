@@ -1,4 +1,4 @@
-import { sanitizeOutputText } from "../src/output-safety.ts";
+import { sanitizeOutputText } from "./output-safety.ts";
 import type { InputPromptLabel, TerminalNotice } from "./terminal-notice.ts";
 
 export type InputScreenKind = "normal" | "alternate";

@@ -1,4 +1,4 @@
-import type { MonitorStatus } from "../fork-features/monitor-subscription.ts";
+import type { MonitorStatus } from "./monitor-subscription.ts";
 
 export type MonitorScriptResult =
 	| { session_id: number; status: "started"; monitor: MonitorStatus }

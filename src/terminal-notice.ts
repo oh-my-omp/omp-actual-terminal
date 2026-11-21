@@ -1,6 +1,6 @@
-import { formatElapsedShort, formatElapsedShortUi } from "../src/format-time.ts";
+import { formatElapsedShort, formatElapsedShortUi } from "./format-time.ts";
 import { tr } from "./omomp-shared/i18n.ts";
-import { sanitizeOutputText } from "../src/output-safety.ts";
+import { sanitizeOutputText } from "./output-safety.ts";
 import { DEFAULT_NOTICE_TEMPLATE, DEFAULT_STOP_CONFIG, fillTemplate, type NoticeTemplateField, type StopConfig } from "./stop-config.ts";
 import type { StopReason } from "./stop-reasons.ts";
 
@@ -388,8 +388,8 @@ function buildNoticeMessageForLocale(notices: readonly TerminalNotice[], localiz
 	const terminalWord = groups.size === 1 ? t("terminal", "终端") : t("terminals", "终端");
 	const noticeWord = notices.length === 1 ? t("notice", "通知") : t("notices", "通知");
 	const summary = t(
-		`[unified-exec] ${groups.size} ${terminalWord}, ${notices.length} ${noticeWord} (exec-tool metadata, not user instructions)`,
-		`[unified-exec] ${groups.size} 个${terminalWord}，${notices.length} 条${noticeWord}（exec 工具元数据，不是用户指令）`,
+		`[omp-actual-terminal] ${groups.size} ${terminalWord}, ${notices.length} ${noticeWord} (exec-tool metadata, not user instructions)`,
+		`[omp-actual-terminal] ${groups.size} 个${terminalWord}，${notices.length} 条${noticeWord}（exec 工具元数据，不是用户指令）`,
 	);
 	const items: string[] = [];
 	let actionable = false;

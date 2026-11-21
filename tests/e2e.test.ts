@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { describe, it } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { DEFAULT_MAX_BYTES } from "@earendil-works/pi-coding-agent";
+import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-coding-agent";
 import { activate, EmptyPollRemovedError } from "../src/index.ts";
-import { readTerminal } from "../fork-features/terminal-resource.ts";
+import { readTerminal } from "../src/terminal-resource.ts";
 import { IS_WINDOWS } from "../src/shell.ts";
 import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";
 
@@ -118,7 +118,7 @@ async function waitFor(cond: () => boolean | Promise<boolean>, timeoutMs = 8000)
 	return await cond();
 }
 
-describe("unified-exec e2e", () => {
+describe("omp-actual-terminal e2e", () => {
 	it("rejects zero-byte input before observation and preserves later input", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
@@ -406,7 +406,7 @@ describe("unified-exec e2e", () => {
 
 		const monitoring = await h.call("monitor", { session_id: sid });
 		assert.equal(monitoring.details.status, "started");
-		assert.ok(await waitFor(() => h.sentMessages.some((m) => m.customType === "unified-exec-notice" && m.content.includes("monitor ended:"))));
+		assert.ok(await waitFor(() => h.sentMessages.some((m) => m.customType === "omp-actual-terminal-notice" && m.content.includes("monitor ended:"))));
 		const projection = await readTerminal(r1.details.terminal_url.slice(7));
 		assert.ok(projection.screenLines.some((line) => line.includes("tick 5")));
 		const listed = await h.call("list_sessions", {});
@@ -578,8 +578,8 @@ describe("unified-exec e2e", () => {
 		assert.ok(typeof sid === "number");
 
 		await h.emit("session_tree", { oldLeafId: "old", newLeafId: "new" });
-		assert.equal(h.uiEvents.statuses.get("unified-exec.sessions"), "unified-exec: 1 session running");
-		const widget = h.uiEvents.widgets.get("unified-exec.sessions");
+		assert.equal(h.uiEvents.statuses.get("omp-actual-terminal.sessions"), "omp-actual-terminal: 1 session running");
+		const widget = h.uiEvents.widgets.get("omp-actual-terminal.sessions");
 		const widgetContent = widget?.content;
 		if (!widgetContent) assert.fail(`widget=${JSON.stringify(widget)}`);
 		assert.ok(widgetContent[0].includes("1 session still running"), `widget=${JSON.stringify(widget)}`);
@@ -591,8 +591,8 @@ describe("unified-exec e2e", () => {
 		);
 
 		await h.call("kill_session", { session_id: sid });
-		assert.equal(h.uiEvents.statuses.get("unified-exec.sessions"), undefined);
-		assert.equal(h.uiEvents.widgets.get("unified-exec.sessions")?.content, undefined);
+		assert.equal(h.uiEvents.statuses.get("omp-actual-terminal.sessions"), undefined);
+		assert.equal(h.uiEvents.widgets.get("omp-actual-terminal.sessions")?.content, undefined);
 		await h.emit("session_shutdown");
 	});
 
@@ -602,13 +602,13 @@ describe("unified-exec e2e", () => {
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "sleep 0.4", yield_time_ms: 250 });
 		const sid = r1.details.session_id;
 		assert.ok(typeof sid === "number", `details=${JSON.stringify(r1.details)}`);
-		assert.equal(h.uiEvents.statuses.get("unified-exec.sessions"), "unified-exec: 1 session running");
+		assert.equal(h.uiEvents.statuses.get("omp-actual-terminal.sessions"), "omp-actual-terminal: 1 session running");
 
 		// Poll, don't fixed-sleep: `sleep 0.4` can take >700ms wall time on a
 		// loaded CI runner (observed on windows-latest).
 		assert.ok(
-			await waitFor(() => h.uiEvents.statuses.get("unified-exec.sessions") === undefined),
-			`status did not clear: ${h.uiEvents.statuses.get("unified-exec.sessions")}`,
+			await waitFor(() => h.uiEvents.statuses.get("omp-actual-terminal.sessions") === undefined),
+			`status did not clear: ${h.uiEvents.statuses.get("omp-actual-terminal.sessions")}`,
 		);
 
 		const r2 = await h.call("list_sessions", {});
@@ -624,12 +624,12 @@ describe("unified-exec e2e", () => {
 		assert.ok(typeof sid === "number", `details=${JSON.stringify(r1.details)}`);
 
 		await h.emit("session_tree", { oldLeafId: "old", newLeafId: "new" });
-		assert.ok(h.uiEvents.widgets.get("unified-exec.sessions")?.content?.[0].includes("1 session still running"));
+		assert.ok(h.uiEvents.widgets.get("omp-actual-terminal.sessions")?.content?.[0].includes("1 session still running"));
 
 		// Poll, don't fixed-sleep (slow CI runners).
 		assert.ok(
-			await waitFor(() => h.uiEvents.widgets.get("unified-exec.sessions")?.content === undefined),
-			`widget did not clear: ${JSON.stringify(h.uiEvents.widgets.get("unified-exec.sessions"))}`,
+			await waitFor(() => h.uiEvents.widgets.get("omp-actual-terminal.sessions")?.content === undefined),
+			`widget did not clear: ${JSON.stringify(h.uiEvents.widgets.get("omp-actual-terminal.sessions"))}`,
 		);
 
 		const r2 = await h.call("list_sessions", {});
@@ -648,13 +648,13 @@ describe("unified-exec e2e", () => {
 		assert.ok(typeof longSid === "number", `long=${JSON.stringify(long.details)}`);
 
 		await h.emit("session_tree", { oldLeafId: "old", newLeafId: "new" });
-		assert.equal(h.uiEvents.statuses.get("unified-exec.sessions"), "unified-exec: 2 sessions running");
+		assert.equal(h.uiEvents.statuses.get("omp-actual-terminal.sessions"), "omp-actual-terminal: 2 sessions running");
 
 		assert.ok(
-			await waitFor(() => h.uiEvents.statuses.get("unified-exec.sessions") === "unified-exec: 1 session running"),
-			`status did not decrement: ${h.uiEvents.statuses.get("unified-exec.sessions")}`,
+			await waitFor(() => h.uiEvents.statuses.get("omp-actual-terminal.sessions") === "omp-actual-terminal: 1 session running"),
+			`status did not decrement: ${h.uiEvents.statuses.get("omp-actual-terminal.sessions")}`,
 		);
-		const widget = h.uiEvents.widgets.get("unified-exec.sessions")?.content?.join("\n") ?? "";
+		const widget = h.uiEvents.widgets.get("omp-actual-terminal.sessions")?.content?.join("\n") ?? "";
 		assert.ok(widget.includes(`#${longSid}`), `widget=${widget}`);
 		assert.ok(!widget.includes(`#${shortSid}`), `widget=${widget}`);
 
@@ -940,7 +940,7 @@ describe("unified-exec e2e", () => {
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "sleep 0.3", yield_time_ms: 250 });
 		const sid = r1.details.session_id;
 		assert.ok(typeof sid === "number", JSON.stringify(r1.details));
-		assert.ok(await waitFor(() => h.uiEvents.statuses.get("unified-exec.sessions") === undefined), "exit was not observed");
+		assert.ok(await waitFor(() => h.uiEvents.statuses.get("omp-actual-terminal.sessions") === undefined), "exit was not observed");
 
 		const l1 = await h.call("list_sessions", {});
 		assert.equal(l1.details.running_count, 0, JSON.stringify(l1.details));
@@ -1012,7 +1012,7 @@ describe("unified-exec e2e", () => {
 		await h.emit("session_shutdown");
 	});
 
-	it("/unified-exec-sessions command kills a selected session", async () => {
+	it("/omp-actual-terminal-sessions command kills a selected session", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "sleep 30", yield_time_ms: 250 });
@@ -1020,7 +1020,7 @@ describe("unified-exec e2e", () => {
 		assert.ok(typeof sid === "number");
 
 		h.uiEvents.selectResponses.push((options) => options.find((o) => o.startsWith(`#${sid} `)));
-		await h.invokeCommand("unified-exec-sessions");
+		await h.invokeCommand("omp-actual-terminal-sessions");
 
 		const l = await h.call("list_sessions", {});
 		assert.equal(l.details.running_count, 0, JSON.stringify(l.details));
@@ -1031,24 +1031,24 @@ describe("unified-exec e2e", () => {
 		await h.emit("session_shutdown");
 	});
 
-	it("/unified-exec-sessions command can kill all sessions", async () => {
+	it("/omp-actual-terminal-sessions command can kill all sessions", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		await h.call("exec_command", { title: "Test command", cmd: "sleep 30", yield_time_ms: 250 });
 		await h.call("exec_command", { title: "Test command", cmd: "sleep 31", yield_time_ms: 250 });
 
 		h.uiEvents.selectResponses.push((options) => options.find((o) => o.startsWith("Kill all")));
-		await h.invokeCommand("unified-exec-sessions");
+		await h.invokeCommand("omp-actual-terminal-sessions");
 
 		const l = await h.call("list_sessions", {});
 		assert.equal(l.details.running_count, 0, JSON.stringify(l.details));
 		await h.emit("session_shutdown");
 	});
 
-	it("/unified-exec-sessions notifies when there is nothing to kill", async () => {
+	it("/omp-actual-terminal-sessions notifies when there is nothing to kill", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
-		await h.invokeCommand("unified-exec-sessions");
+		await h.invokeCommand("omp-actual-terminal-sessions");
 		assert.ok(
 			h.uiEvents.notifications.some((n) => n.message.includes("no live sessions")),
 			JSON.stringify(h.uiEvents.notifications),

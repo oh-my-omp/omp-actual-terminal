@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import {
 	execCommandDocumentation, execCommandTopicPointers,
 	writeStdinDocumentation, writeStdinTopicPointers,
@@ -9,14 +9,14 @@ import {
 	monitorDocumentation, monitorTopicPointers,
 	killSessionDocumentation, killSessionTopicPointers,
 	listSessionsDocumentation, listSessionsTopicPointers,
-} from "../fork-features/exec-command-docs.ts";
+} from "../src/exec-command-docs.ts";
 import { activate } from "../src/index.ts";
 
 test("exec_command provides the three packaged, body-only topics", () => {
 	const topics = execCommandDocumentation.docTopics();
 	assert.deepEqual(Object.keys(topics), ["interactive", "lifecycle", "waiting"]);
 	for (const [name, body] of Object.entries(topics)) {
-		assert.equal(body, readFileSync(new URL(`../fork-features/topics/${name}.md`, import.meta.url), "utf8"));
+		assert.equal(body, readFileSync(new URL(`../src/topics/${name}.md`, import.meta.url), "utf8"));
 		assert.ok(body.startsWith("# "));
 		assert.ok(!body.includes("tool://exec_command/"));
 		assert.ok(execCommandTopicPointers.includes(`- \`xd://exec_command/${name}\` — `));
@@ -58,7 +58,7 @@ test("all six registrations own packaged providers and end with full topic point
 		const topics = documentation.docTopics();
 		assert.equal(pointers.split("\n").filter((line) => line.startsWith("- ")).length, Object.keys(topics).length);
 		for (const [[topic, body], index] of Object.entries(topics).map((entry, index) => [entry, index] as const)) {
-			assert.equal(body, readFileSync(new URL(`../fork-features/topics/${files[index]}.md`, import.meta.url), "utf8"));
+			assert.equal(body, readFileSync(new URL(`../src/topics/${files[index]}.md`, import.meta.url), "utf8"));
 			assert.ok(body.startsWith("# "));
 			assert.ok(!body.startsWith("---"));
 			assert.ok(!body.includes("tool://"));

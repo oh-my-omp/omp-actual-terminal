@@ -1,13 +1,13 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentRef } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import {
 	approveBoundCommand, approveCommand, getBashApprovalPatternRules, type ApprovalHelpers, type BashApprovalPatternRule,
 	type BashPatternViews, type CommandApproval, type CommandApprovalHost,
-} from "../fork-features/command-approval.ts";
-import { bindSession, bindingContext, recheckBinding, type HostSettings } from "../fork-features/session-binding.ts";
+} from "../src/command-approval.ts";
+import { bindSession, bindingContext, recheckBinding, type HostSettings } from "../src/session-binding.ts";
 import { activate } from "../src/index.ts";
 import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";
 

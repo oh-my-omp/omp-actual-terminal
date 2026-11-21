@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { LANGUAGE_ENV, language } from "../fork-features/omomp-shared/i18n.ts";
+import { LANGUAGE_ENV, language } from "../src/omomp-shared/i18n.ts";
 
 const LANGUAGE_KEYS = [LANGUAGE_ENV, "LC_ALL", "LC_MESSAGES", "LANG"] as const;
 

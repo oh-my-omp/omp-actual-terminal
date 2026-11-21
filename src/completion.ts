@@ -1,7 +1,7 @@
-import type { InputWaitAlert } from "../fork-features/input-wait.ts";
-import { MonitorError, MonitorSubscription, parseMonitorCondition, parseRemindAfter, type MonitorEndReason, type MonitorSession, type MonitorStatus } from "../fork-features/monitor-subscription.ts";
-import type { ScreenJudge } from "../fork-features/screen-judge.ts";
-import type { NoticeDispatcher, TerminalNotice } from "../fork-features/terminal-notice.ts";
+import type { InputWaitAlert } from "./input-wait.ts";
+import { MonitorError, MonitorSubscription, parseMonitorCondition, parseRemindAfter, type MonitorEndReason, type MonitorSession, type MonitorStatus } from "./monitor-subscription.ts";
+import type { ScreenJudge } from "./screen-judge.ts";
+import type { NoticeDispatcher, TerminalNotice } from "./terminal-notice.ts";
 
 
 export type OnExitPolicy = "none" | "wake";

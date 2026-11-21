@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 
-import { freezeTerminal, parseTerminalTarget, readTerminal, registerTerminal, terminalText } from "../fork-features/terminal-resource.ts";
+import { freezeTerminal, parseTerminalTarget, readTerminal, registerTerminal, terminalText } from "../src/terminal-resource.ts";
 import { TerminalScreen } from "../src/terminal-screen.ts";
 
 const encoder = new TextEncoder();

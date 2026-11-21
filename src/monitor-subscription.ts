@@ -1,5 +1,5 @@
-import { sanitizeOutputText } from "../src/output-safety.ts";
-import type { TerminalSnapshot } from "../src/terminal-screen.ts";
+import { sanitizeOutputText } from "./output-safety.ts";
+import type { TerminalSnapshot } from "./terminal-screen.ts";
 import type { ScreenJudge } from "./screen-judge.ts";
 import type { MonitorEndReason, MonitorReturns, MonitorWatch, NoticeBody, NoticeOutcome, TerminalNotice } from "./terminal-notice.ts";
 

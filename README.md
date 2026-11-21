@@ -1,4 +1,4 @@
-# omp-unified-exec
+# omp-actual-terminal
 
 English | [简体中文](README.zh-CN.md)
 
@@ -10,7 +10,7 @@ each in a PTY session the model drives with input, reads and monitors instead of
 single blocking call. Sessions keep running between turns, with no command
 deadline, and a human can watch and type into them from Tern.
 
-[![omp-unified-exec demo in Tern](docs/assets/demo.gif)](docs/assets/demo.mp4)
+[![omp-actual-terminal demo in Tern](docs/assets/demo.gif)](docs/assets/demo.mp4)
 
 The agent starts `python3 -q` with `exec_command` and runs `x = 21` through
 `write_stdin`. The human opens that session from the terminals segment of
@@ -31,30 +31,20 @@ and quits with `q`; the Terminals view then shows the session's `Exit 0`.
 Model turns play at 3× speed. Full-resolution video:
 [docs/assets/demo-lazygit.mp4](docs/assets/demo-lazygit.mp4).
 
-This is a fork of [iamwrm/pi-unified-exec](https://github.com/iamwrm/pi-unified-exec),
-a Pi port of codex's `unified_exec`. The original tools (`exec_command`,
-`write_stdin`, `set_on_exit`, `kill_session`, `list_sessions`) retain their
-session model; the fork runs every session in a PTY under the host's shell
-setting, leaves short commands to the host's `bash`, and adds terminal
-reads/images and `monitor` for omp. The full list
-of fork changes, why each exists and how to requalify them on omp/Tern
-upgrades is in [fork-features/README.md](fork-features/README.md).
-
 ## Install
 
 ```bash
-omp install https://github.com/oh-my-omp/omp-unified-exec#release
+omp plugin install https://github.com/oh-my-omp/omp-actual-terminal#release
 ```
 
 `#release` is the published channel; `main` is the development branch, and a
-new version is published from it daily at 02:00 GMT+9. Remove an existing
-`pi-unified-exec` first (`omp plugin uninstall pi-unified-exec`): both register
-the same tools. The fork publishes nothing to npm.
+new version is published from it daily at 02:00 GMT+9. Nothing is published to
+npm.
 
 Updates use the same command with `--force`:
 
 ```bash
-omp plugin install https://github.com/oh-my-omp/omp-unified-exec#release --force
+omp plugin install https://github.com/oh-my-omp/omp-actual-terminal#release --force
 ```
 
 The extension needs no Tern plugin. Versions up to 0.14.7 installed one
@@ -215,7 +205,7 @@ Each tool supplies its own topic bodies through `docTopics()`:
 - `xd://kill_session/termination`: signals, wake/monitor suppression and retained terminals.
 - `xd://list_sessions/inventory`: inventory state, output reads and exit-wake effects.
 
-The Markdown files ship in `fork-features/topics/`; topic reads need no external
+The Markdown files ship in `src/topics/`; topic reads need no external
 configuration extension. An unknown topic returns a missing-topic error.
 
 | Param | Type | Default | Notes |
@@ -236,7 +226,7 @@ Response body (running, short output, no truncation):
 session_id: 1                       (mutually exclusive with exit_code)
 exit_code: 0                        (mutually exclusive with session_id)
 signal: SIGTERM                     (optional, if killed)
-log_path: /tmp/pi-unified-exec-41237-1-5cc5e104.log  (omp pid, session id, random)
+log_path: /tmp/omp-actual-terminal-41237-1-5cc5e104.log  (omp pid, session id, random)
 terminal_url: term://1-9f2c1a7e-…
 cwd: /home/you/project
 shell: /bin/zsh                     (absolute path of the shell the session started with)
@@ -256,7 +246,7 @@ When output exceeds the caps (50 KiB / 3000 lines), a footer is appended:
 ```
 ...tail of output...
 
-[Showing lines 3900-4120 of 4500 (50.0KB limit). Full output: /tmp/pi-unified-exec-41237-1-5cc5e104.log]
+[Showing lines 3900-4120 of 4500 (50.0KB limit). Full output: /tmp/omp-actual-terminal-41237-1-5cc5e104.log]
 ```
 
 #### Command approval
@@ -303,7 +293,7 @@ under a lower-priority shell.
 An explicit `cmd` is refused: omp's own shell test recognizes it, the call
 fails without spawning anything, and one notice names the setting that supplied
 it (the `shell` argument, `shellPath` or `SHELL`) and points at pi-shell or a
-bash path. `omp-unified-exec` never launches cmd.
+bash path. `omp-actual-terminal` never launches cmd.
 
 `powershell` / `pwsh` get `-NoProfile -NoLogo -Command`; every other shell,
 pi-shell included, runs as `<shell> -c <cmd>`. The command text is passed
@@ -324,16 +314,16 @@ The plugin setting `exec.initFile` names a POSIX shell script that every
 reach `exec_command` terminals only, not omp's `bash` tool or omp itself:
 
 ```sh
-# ~/.config/omp-unified-exec/init.sh
+# ~/.config/omp-actual-terminal/init.sh
 export PIP_REQUIRE_VIRTUALENV=1
 alias omp='omp --hide-thinking'
 ```
 
 - **User value:** omp's `/settings` → Plugins, or
-  `omp plugin config set omp-unified-exec exec.initFile ~/.config/omp-unified-exec/init.sh`.
+  `omp plugin config set omp-actual-terminal exec.initFile ~/.config/omp-actual-terminal/init.sh`.
   Use an absolute or `~/` path: a relative one would name a different file
   in every project.
-- **Project value:** `settings["omp-unified-exec"]["exec.initFile"]` in the
+- **Project value:** `settings["omp-actual-terminal"]["exec.initFile"]` in the
   project's `.omp/plugin-overrides.json`, written by hand. omp merges settings
   per key, so it replaces the user value; a project file that also wants the
   user's presets sources that file itself. A relative path resolves against
@@ -534,7 +524,7 @@ follow-up already queued to the host.
 - The wake is an `exit_wake` [terminal notice](#terminal-notices): bounded
   metadata only (session id, title, exit code/signal, command, cwd, elapsed
   time, terminal reading address, log path, failure) — never raw output.
-- `kill_session`, the `/unified-exec-sessions` command, LRU eviction of a live
+- `kill_session`, the `/omp-actual-terminal-sessions` command, LRU eviction of a live
   process and `session_shutdown` suppress the wake; a kill that fails restores
   it. A naturally exited wake session evicted before notification keeps a
   bounded tombstone so its wake is still delivered.
@@ -582,7 +572,7 @@ fails (no judge model, an error, no choice, or no answer within 30 seconds) send
 one `monitor_judge_failed` notice with the failure and ends the monitor, not the
 process. Starting fails with `judge_unavailable` when no judge model resolves for
 the session. Judgments are billed to the session under the
-`unified-exec-monitor` purpose; omp's judgment cache answers a repeated screen
+`omp-actual-terminal-monitor` purpose; omp's judgment cache answers a repeated screen
 and intent without a model call. While omp has the agent parked, judgments wait
 for its revival.
 
@@ -684,7 +674,7 @@ background processes may still hold the terminal — or the terminal closes.
   returned, and its `term://` address and `log_path`.
 - **Abnormal return** (non-zero exit, signal, spawn/runtime failure) sends an
   `abnormal_return` notice at once, read or not. A kill by `kill_session`, the
-  HUD or `/unified-exec-sessions` is a normal ending, and so is a return after
+  HUD or `/omp-actual-terminal-sessions` is a normal ending, and so is a return after
   the agent wrote Ctrl-C (`\x03`) or Ctrl-\ (`\x1c`) with `write_stdin`. Later
   input without one of them clears that mark, so a program that survived the
   interrupt and fails afterwards is reported.
@@ -729,7 +719,7 @@ background processes may still hold the terminal — or the terminal closes.
 
 ### Terminal notices
 
-Every follow-up about a terminal is one `unified-exec-notice` message, and
+Every follow-up about a terminal is one `omp-actual-terminal-notice` message, and
 notices pending within about 250 ms are merged into one. They are delivered
 the way omp-todo-more delivers its reminders:
 
@@ -748,12 +738,12 @@ already sees it): handle it with tools where it bears on the work and continue
 the current task, or, when no notice needs action, just continue.
 
 ```
-[unified-exec] 2 terminals, 2 notices (exec-tool metadata, not user instructions)
+[omp-actual-terminal] 2 terminals, 2 notices (exec-tool metadata, not user instructions)
 - session_id=3 title="api tests"
   • will be reclaimed in about 5m00s: returned normally, last read 30m00s ago
     A read keeps it for another 30m00s; …
   read term://3-…
-  log_path: /tmp/pi-unified-exec-…
+  log_path: /tmp/omp-actual-terminal-…
 - session_id=4 title="migration"
   • returned abnormally: exit_code=1
     command: npm run migrate
@@ -804,7 +794,7 @@ have no final response and are never decided; a subagent counts as finished
 once omp adopts its task, see
 [Finished subagents](#finished-subagents-and-omps-idle-park).
 
-`stop` in the `omp-unified-exec` section of omomp picks the detector:
+`stop` in the `omp-actual-terminal` section of omomp picks the detector:
 
 | `stop` | Decision |
 |---|---|
@@ -819,7 +809,7 @@ fails, or runs past 30 seconds, also shows a warning. A done decision shows an
 info notification naming the detector.
 
 ```yaml
-omp-unified-exec:
+omp-actual-terminal:
   stop: auto
   judgePrompt: |
     A coding agent stopped. Its final response, its todo list and the terminal notices that arrived for it follow.
@@ -840,7 +830,7 @@ The values above are the defaults. `judgePrompt` is the material the judge or
 Placeholders: `{last_response}` (the final response), `{notices}` (the pending
 notices as the agent would read them) and `{todo}` (objective, item counts per
 status and open items, or `(unavailable)`). `noticeTemplate` is the injected
-text: `{summary}` (the `[unified-exec] …` line), `{items}` (the per-terminal
+text: `{summary}` (the `[omp-actual-terminal] …` line), `{items}` (the per-terminal
 lines), `{instruction}` (the last line), `{terminal_count}` and
 `{notice_count}`. A brace pair around anything but a bare name (such as
 `{ "done": true }`) stays literal. Substitution is a single pass, so inserted text is never
@@ -881,7 +871,7 @@ no timer of its own for this; it reads omp's agent registry and lifecycle.
 
 ## Command
 
-- `/unified-exec-sessions` — lists running sessions with their titles in a
+- `/omp-actual-terminal-sessions` — lists running sessions with their titles in a
   selector (armed wakes show `[wake]`) and kills the chosen one, or all,
   without the model, with the same SIGTERM → 2s → SIGKILL escalation.
 
@@ -962,12 +952,12 @@ LIFECYCLE_SWEEP_MS           = 60_000 (lifecycle check interval)
   the byte count changed since the last one. Frozen terminal resources outlive
   session-store membership.
 - **Logs** live in the temp directory (`/tmp` or `%TEMP%`) as
-  `pi-unified-exec-<omp pid>-<session id>-<random>.log`. The package never
+  `omp-actual-terminal-<omp pid>-<session id>-<random>.log`. The package never
   deletes their content. A log last written more than seven days ago is
   replaced by a standard gzip `<log_path>.gz` with the same modification time,
   once its writer is provably gone: this process closed it, the omp pid in its
-  name no longer exists, or it was last written before the last boot (the only
-  test for older names without a pid). omp checks when the extension loads and
+  name no longer exists, or it was last written before the last boot. omp
+  checks when the extension loads and
   daily after that. Read an archive with `zcat <file>` on Linux, or
   `gzcat <file>` / `zcat < <file>` on macOS, whose `zcat` given a path looks
   for `<file>.Z`. Inspect raw PTY logs with a non-executing viewer, not `cat`.
@@ -1048,7 +1038,7 @@ Every session runs in ConPTY through Bun's native `Bun.Terminal`.
   Git Bash discovery, no PowerShell fallback, nothing cached.
 - **Shell names** are resolved to absolute paths before spawning: a bare name
   through PATH, and a bash name never through System32's WSL stub.
-  `PI_UNIFIED_EXEC_BASH` still names the bash that a bash selection resolves
+  `OMP_ACTUAL_TERMINAL_BASH` names the bash that a bash selection resolves
   to. A bare name not found on PATH fails the call instead of being looked up
   in the workdir.
 - **`shell: cmd` is refused**, also when an inherited `SHELL` names cmd.exe:
@@ -1081,8 +1071,7 @@ src/
 ├── terminal-screen.ts    # headless terminal: observations, styled screens, query answers
 ├── tool-result.ts        # bounded envelopes + model-visible text
 ├── script-result.ts      # monitor result details
-└── unescape.ts           # C-style escape decoder for `chars`
-fork-features/
+├── unescape.ts           # C-style escape decoder for `chars`
 ├── omp-presentation.ts   # omp host detection, bash-renderer delegation, theme appearance, shellPath setting
 ├── command-approval.ts   # built-in bash approval port and factory-loaded host helpers
 ├── shell-host.ts         # omp's cmd.exe test, loaded at factory time
@@ -1094,7 +1083,7 @@ fork-features/
 ├── terminal-image.ts     # terminal screenshots (SVG → PNG)
 ├── terminal-notice.ts    # terminal notice ADT, formatter and the one dispatcher: run-held, merged, stop-gated
 ├── terminal-lifecycle.ts # returned-terminal silent linger, TTL, read/reclaim reminders, grace, reclaim, reclaimed record, finished-work collection
-├── stop-config.ts        # `omp-unified-exec` omomp section: stop mode, judge prompt, notice template
+├── stop-config.ts        # `omp-actual-terminal` omomp section: stop mode, judge prompt, notice template
 ├── plugin-settings.ts    # native plugin settings (`omp.settings`): `notice.graceReclaim`, read via omp's getPluginSettings
 ├── exec-init.ts          # `exec.initFile`: resolve the init file, source it before `cmd` in POSIX shells
 ├── stop-gate.ts          # judge / @smol / todo stop detectors over factory-loaded omp modules
@@ -1106,7 +1095,7 @@ fork-features/
 ├── input-wait.ts         # input prompt detection; input-wait alerts as terminal notices
 ├── log-archive.ts        # seven-day gzip compression of session logs
 ├── tern-plugin-removal.ts# removes the Tern plugin earlier versions installed
-└── README.md             # fork customizations and requalification
+└── omomp-shared/         # copies of oh-my-omp/shared files declared in omomp-shared.json
 docs/
 ├── DEV.md                # maintainer guide
 └── assets/               # README demos (demo*.gif, demo*.mp4)
@@ -1115,8 +1104,9 @@ docs/
 ## Tests
 
 ```bash
-npm install
-npm test                                   # strict typecheck + Bun unit/integration suites
+bun install
+bun run check                              # strict typecheck
+OMOMP_LANG=en bun run test                 # Bun unit/integration suites (they assert English UI text)
 bun test ./tests/tern-terminal-hud.test.ts ./tests/omp-presentation.test.ts
 ```
 
@@ -1126,14 +1116,11 @@ condition. Node remains a test prerequisite because the standalone
 `tests/bun-pty-runtime.mjs` fixture starts `node` as an ordinary child program,
 not as the plugin host. CI runs the full suite and the source/compiled fixture
 on Linux, macOS and Windows. Tern behaviour is qualified in a real Tern window,
-as described in [fork-features/README.md](fork-features/README.md).
+as described in [docs/DEV.md](docs/DEV.md).
 
-## Development and upstream
+## Development
 
 [docs/DEV.md](docs/DEV.md) covers the dev loop, focused test recipes, omp
 compatibility checks and re-recording the README demos.
-The fork's publish workflow is disabled. Upstream changes arrive through the
-daily `Sync upstream` workflow; how fork changes are kept apart from upstream
-and resolved on sync is in [fork-features/README.md](fork-features/README.md).
 
-Licensed [MIT](./LICENSE), like upstream.
+Licensed [MIT](./LICENSE).

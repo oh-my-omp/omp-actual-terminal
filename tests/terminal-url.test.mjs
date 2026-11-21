@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
-import { initializeTerminalUrls, parseInternalUrlRouterHost } from "../fork-features/terminal-url.ts";
+import { initializeTerminalUrls, parseInternalUrlRouterHost } from "../src/terminal-url.ts";
 
 describe("term:// registration", () => {
 	beforeEach(() => {
@@ -19,7 +19,7 @@ describe("term:// registration", () => {
 	});
 
 	test("an in-process reload replaces the handler a version before the shared copy registered", async () => {
-		const old = { [Symbol.for("omp-unified-exec.term-handler")]: true, scheme: "term", spec: {} };
+		const old = { [Symbol.for("omp-actual-terminal.term-handler")]: true, scheme: "term", spec: {} };
 		InternalUrlRouter.instance().register(old);
 		await initializeTerminalUrls();
 		const now = InternalUrlRouter.instance().getHandler("term");

@@ -16,7 +16,7 @@ export type JudgePromptField = (typeof JUDGE_PROMPT_FIELDS)[number];
 export const NOTICE_TEMPLATE_FIELDS = ["summary", "items", "instruction", "terminal_count", "notice_count"] as const;
 export type NoticeTemplateField = (typeof NOTICE_TEMPLATE_FIELDS)[number];
 
-export const SECTION_ID = "omp-unified-exec";
+export const SECTION_ID = "omp-actual-terminal";
 
 export const DEFAULT_JUDGE_PROMPT = [
 	"A coding agent stopped. Its final response, its todo list and the terminal notices that arrived for it follow.",
