@@ -6,10 +6,21 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Breaking Changes
 
+- Replaced the `exec_command` tool with terminals opened through `bash` with `pty: true` (`cmd` and `workdir` became `command` and `cwd`), while `bash` calls without `pty`, named services included, still run as omp's own `bash`
+- Ran terminals without `shell` in the session's shell, omp's shell process started with the session's exports, functions, aliases and URL paths, instead of omp's `shellPath`, `SHELL` or the platform default
+- Approved terminal calls with omp's own `bash` approval, `bash.allowedEnvVars` included, instead of the plugin's copy of its rules
 - Renamed the plugin to `omp-actual-terminal`: install it from `https://github.com/oh-my-omp/omp-actual-terminal#release` and uninstall `omp-unified-exec`
 - Renamed the omomp section `omp-unified-exec` to `omp-actual-terminal`
 - Renamed `PI_UNIFIED_EXEC_BASH` to `OMP_ACTUAL_TERMINAL_BASH`
 - Renamed the notice message type to `omp-actual-terminal-notice`, the `/unified-exec-sessions` command to `/omp-actual-terminal-sessions`, and session logs to `omp-actual-terminal-<pid>-<sid>-<hex>.log`
+
+### Added
+
+- Added `timeout` to terminal calls: it ends the terminal and reports an abnormal `timeout=<n>s` return
+- Added `async: true` to terminal calls, returning the terminal's `session_id` at once
+- Added `notify` to terminal calls, starting a monitor whose start the result's `monitor` line reports
+- Offered terminals in subagents and `omp -p`, whose `bash` schema now carries `pty` and the terminal fields
+- Rejected terminal-only fields on `bash` calls without `pty: true` before anything runs
 
 ### Changed
 

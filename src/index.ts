@@ -1,21 +1,28 @@
-import { constants as osConstants } from "node:os";
+import { randomUUID } from "node:crypto";
+import { constants as osConstants, tmpdir } from "node:os";
 import { statSync } from "node:fs";
-import { resolve } from "node:path";
-import { type AgentToolResult, type AgentToolUpdateCallback, type ExtensionAPI, type ExtensionContext, type SessionStopEvent, type ToolDefinition } from "@oh-my-pi/pi-coding-agent";
+import { rm, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { type AgentToolResult, type AgentToolUpdateCallback, type CustomTool, type ExtensionAPI, type ExtensionContext, type SessionStopEvent, type Settings, type ToolDefinition } from "@oh-my-pi/pi-coding-agent";
+import type { ResolveContext } from "@oh-my-pi/pi-coding-agent/internal-urls/types";
 import { Box, Text } from "@oh-my-pi/pi-tui";
-import { Type, type TUnsafe } from "@oh-my-pi/omptype/typebox";
+import { Type } from "@oh-my-pi/omptype/typebox";
 
 import { type AgentHost, type AgentIdentity, type ParkedRuntime, parkedRuntimes } from "./agent-park.ts";
 import { type ActivatedExtension, withHostPresentation } from "./omp-presentation.ts";
-import { approvalCommand, approveBoundCommand, type CommandApprovalHost } from "./command-approval.ts";
 import {
-	execCommandDocumentation, execCommandTopicPointers,
+	bashParameters, type BashSchema, DEFAULT_TERMINAL_YIELD_MS, MAX_PTY_COLS, MAX_PTY_ROWS, MAX_YIELD_TIME_MS, MIN_PTY_COLS, MIN_PTY_ROWS, MIN_YIELD_TIME_MS,
+	parseBashCall, StringEnum, type TerminalRequest,
+} from "./bash-tool.ts";
+import type { NativeBash, SessionSeed, TerminalHost } from "./terminal-host.ts";
+import {
+	bashDocumentation, bashTerminalSection, bashTopicPointers,
 	writeStdinDocumentation, writeStdinTopicPointers,
 	setOnExitDocumentation, setOnExitTopicPointers,
 	monitorDocumentation, monitorTopicPointers,
 	killSessionDocumentation, killSessionTopicPointers,
 	listSessionsDocumentation, listSessionsTopicPointers,
-} from "./exec-command-docs.ts";
+} from "./tool-docs.ts";
 import { bindingContext, bindSession, type HostBindingState, recheckBinding } from "./session-binding.ts";
 import { MonitorError, type MonitorWatchStatus } from "./monitor-subscription.ts";
 import { loadInitFile, shellScript } from "./exec-init.ts";
@@ -26,7 +33,7 @@ import { detectStop, type StopHost } from "./stop-gate.ts";
 import { screenJudge, type ScreenJudge } from "./screen-judge.ts";
 import { renderStopConfigReason, renderStopReason } from "./stop-reasons.ts";
 import { type LifecycleClock, type ReclaimResult, TerminalLifecycle } from "./terminal-lifecycle.ts";
-import { buildNoticeDisplayMessage, MAX_TITLE_CHARS, NoticeDispatcher, type NoticeGate, type NoticeMessage, outcomeText, parseTerminalTitle } from "./terminal-notice.ts";
+import { buildNoticeDisplayMessage, NoticeDispatcher, type NoticeGate, type NoticeMessage, outcomeText } from "./terminal-notice.ts";
 import { type CollectResult, NO_OUTPUT } from "./collect.ts";
 import { CompletionCoordinator, type OnExitPolicy, sanitizeMeta } from "./completion.ts";
 import { formatElapsed, formatElapsedUi, nowUtcIso } from "./format-time.ts";
@@ -35,11 +42,10 @@ import { readTodos } from "./omomp-shared/todo-read.ts";
 import { waitForExitOrDeadline } from "./long-wait.ts";
 import { sleep } from "./notify.ts";
 import { sanitizeOutputText } from "./output-safety.ts";
-import { DEFAULT_PTY_ROWS } from "./pty.ts";
 import type { MonitorScriptResult } from "./script-result.ts";
 import { ExecSession } from "./session.ts";
 import { SessionStore } from "./session-store.ts";
-import { IS_WINDOWS, resolveBinary, resolveDefaultShell, resolveWindowsShell, shellArgv, type LaunchShell, type ShellSource } from "./shell.ts";
+import { buildShellCommand, chooseShell, IS_WINDOWS, resolveBinary, resolveWindowsShell, type TerminalShell } from "./shell.ts";
 import type { TerminalAppearance } from "./terminal-screen.ts";
 import {
 	finalizeKillResult,
@@ -48,14 +54,12 @@ import {
 	renderProcessResultText,
 	terminalViewDetails,
 	type FinalizeProcessInput,
+	type ProcessOperation,
 	type ProcessResultDetails,
 } from "./tool-result.ts";
 import { unescapeChars } from "./unescape.ts";
 
 
-const MIN_YIELD_TIME_MS = 250;
-const MAX_YIELD_TIME_MS = 30_000;
-const DEFAULT_EXEC_YIELD_MS = 10_000;
 const DEFAULT_WRITE_STDIN_YIELD_MS = 250;
 const EARLY_EXIT_GRACE_PERIOD_MS = 150;
 const SHUTDOWN_TERM_GRACE_MS = 1000;
@@ -66,16 +70,10 @@ const LRU_PROTECTED_COUNT = 8;
 const OUTPUT_POLL_INTERVAL_MS = 250; // exec/input streaming updates
 const INPUT_WAIT_QUIET_MS = 5_000;
 const GROUP_PROBE_MS = 50;
-const MIN_PTY_COLS = 20;
-const MAX_PTY_COLS = 500;
-const MIN_PTY_ROWS = 5;
-const MAX_PTY_ROWS = 300;
+const DEADLINE_KILL_GRACE_MS = 2000;
 const SESSION_UI_KEY = "omp-actual-terminal.sessions";
-
-/** A TypeBox literal union (anyOf/const) breaks Google models. */
-function StringEnum<T extends readonly string[]>(values: T, description: string): TUnsafe<T[number]> {
-	return Type.Unsafe<T[number]>({ type: "string", enum: values as unknown as string[], description });
-}
+/** How results name the session's own shell (omp's shell process, bash 5.3 syntax). */
+const SESSION_SHELL_LABEL = "pi-shell (session)";
 
 
 function clamp(n: number, lo: number, hi: number): number {
@@ -129,30 +127,19 @@ interface ExtensionCtx extends ParkedRuntime {
 	exitUnsubscribers: Map<number, () => void>;
 	/**
 	 * Membership is ownership: session_shutdown
-	 * terminates these and removes them, so an exec_command whose session is
+	 * terminates these and removes them, so a terminal call whose session is
 	 * no longer here after the grace must not insert it into the store.
 	 */
 	pendingSessions: Set<ExecSession>;
 	shuttingDown: boolean;
 	appearance: () => TerminalAppearance;
-	shellPath?: () => string | undefined;
+	terminalHost: TerminalHost;
 	shellHost: ShellHost;
 	invalidateGithubCache?: (command: string) => void;
 	pluginSettings: PluginSettingsReader | undefined;
 	host: RuntimeHost;
 	agent: AgentIdentity | undefined;
 }
-
-type ExecCommandArgs = {
-	cmd: string;
-	title: string;
-	workdir?: string;
-	shell?: string;
-	cols?: number;
-	rows?: number;
-	yield_time_ms?: number;
-	on_exit?: OnExitPolicy;
-};
 
 type WriteStdinArgs = {
 	session_id: number;
@@ -219,43 +206,53 @@ function workdirProblem(dir: string): string | undefined {
 	}
 }
 
-function refuseOrigin(source: ShellSource): { readonly en: string; readonly zh: string } {
-	switch (source) {
-		case "call":
-			return { en: "the shell argument", zh: "shell 参数" };
-		case "shellPath":
-			return { en: "shellPath", zh: "shellPath" };
-		case "SHELL":
-			return { en: "SHELL", zh: "SHELL" };
-	}
+/** The calling session as a terminal launch reads it, captured when its `bash` call starts. */
+interface CallingSession {
+	readonly cwd: string;
+	readonly sessionId: string | undefined;
+	readonly sessionFile: string | undefined;
+	readonly settings: Settings;
+	readonly localProtocolOptions: ExtensionContext["localProtocolOptions"];
+	readonly bash: NativeBash;
 }
 
-async function runExecCommand(
+/** A located working directory: a host directory, or a URL directory only the session's shell can enter. */
+type TerminalCwd =
+	| { readonly kind: "host"; readonly path: string }
+	| { readonly kind: "url"; readonly url: string };
+
+async function expireSession(ctx: ExtensionCtx, session: ExecSession, seconds: number): Promise<void> {
+	if (session.hasExited) return;
+	ctx.lifecycle.noteDeadline(session.id, seconds);
+	session.recordDeadline(seconds);
+	session.kill("SIGTERM");
+	await waitForExitOrDeadline({ exited: session.exited, durationMs: DEADLINE_KILL_GRACE_MS });
+	if (!session.hasExited && !IS_WINDOWS) session.kill("SIGKILL");
+}
+
+async function runTerminal(
 	ctx: ExtensionCtx,
-	args: ExecCommandArgs,
+	request: TerminalRequest,
+	caller: CallingSession,
 	signal: AbortSignal | undefined,
 	onUpdate: AgentToolUpdateCallback<ProcessUpdateDetails> | undefined,
-	cwd: string,
 	toolCallId: string,
 ): Promise<ResponseShape> {
 	const finalizeResponse = (input: FinalizeInput): ResponseShape =>
-		finalizeProcessResult({ ...input, operation: "exec_command" });
+		finalizeProcessResult({ ...input, operation: "bash" });
 	if (ctx.shuttingDown) {
 		throw new Error("omp-actual-terminal: session is shutting down; not starting new commands.");
 	}
-	const title = parseTerminalTitle(args.title);
-	if (title === undefined) {
-		throw new Error(`exec_command: title is required — a short nonblank name for this terminal (at most ${MAX_TITLE_CHARS} characters shown); notices and list_sessions identify the terminal by it.`);
-	}
-
-	const requestedShell = args.shell?.trim() ? args.shell : ctx.shellPath?.();
-	const chosen = resolveDefaultShell(undefined, requestedShell, {
-		isCmdShell: ctx.shellHost.isCmdShell,
-		requestedSource: args.shell?.trim() ? "call" : "shellPath",
-	});
-	const effectiveCwd = args.workdir && args.workdir.length > 0 ? resolve(cwd, args.workdir) : cwd;
-	const yieldTimeMs = clampYield(args.yield_time_ms, DEFAULT_EXEC_YIELD_MS);
-	const wantsWake = args.on_exit === "wake";
+	const host = ctx.terminalHost;
+	const urlCwd = request.cwd === undefined ? undefined : host.urlPath(request.cwd);
+	const cwd: TerminalCwd = urlCwd !== undefined
+		? { kind: "url", url: urlCwd }
+		: { kind: "host", path: request.cwd === undefined ? caller.cwd : resolve(caller.cwd, request.cwd) };
+	// A URL directory has no host path: the process starts in the session cwd and enters it.
+	const hostCwd = cwd.kind === "host" ? cwd.path : caller.cwd;
+	const shownCwd = cwd.kind === "host" ? cwd.path : cwd.url;
+	const yieldTimeMs = request.detached ? 0 : clampYield(request.yieldTimeMs, DEFAULT_TERMINAL_YIELD_MS);
+	const wantsWake = request.onExit === "wake";
 	const setupFailure = (shell: string, failure: string): ResponseShape => finalizeResponse({
 		wallTimeSec: 0,
 		collected: NO_OUTPUT,
@@ -264,58 +261,122 @@ async function runExecCommand(
 		signal: null,
 		failure,
 		logPath: undefined,
-		cwd: effectiveCwd,
+		cwd: shownCwd,
 		shell,
-		command: args.cmd,
+		command: request.command,
 		yieldTimeMs,
 	});
+
+	const chosen = chooseShell(request.shell, ctx.shellHost.isCmdShell);
 	if (chosen.kind === "refused") {
-		const origin = refuseOrigin(chosen.source);
 		ctx.ui?.notify(
 			tr(
-				`omp-actual-terminal: not launching cmd (from ${origin.en}); omit shell to run in omp's pi-shell (omp bash), or pass a bash executable path.`,
-				`omp-actual-terminal：不启动 cmd（来自 ${origin.zh}）；省略 shell 以使用 omp 的 pi-shell（omp bash），或传入 bash 可执行文件路径。`,
+				"omp-actual-terminal: not launching cmd (from the shell argument); omit shell to run in the session's shell, or pass a bash executable path.",
+				"omp-actual-terminal：不启动 cmd（来自 shell 参数）；省略 shell 以使用会话的 shell，或传入 bash 可执行文件路径。",
 			),
 			"warning",
 		);
 		return setupFailure(
 			chosen.shell,
-			`shell "${chosen.shell}" is not supported: omp-actual-terminal never launches cmd. Omit shell to run in omp's pi-shell (omp bash), or pass a bash executable path.`,
+			`shell "${chosen.shell}" is not supported: omp-actual-terminal never launches cmd. Omit shell to run in the session's shell, or pass a bash executable path.`,
 		);
 	}
-	const shell: LaunchShell = chosen.kind === "pi-shell"
+	const shell: TerminalShell = chosen.kind === "session"
 		? chosen
 		: {
-			kind: "shell",
+			kind: "explicit",
 			shell: /[\\/]/.test(chosen.shell)
-				? resolve(effectiveCwd, chosen.shell)
+				? resolve(hostCwd, chosen.shell)
 				: IS_WINDOWS ? resolveWindowsShell(chosen.shell) : resolveBinary(chosen.shell),
 		};
-	const shellBin = shell.shell;
+	const shellLabel = shell.kind === "session" ? SESSION_SHELL_LABEL : shell.shell;
 
-	const workdirFailure = workdirProblem(effectiveCwd);
-	if (workdirFailure) return setupFailure(shellBin, workdirFailure);
+	const approval = caller.bash.approval({ command: request.command });
+	const tier = typeof approval === "string" ? approval : approval.tier;
+	const resolveContext: ResolveContext = {
+		cwd: caller.cwd,
+		settings: caller.settings,
+		signal,
+		sessionId: caller.sessionId,
+		sessionFile: caller.sessionFile,
+		localProtocolOptions: caller.localProtocolOptions,
+	};
+	switch (cwd.kind) {
+		case "host": {
+			const problem = workdirProblem(cwd.path);
+			if (problem) return setupFailure(shellLabel, problem);
+			break;
+		}
+		case "url": {
+			if (shell.kind === "explicit") {
+				return setupFailure(shellLabel, `Working directory ${cwd.url} is a URL directory, which only the session's shell can enter. Omit shell, or pass a host directory.`);
+			}
+			const directory = await host.urlDirectory(cwd.url, resolveContext, tier);
+			switch (directory.kind) {
+				case "directory":
+					break;
+				case "missing":
+					return setupFailure(shellLabel, `Working directory does not exist: ${cwd.url}`);
+				case "not_directory":
+					return setupFailure(shellLabel, `Working directory is not a directory: ${cwd.url}`);
+				case "unavailable":
+					return setupFailure(shellLabel, `Working directory ${cwd.url} is unavailable: ${directory.reason}`);
+			}
+			break;
+		}
+	}
 
-	const script = shellScript(await loadInitFile(ctx.pluginSettings, cwd), shell, args.cmd);
-	if (script.kind === "unusable") return setupFailure(shellBin, script.reason);
-	const command = shellArgv(shell, script.cmd);
+	const script = shellScript(await loadInitFile(ctx.pluginSettings, caller.cwd), shell, request.command);
+	if (script.kind === "unusable") return setupFailure(shellLabel, script.reason);
 
-	ctx.invalidateGithubCache?.(args.cmd);
+	let seed: SessionSeed;
+	try {
+		seed = await host.seed({ sessionId: caller.sessionId, cwd: hostCwd, settings: caller.settings, signal });
+	} catch (error) {
+		return setupFailure(shellLabel, `could not read the session shell's state: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	const env = host.terminalEnv({
+		...seed.env,
+		PI_SESSION_ID: caller.sessionId ?? "",
+		PI_SESSION_FILE: caller.sessionFile ?? "",
+		PI_TOOL_CALL_ID: toolCallId,
+	});
+	let source: string | undefined;
+	let command: readonly string[];
+	if (shell.kind === "session") {
+		const prelude = (await host.mounts(resolveContext, tier)) + seed.script;
+		if (prelude) {
+			source = join(tmpdir(), `omp-actual-terminal-seed-${randomUUID()}.sh`);
+			await writeFile(source, prelude, { mode: 0o600 });
+		}
+		command = host.shellProcess({ command: script.cmd, source, cwd: cwd.kind === "url" ? cwd.url : undefined });
+	} else {
+		command = buildShellCommand(shell.shell, script.cmd);
+	}
+
+	ctx.invalidateGithubCache?.(request.command);
 
 	const id = ctx.store.allocateId();
 	const session = ExecSession.spawn(id, {
 		command,
-		cwd: effectiveCwd,
-		env: process.env,
-		cols: args.cols !== undefined ? clamp(Math.floor(args.cols), MIN_PTY_COLS, MAX_PTY_COLS) : undefined,
-		rows: args.rows !== undefined ? clamp(Math.floor(args.rows), MIN_PTY_ROWS, MAX_PTY_ROWS) : undefined,
-		displayCommand: args.cmd,
-		title,
+		shell: shellLabel,
+		cwd: hostCwd,
+		env,
+		cols: request.cols !== undefined ? clamp(Math.floor(request.cols), MIN_PTY_COLS, MAX_PTY_COLS) : undefined,
+		rows: request.rows !== undefined ? clamp(Math.floor(request.rows), MIN_PTY_ROWS, MAX_PTY_ROWS) : undefined,
+		displayCommand: request.command,
+		title: request.title,
 		appearance: ctx.appearance,
 		inputWait: { quietMs: INPUT_WAIT_QUIET_MS, onAlert: (alert) => ctx.coordinator.alertInputWait(alert) },
 	});
+	// The shell process sources the prelude when it starts; the file goes with the terminal.
+	if (source !== undefined) {
+		const prelude = source;
+		session.onExit(() => void rm(prelude, { force: true }));
+	}
 
 	if (session.failureMessage) {
+		if (source !== undefined) await rm(source, { force: true });
 		return finalizeResponse({
 			wallTimeSec: 0,
 			collected: NO_OUTPUT,
@@ -324,18 +385,24 @@ async function runExecCommand(
 			signal: null,
 			failure: session.failureMessage,
 			logPath: undefined, // spawn failed — no log file
-			cwd: effectiveCwd,
+			cwd: shownCwd,
 			shell: session.shell,
-			command: args.cmd,
+			command: request.command,
 			yieldTimeMs,
 		});
+	}
+	if (request.deadline.kind === "after") {
+		const seconds = request.deadline.seconds;
+		const timer = setTimeout(() => void expireSession(ctx, session, seconds), seconds * 1000);
+		timer.unref?.();
+		session.onExit(() => clearTimeout(timer));
 	}
 
 	ctx.pendingSessions.add(session);
 	try {
 		const start = Date.now();
 		const earlyDeadline = start + EARLY_EXIT_GRACE_PERIOD_MS;
-		await Promise.race([
+		if (!request.detached) await Promise.race([
 			new Promise<void>((resolve) => {
 				if (session.hasExited) return resolve();
 				session.exited.addEventListener("abort", () => resolve(), { once: true });
@@ -355,12 +422,12 @@ async function runExecCommand(
 				signal: session.signal,
 				failure: session.failureMessage,
 				logPath: session.logPath,
-				cwd: effectiveCwd,
+				cwd: shownCwd,
 				shell: session.shell,
-				command: args.cmd,
+				command: request.command,
 				yieldTimeMs,
 				extra: {
-					on_exit: args.on_exit,
+					on_exit: request.onExit,
 					...(wantsWake ? { completion_delivery: "direct" as const, tool_time_utc: nowUtcIso() } : {}),
 				},
 			});
@@ -378,11 +445,11 @@ async function runExecCommand(
 				signal: session.signal,
 				failure: exited ? session.failureMessage : "terminated by session_shutdown; exit not confirmed",
 				logPath: session.logPath,
-				cwd: effectiveCwd,
+				cwd: shownCwd,
 				shell: session.shell,
-				command: args.cmd,
+				command: request.command,
 				yieldTimeMs,
-				extra: { on_exit: args.on_exit, ...(exited ? {} : { status: "running" as const, running: true }) },
+				extra: { on_exit: request.onExit, ...(exited ? {} : { status: "running" as const, running: true }) },
 			});
 		}
 
@@ -412,8 +479,9 @@ async function runExecCommand(
 			);
 		}
 
+		const monitor = request.notify === undefined ? undefined : await startNotifyMonitor(ctx, session, request.notify, signal);
 		const deadlineMs = start + yieldTimeMs;
-		const pollStream = startStreaming(session, onUpdate, deadlineMs, signal);
+		const pollStream = startStreaming(session, "bash", onUpdate, deadlineMs, signal);
 		const collected = await session.collect({ deadlineMs, externalAbort: signal });
 		pollStream.stop();
 
@@ -434,15 +502,16 @@ async function runExecCommand(
 				signal: null,
 				failure: null,
 				logPath: session.logPath,
-				cwd: effectiveCwd,
+				cwd: shownCwd,
 				shell: session.shell,
-				command: args.cmd,
+				command: request.command,
 				yieldTimeMs,
 				extra: {
-					on_exit: args.on_exit,
+					on_exit: request.onExit,
 					...(wantsWake ? { completion_notification: "armed" as const } : {}),
 					tool_time_utc: nowUtcIso(),
 					note: heldOpenNote(session),
+					monitor,
 				},
 			});
 		}
@@ -456,18 +525,30 @@ async function runExecCommand(
 			signal: session.signal,
 			failure: session.failureMessage,
 			logPath: session.logPath,
-			cwd: effectiveCwd,
+			cwd: shownCwd,
 			shell: session.shell,
-			command: args.cmd,
+			command: request.command,
 			yieldTimeMs,
 			extra: {
-				on_exit: args.on_exit,
+				on_exit: request.onExit,
 				...(wantsWake ? { completion_delivery: "direct" as const, tool_time_utc: nowUtcIso() } : {}),
+				monitor,
 			},
 		});
 	} finally {
 		ctx.pendingSessions.delete(session);
 		if (ctx.store.get(session.id) !== session) void session.release();
+	}
+}
+
+/** `notify` on a terminal call: a monitor with its regex as `condition` and every other option at its default. */
+async function startNotifyMonitor(ctx: ExtensionCtx, session: ExecSession, condition: string, signal: AbortSignal | undefined): Promise<string> {
+	try {
+		const status = await ctx.coordinator.startMonitor(session, { condition }, signal);
+		return `started ${watchLabel(status.watch)}`;
+	} catch (error) {
+		if (!(error instanceof MonitorError)) throw error;
+		return `not started (${error.code}): ${error.message}`;
 	}
 }
 
@@ -533,7 +614,7 @@ async function runWriteStdin(
 		}
 
 		const deadlineMs = start + yieldTimeMs;
-		const pollStream = startStreaming(session, onUpdate, deadlineMs, signal);
+		const pollStream = startStreaming(session, "write_stdin", onUpdate, deadlineMs, signal);
 		const collected = await session.collect({ deadlineMs, externalAbort: signal });
 		pollStream.stop();
 		const wallSec = (Date.now() - start) / 1000;
@@ -769,12 +850,13 @@ function clearSessionExitWatchers(ctx: ExtensionCtx): void {
 	ctx.exitUnsubscribers.clear();
 }
 
-function buildStreamUpdate(session: ExecSession): AgentToolResult<ProcessUpdateDetails> {
+function buildStreamUpdate(session: ExecSession, operation: ProcessOperation): AgentToolResult<ProcessUpdateDetails> {
 	const snapshot = session.liveSnapshot();
 	const text = snapshot ? sanitizeOutputText(snapshot.text) : "";
 	return {
 		content: [{ type: "text", text }],
 		details: {
+			operation,
 			session_id: session.id,
 			pid: session.pid,
 			running: !session.hasExited,
@@ -791,6 +873,7 @@ function buildStreamUpdate(session: ExecSession): AgentToolResult<ProcessUpdateD
 
 function startStreaming(
 	session: ExecSession,
+	operation: ProcessOperation,
 	onUpdate: AgentToolUpdateCallback<ProcessUpdateDetails> | undefined,
 	deadlineMs: number,
 	externalAbort: AbortSignal | undefined,
@@ -807,7 +890,7 @@ function startStreaming(
 		if (sent === undefined || sent.revision !== revision || sent.running !== running || sent.bytes !== bytes) {
 			sent = { revision, running, bytes };
 			try {
-				onUpdate(buildStreamUpdate(session));
+				onUpdate(buildStreamUpdate(session, operation));
 			} catch {
 			}
 		}
@@ -839,7 +922,7 @@ interface RuntimeOptions {
 	readonly agentHost: AgentHost | undefined;
 	readonly lifecycleClock: LifecycleClock;
 	readonly appearance: () => TerminalAppearance;
-	readonly shellPath: (() => string | undefined) | undefined;
+	readonly terminalHost: TerminalHost;
 	readonly shellHost: ShellHost;
 	readonly invalidateGithubCache: ((command: string) => void) | undefined;
 	readonly pluginSettings: PluginSettingsReader | undefined;
@@ -894,7 +977,7 @@ function createRuntime(opts: RuntimeOptions): ExtensionCtx {
 		pendingSessions: new Set(),
 		shuttingDown: false,
 		appearance: opts.appearance,
-		shellPath: opts.shellPath,
+		terminalHost: opts.terminalHost,
 		shellHost: opts.shellHost,
 		invalidateGithubCache: opts.invalidateGithubCache,
 		pluginSettings: opts.pluginSettings,
@@ -930,7 +1013,7 @@ async function endRuntime(ctx: ExtensionCtx): Promise<void> {
 			drained.push(s);
 		}
 	}
-	// The ending now owns these: their exec_command must not insert them into
+	// The ending now owns these: their bash call must not insert them into
 	// the store once its grace ends (the store belongs to this ended period).
 	ctx.pendingSessions.clear();
 	clearSessionExitWatchers(ctx);
@@ -958,8 +1041,7 @@ async function endRuntime(ctx: ExtensionCtx): Promise<void> {
 export function activate(
 	pi: ExtensionAPI,
 	appearance: () => TerminalAppearance = () => "dark",
-	shellPath?: () => string | undefined,
-	approvalHost?: CommandApprovalHost,
+	terminalHost: TerminalHost,
 	invalidateGithubCache?: (command: string) => void,
 	lifecycleClock: LifecycleClock = {},
 	stopHost?: StopHost,
@@ -1056,7 +1138,7 @@ export function activate(
 		},
 	};
 	const parked = parkedRuntimes<ExtensionCtx>();
-	let ctx = createRuntime({ attachment, agentHost, lifecycleClock, appearance, shellPath, shellHost, invalidateGithubCache, pluginSettings });
+	let ctx = createRuntime({ attachment, agentHost, lifecycleClock, appearance, terminalHost, shellHost, invalidateGithubCache, pluginSettings });
 	pi.registerMessageRenderer("omp-actual-terminal-notice", (message) => {
 		const box = new Box(1, 1);
 		box.addChild(new Text(buildNoticeDisplayMessage(message.details), 0, 0));
@@ -1079,7 +1161,7 @@ export function activate(
 	});
 
 	pi.on("session_start", async (_event, eventCtx) => {
-		if (approvalHost && binding.kind === "pending") binding = bindSession(approvalHost, bindingContext(eventCtx));
+		if (binding.kind === "pending") binding = bindSession(terminalHost, bindingContext(eventCtx));
 		hostCwd = eventCtx.cwd;
 		agentId = bindingContext(eventCtx).agentId;
 		const agent = agentHost && agentId !== undefined ? agentHost.identify(agentId) : undefined;
@@ -1186,58 +1268,57 @@ export function activate(
 	});
 
 
-	const execCommandParameters = Type.Object({
-		cmd: Type.String({ description: "Shell command to execute." }),
-		title: Type.String({ description: `Terminal name in list_sessions, the Terminals view and every notice: one nonblank line, at most ${MAX_TITLE_CHARS} characters kept.` }),
-		workdir: Type.Optional(Type.String({ description: "Working directory. Defaults to the session cwd." })),
-		shell: Type.Optional(Type.String({
-			description: "Shell executable. Defaults to omp shellPath, then $SHELL, then the platform default: omp's pi-shell (omp bash, bash 5.3 syntax) on Windows, bash elsewhere. cmd is refused. Write cmd in that shell's syntax; results name it.",
-		})),
-		cols: Type.Optional(Type.Number({
-			description: `PTY width in columns. Default 120, clamped to [${MIN_PTY_COLS}, ${MAX_PTY_COLS}].`,
-		})),
-		rows: Type.Optional(Type.Number({
-			description: `PTY height in rows. Default ${DEFAULT_PTY_ROWS}, clamped to [${MIN_PTY_ROWS}, ${MAX_PTY_ROWS}].`,
-		})),
-		yield_time_ms: Type.Optional(Type.Number({
-			description: `How long (ms) this call waits for output before returning. Default ${DEFAULT_EXEC_YIELD_MS}, clamped to [${MIN_YIELD_TIME_MS}, ${MAX_YIELD_TIME_MS}].`,
-		})),
-		on_exit: Type.Optional(StringEnum(
-			["none", "wake"] as const,
-			'"none" (default). "wake": resume you once when the process exits unobserved; only when the human explicitly asks, never for servers or watchers. A tool result observing the exit consumes it; set_on_exit changes it.',
-		)),
-	});
-
-	pi.registerTool({
-		name: "exec_command",
-		...execCommandDocumentation,
-		label: tr("Execute command", "执行命令"),
-		...(approvalHost ? {
-			approval: (args: unknown) => approveBoundCommand(approvalHost, binding, args),
-			formatApprovalDetails: (args: unknown) => [
-				tr(
-					`Command: ${approvalHost.helpers.truncateForPrompt(approvalCommand(args, "(missing)"))}`,
-					`命令：${approvalHost.helpers.truncateForPrompt(approvalCommand(args, "（缺失）"))}`,
-				),
-			],
-		} : {}),
-		description:
-			"Run a command in a PTY for long-running, interactive (REPL, TUI, ssh, sudo), concurrent or daemon work; bash for one-shot commands. No command deadline. Returns session_id if running, else exit_code. " +
-			execCommandTopicPointers,
-		parameters: execCommandParameters,
+	// A session the registry resolves reads its own settings; one it does not, the process settings.
+	const sessionSettings = (): Settings => (binding.kind === "bound" ? binding.session.settings : terminalHost.settings);
+	// `formatApprovalDetails` is a member of the tool omp builds from this definition, not of
+	// `ToolDefinition`; omp's tool proxy reads it from here.
+	const bashTool = {
+		name: "bash",
+		...bashDocumentation,
+		label: "Bash",
+		get description(): string {
+			return terminalHost.bash(sessionSettings()).description + bashTerminalSection + bashTopicPointers;
+		},
+		get parameters(): BashSchema {
+			return bashParameters(terminalHost.servicesEnabled(sessionSettings()));
+		},
+		// omp's own bash judges every call, terminal or not: the same patterns, env allowlist and interceptor.
+		approval: (args, context) => terminalHost.bash(sessionSettings()).approval(args, context),
+		formatApprovalDetails: (args) => terminalHost.bash(sessionSettings()).formatApprovalDetails(args),
 		async execute(toolCallId, params, signal, onUpdate, eventCtx) {
 			ctx.ui ??= eventCtx.ui;
-			const shape = await runExecCommand(ctx, params, signal, onUpdate, eventCtx.cwd, toolCallId);
-			updateRunningSessionsUi(ctx);
-			return {
-				content: [{ type: "text", text: renderProcessResultText(shape) }],
-				details: shape,
-			};
+			const call = parseBashCall(params);
+			switch (call.kind) {
+				case "native": {
+					const invoke = eventCtx.invokeTool;
+					if (invoke === undefined) {
+						throw new Error("omp-actual-terminal: omp passed the bash call no ctx.invokeTool; requalify src/index.ts for this omp version");
+					}
+					return invoke(call.params);
+				}
+				case "terminal": {
+					const settings = sessionSettings();
+					const shape = await runTerminal(ctx, call.request, {
+						cwd: eventCtx.cwd,
+						sessionId: eventCtx.sessionManager.getSessionId(),
+						sessionFile: eventCtx.sessionManager.getSessionFile(),
+						settings,
+						localProtocolOptions: eventCtx.localProtocolOptions,
+						bash: terminalHost.bash(settings),
+					}, signal, onUpdate, toolCallId);
+					updateRunningSessionsUi(ctx);
+					return {
+						content: [{ type: "text", text: renderProcessResultText(shape) }],
+						details: shape,
+					};
+				}
+			}
 		},
-	} satisfies ToolDefinition<typeof execCommandParameters> & { docTopics(): Readonly<Record<string, string>> });
+	} satisfies ToolDefinition<BashSchema> & Pick<CustomTool, "formatApprovalDetails"> & { docTopics(): Readonly<Record<string, string>> };
+	pi.registerTool(bashTool);
 
 	const writeStdinParameters = Type.Object({
-		session_id: Type.Number({ description: "Session id from exec_command." }),
+		session_id: Type.Number({ description: "Session id from a bash pty call." }),
 		chars: Type.Optional(Type.String({
 			description: "Text with C-style escapes: \\xHH, \\uHHHH, \\u{H\u2026}, \\n \\r \\t \\0 \\a \\e \\b \\f \\v \\\\ \\\". Unknown \\X preserved literally. Mutually exclusive with chars_b64.",
 		})),
@@ -1253,7 +1334,7 @@ export function activate(
 		...writeStdinDocumentation,
 		label: tr("Send input", "发送输入"),
 		description:
-			"Send input to a running session's PTY; returns output like exec_command." +
+			"Send input to a running session's PTY; returns output like a bash pty call." +
 			writeStdinTopicPointers,
 		parameters: writeStdinParameters,
 		async execute(toolCallId, params, signal, onUpdate, eventCtx) {
@@ -1268,7 +1349,7 @@ export function activate(
 	} satisfies ToolDefinition<typeof writeStdinParameters> & { docTopics(): Readonly<Record<string, string>> });
 
 	const setOnExitParameters = Type.Object({
-		session_id: Type.Number({ description: "Session id from exec_command." }),
+		session_id: Type.Number({ description: "Session id from a bash pty call." }),
 		on_exit: StringEnum(
 			["none", "wake"] as const,
 			'"none": disarm (also after eviction) as soon as auto-resume is unwanted. "wake": arm auto-resume while running, only when the human explicitly asked.',

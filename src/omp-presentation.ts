@@ -1,11 +1,9 @@
 import type {
 	ExtensionAPI,
-	Settings,
 	ToolDefinition,
 	ToolRenderResultOptions,
 	TruncationResult,
 } from "@oh-my-pi/pi-coding-agent";
-import type * as Registry from "@oh-my-pi/pi-coding-agent/config/registry";
 import type * as GhCache from "@oh-my-pi/pi-coding-agent/tools/gh-cache-invalidation";
 import type * as ThemeModule from "@oh-my-pi/pi-tui/theme";
 import type * as PiTuiTools from "@oh-my-pi/pi-tui/tools";
@@ -19,7 +17,7 @@ import type { TerminalAppearance } from "./terminal-screen.ts";
 import { truncationMarker } from "./tool-result.ts";
 import { type AgentHost, loadAgentHost } from "./agent-park.ts";
 import { loadShellHost, type ShellHost } from "./shell-host.ts";
-import { type CommandApprovalHost, loadCommandApprovalHost } from "./command-approval.ts";
+import { loadTerminalHost, type TerminalHost } from "./terminal-host.ts";
 import { loadPluginSettingsReader, type PluginSettingsReader } from "./plugin-settings.ts";
 import { loadStopHost, type StopHost } from "./stop-gate.ts";
 import type { LifecycleClock } from "./terminal-lifecycle.ts";
@@ -197,7 +195,7 @@ export function parseResultView(result: PiTuiTools.ToolRenderResult, isPartial: 
 	const failure = optionalString(details.failure_message);
 
 	switch (details.operation) {
-		case "exec_command":
+		case "bash":
 		case "write_stdin": {
 			const sessionId = optionalNumber(details.session_id);
 			if (details.status === "running" && sessionId !== undefined) {
@@ -307,13 +305,6 @@ function stringifyChars(chars: string): string {
 	return safe.length > 40 ? `${safe.slice(0, 37)}…` : safe;
 }
 
-export function execShellArgs(args: StreamedArgs<"cmd" | "workdir">): ShellArgs {
-	return {
-		command: typeof args?.cmd === "string" ? args.cmd : undefined,
-		cwd: typeof args?.workdir === "string" && args.workdir.length > 0 ? args.workdir : undefined,
-	};
-}
-
 export function writeStdinShellArgs(args: StreamedArgs<"session_id" | "chars" | "chars_b64">): ShellArgs {
 	const target = typeof args?.session_id === "number"
 		? tr(`session ${args.session_id}`, `会话 ${args.session_id}`)
@@ -375,7 +366,36 @@ function delegateToShell<K extends string>(
 	};
 }
 
-export const SHELL_PRESENTED_TOOLS = ["exec_command", "write_stdin", "kill_session"] as const;
+/** Whether a bash result came from a plugin terminal rather than from omp's own bash. */
+function isTerminalResult(result: PiTuiTools.ToolRenderResult): boolean {
+	const details: PersistedDetails | undefined =
+		typeof result.details === "object" && result.details !== null ? result.details : undefined;
+	return details?.operation === "bash";
+}
+
+/**
+ * omp drops its own renderer for a re-registered bash, so the plugin hands every bash call back
+ * to it: the arguments are omp's own, results of omp's bash pass through, and only terminal
+ * results are adapted.
+ */
+function presentBash(bash: BashRenderer): OmpToolHooks {
+	const adapt = (result: PiTuiTools.ToolRenderResult, options: ToolRenderResultOptions): PiTuiTools.ToolRenderResult | ShellResult =>
+		isTerminalResult(result) ? toShellResult(parseResultView(result, options.isPartial)) : result;
+	return {
+		renderCall: (args, options, theme) => requireComponent(bash.renderCall(args, options, theme)),
+		renderResult: (result, options, theme, args) => requireComponent(bash.renderResult(adapt(result, options), options, theme, args)),
+		describeCall: (args, options) => bash.describeCall(args, options),
+		describeResult: (result, options, args) => {
+			const shown = adapt(result, options);
+			const view = bash.describeResult(shown, options, args);
+			return shown.isError === true && view !== undefined ? { ...view, tone: view.tone ?? "error" } : view;
+		},
+		mergeCallAndResult: bash.mergeCallAndResult,
+		inline: bash.inline,
+	};
+}
+
+export const SHELL_PRESENTED_TOOLS = ["bash", "write_stdin", "kill_session"] as const;
 type ShellPresentedTool = (typeof SHELL_PRESENTED_TOOLS)[number];
 
 function isShellPresented(name: string): name is ShellPresentedTool {
@@ -388,13 +408,20 @@ function isShellPresented(name: string): name is ShellPresentedTool {
 async function presentOnOmp(pi: ExtensionAPI): Promise<ExtensionAPI> {
 	const bash = parseShellRenderer(await import("@oh-my-pi/pi-tui/tools"));
 	const hooks: Record<ShellPresentedTool, OmpToolHooks> = {
-		exec_command: delegateToShell(bash, execShellArgs),
+		bash: presentBash(bash),
 		write_stdin: delegateToShell(bash, writeStdinShellArgs),
 		kill_session: delegateToShell(bash, killShellArgs),
 	};
 	const registerTool: ExtensionAPI["registerTool"] = (definition) => {
-		const topLevel = { ...definition, loadMode: "essential" as const };
-		const presented = isShellPresented(definition.name) ? { ...topLevel, ...hooks[definition.name] } : topLevel;
+		const overrides = isShellPresented(definition.name)
+			? { loadMode: "essential" as const, ...hooks[definition.name] }
+			: { loadMode: "essential" as const };
+		// Copied by descriptor: a spread would freeze getters such as bash's settings-dependent
+		// `description` and `parameters` at their registration-time value.
+		const presented = Object.defineProperties(
+			{ ...definition, ...overrides },
+			{ ...Object.getOwnPropertyDescriptors(definition), ...Object.getOwnPropertyDescriptors(overrides) },
+		);
 		pi.registerTool(presented);
 	};
 	const wrapped: ExtensionAPI = Object.create(pi, { registerTool: { value: registerTool } });
@@ -416,33 +443,6 @@ async function loadOmpAppearance(): Promise<() => TerminalAppearance> {
 	return () => (isLightTheme(getCurrentThemeName()) ? "light" : "dark");
 }
 
-async function loadOmpShellPath(host: ExtensionAPI): Promise<() => string | undefined> {
-	const registry: Partial<Pick<typeof Registry, "lookup">> =
-		await import("@oh-my-pi/pi-coding-agent/config/registry");
-	const { lookup } = registry;
-	if (typeof lookup !== "function") {
-		throw new Error("omp-actual-terminal: settings registry lacks lookup");
-	}
-	const handle = lookup("shellPath");
-	const settings =
-		"pi" in host && typeof host.pi === "object" && host.pi !== null && "settings" in host.pi
-			? host.pi.settings
-			: undefined;
-	if (handle == null || typeof handle.get !== "function" || settings === undefined) {
-		throw new Error("omp-actual-terminal: host lacks shellPath setting or pi.settings scope");
-	}
-	return shellPathReader(handle.get.bind(handle), settings);
-}
-
-function shellPathReader(get: (scope: Registry.ScopeLike) => unknown, settings: Settings): () => string | undefined {
-	return () => {
-		const value = get(settings);
-		if (value === undefined) return undefined;
-		if (typeof value !== "string") throw new Error("omp-actual-terminal: shellPath must be a string or undefined");
-		return value.trim() || undefined;
-	};
-}
-
 async function loadGithubCacheInvalidation(): Promise<(command: string) => void> {
 	const { invalidateGithubCacheForBashCommand }: Partial<
 		Pick<typeof GhCache, "invalidateGithubCacheForBashCommand">
@@ -456,9 +456,8 @@ async function loadGithubCacheInvalidation(): Promise<(command: string) => void>
 export function withHostPresentation(
 	activate: (
 		pi: ExtensionAPI,
-		appearance?: () => TerminalAppearance,
-		shellPath?: () => string | undefined,
-		approvalHost?: CommandApprovalHost,
+		appearance: () => TerminalAppearance,
+		terminalHost: TerminalHost,
 		invalidateGithubCache?: (command: string) => void,
 		lifecycleClock?: LifecycleClock,
 		stopHost?: StopHost,
@@ -473,9 +472,9 @@ export function withHostPresentation(
 		}
 		requireBunRuntime();
 		return Promise.all([
-			presentOnOmp(host), loadTernHudHost(), loadOmpAppearance(), loadOmpShellPath(host), loadCommandApprovalHost(),
+			presentOnOmp(host), loadTernHudHost(), loadOmpAppearance(), loadTerminalHost(),
 			loadGithubCacheInvalidation(), loadStopHost(), loadPluginSettingsReader(), loadAgentHost(), loadShellHost(),
-		]).then(async ([pi, hud, appearance, shellPath, approvalHost, invalidateGithubCache, stopHost, pluginSettings, agentHost, shellHost]) => {
+		]).then(async ([pi, hud, appearance, terminalHost, invalidateGithubCache, stopHost, pluginSettings, agentHost, shellHost]) => {
 			// The specifier
 			// is non-literal so bundlers leave it deferred: inlining it would hoist
 			// those imports into the bundle and fail module loading before the
@@ -483,7 +482,7 @@ export function withHostPresentation(
 			const removal: typeof TernPluginRemoval = await import(TERN_PLUGIN_REMOVAL_MODULE);
 			await removal.retireTernPlugin();
 			await initializeTerminalUrls();
-			const activated = activate(pi, appearance, shellPath, approvalHost, invalidateGithubCache, {}, stopHost, pluginSettings, agentHost, shellHost);
+			const activated = activate(pi, appearance, terminalHost, invalidateGithubCache, {}, stopHost, pluginSettings, agentHost, shellHost);
 			mountTerminalHud(pi, activated.store, hud, activated.kill);
 			scheduleLogArchive();
 		});

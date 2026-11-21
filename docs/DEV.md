@@ -10,12 +10,11 @@ and tool reference, see [../README.md](../README.md).
   `engines`).
 - **Node** for ordinary `node` children in `tests/bun-pty-runtime.mjs` and the
   unsupported-host rejection regression. Node is not a supported plugin host.
-- **Linux, macOS, or Windows.** The platform default shell is omp's own
-  pi-shell (`omp bash`) on Windows and `bash` elsewhere. The stub host of the
-  test suite is not omp and has no pi-shell, so on Windows the suite runs its
-  terminals under the `bash` it is started from — Git for Windows, which the
-  CI job provides by running every step under bash (see
-  [Shell selection](../README.md#shell-selection)).
+- **Linux, macOS, or Windows.** A terminal's default shell is the session's
+  shell, omp's own shell process (see
+  [Shell selection](../README.md#shell-selection)). The stub host of the test
+  suite is not omp, so it runs that shell as the `bash` on `PATH` — on Windows
+  Git for Windows, which the CI job provides by running every step under bash.
   Every PTY uses Bun's native `Bun.Terminal`.
 - **omp** installed and runnable (`omp --version`). Only omp is supported;
   non-omp hosts fail at the extension factory before tool registration.
@@ -72,8 +71,10 @@ indexed by concern:
 
 | Concern | File(s) |
 |---|---|
-| Tool schemas and orchestration | `src/index.ts` (`exec_command`, `write_stdin`, `set_on_exit`, `monitor`, `kill_session`, `list_sessions`) |
-| Tool-owned topics (`read xd://<tool>/<topic>`) and full-description pointers for all six PTY tools | `src/exec-command-docs.ts`, `src/topics/*.md`; typed definitions in `src/index.ts` |
+| Tool schemas and orchestration | `src/index.ts` (`bash`, `write_stdin`, `set_on_exit`, `monitor`, `kill_session`, `list_sessions`) |
+| `bash` schema and the split between omp's own bash (`ctx.invokeTool`) and a terminal | `src/bash-tool.ts` (`parseBashCall`); registration and `runTerminal` in `src/index.ts` |
+| omp's bash for approval and description, the session-shell seed, shell process, URL mounts and terminal environment | `src/terminal-host.ts` (`loadTerminalHost`) |
+| Tool-owned topics (`read xd://<tool>/<topic>`) and full-description pointers for all six PTY tools | `src/tool-docs.ts`, `src/topics/*.md`; typed definitions in `src/index.ts` |
 | Session lifecycle (spawn, write, kill, log-stream) | `src/session.ts` |
 | Session registry, LRU eviction, shutdown | `src/session-store.ts` |
 | Per-call observation (`CollectResult`: screen, final screen or none) | `src/collect.ts`; produced by `ExecSession.collect` in `src/session.ts` |
@@ -92,18 +93,19 @@ indexed by concern:
 | C-style escape decoding for `chars` | `src/unescape.ts` |
 | Bun.Terminal backend, runtime admission, spawn preflight, shell-exit events, process-group signals, Windows tree-kill | `src/pty.ts` |
 | Shell selection & argv construction; omp's cmd.exe test loaded at factory time | `src/shell.ts`; `src/shell-host.ts` |
-| `exec.initFile` plugin setting: parse, path resolution, the source-then-`eval` script for POSIX shells | `src/exec-init.ts`; omp's POSIX-shell test in `src/shell.ts` (`isPosixShell`, shared with command approval); read per call in `runExecCommand` (`src/index.ts`); `tests/exec-init.test.ts` |
-| omp-only host admission, top-level `loadMode`, bash delegation, argument/result display adapters, live `shellPath` registry lookup | `src/omp-presentation.ts` |
+| `exec.initFile` plugin setting: parse, path resolution, the source-then-`eval` script for POSIX shells | `src/exec-init.ts`; omp's POSIX-shell test in `src/shell.ts` (`isPosixShell`); read per call in `runTerminal` (`src/index.ts`); `tests/exec-init.test.ts` |
+| omp-only host admission, top-level `loadMode`, bash delegation, argument/result display adapters | `src/omp-presentation.ts` |
 | Tern terminal HUD: pill segment, Terminals view, terminal page | `src/tern-terminal-hud.ts` |
 | Removal of the `omp-unified-exec` Tern plugin that versions up to 0.14.7 installed | `src/tern-plugin-removal.ts` |
 | `term://` resources, read handler and screenshots | `src/terminal-resource.ts`, `src/terminal-url.ts`, `src/terminal-image.ts` |
 | Monitors: conditions, judge monitors, batching, End/match/judgment/reminder notices | `src/monitor-subscription.ts`; screen judgment through omp's judge chain in `src/screen-judge.ts`, reached per judgment through `RuntimeHost.judge` in `src/index.ts`; subscriptions owned by `src/completion.ts` (`startMonitor`) |
 | Input-wait alerts: prompt detection, quiet watcher, notice | `src/input-wait.ts`; `ExecSession.watchInputWait` in `src/session.ts`; `alertInputWait` in `src/completion.ts` |
 | Session log naming, open-log tracking and seven-day gzip compression | `src/log-archive.ts`; `ExecSession.spawn` in `src/session.ts`; scheduled by `withHostPresentation` |
-| Command approval and host session binding | `src/command-approval.ts`, `src/session-binding.ts` |
+| Host session binding: the settings `bash` approval, description and schema read | `src/session-binding.ts`; `sessionSettings` in `src/index.ts` |
 | Copies of oh-my-omp/shared code (`i18n.ts`, `todo-read.ts`, `internal-url.ts`, `tern-plugin.ts`), declared in `omomp-shared.json` | `src/omomp-shared/`; never edit a copy, shared main owns them and its sync workflow opens PRs that refresh them |
 | `monitor` result details type | `src/script-result.ts` |
-| Tool limits, early-exit grace, session-store limits | top of `src/index.ts` |
+| Terminal yield and PTY size limits | top of `src/bash-tool.ts` |
+| `write_stdin` yield, early-exit grace, session-store limits | top of `src/index.ts` |
 
 ## Dev loop
 
@@ -132,9 +134,11 @@ indexed by concern:
 omp --no-extensions -e "$PWD/src/index.ts" --no-session
 ```
 
-Ask the model to start a long-running command through `exec_command`, drive
-input with `write_stdin`, and terminate it with `kill_session`. Exec/write/kill
-must use omp's bash cards; monitor/set-on-exit/list use its default cards.
+Ask the model to start a long-running command through `bash` with
+`pty: true`, drive input with `write_stdin`, and terminate it with
+`kill_session`. Bash/write/kill must use omp's bash cards, and a `bash` call
+without `pty` must look exactly as without the plugin; monitor/set-on-exit/list
+use omp's default cards.
 For Tern, exercise the pill segment, Terminals view, typed input and Kill in a
 real window as [Tern HUD](#tern-hud) describes.
 
@@ -142,7 +146,7 @@ For a fresh non-interactive tool execution:
 
 ```bash
 omp --no-extensions -e "$PWD/src/index.ts" --mode json --no-session \
-  -p 'Call exec_command with {"cmd":"echo omp-only-ok","title":"smoke"}. Reply done.'
+  -p 'Call bash with {"command":"echo omp-only-ok","pty":true,"title":"smoke"}. Reply done.'
 ```
 
 ## Running specific test files
@@ -216,8 +220,10 @@ loop; see the existing `\x` and `\u` branches for the pattern.
 ### Change a documented constant
 
 The constants in the README's `## Constants` section live in the module that
-owns them: yield limits, early-exit grace, session-store limits and
-`INPUT_WAIT_QUIET_MS` at the top of `src/index.ts`, `TERMINAL_HISTORY_CELLS`
+owns them: `MIN_YIELD_TIME_MS`, `MAX_YIELD_TIME_MS` and
+`DEFAULT_TERMINAL_YIELD_MS` at the top of `src/bash-tool.ts`;
+`DEFAULT_WRITE_STDIN_YIELD_MS`, early-exit grace, session-store limits and
+`INPUT_WAIT_QUIET_MS` at the top of `src/index.ts`; `TERMINAL_HISTORY_CELLS`
 in `src/terminal-screen.ts`, `DEFAULT_REMIND_AFTER_MS` and
 `DEFAULT_JUDGE_INTERVAL_MS` in `src/monitor-subscription.ts`,
 `JUDGE_DEADLINE_MS` in `src/screen-judge.ts`, `RECLAIM_TTL_MS`,
@@ -253,8 +259,9 @@ defense for legacy results and fallback content.
 
 ### Tune TUI rendering
 
-Tool result cards: `src/omp-presentation.ts` adapts exec/write/kill
-to omp's exported bash renderer, including Tern's describe hooks. Other tools
+Tool result cards: `src/omp-presentation.ts` adapts terminal `bash` results,
+write and kill to omp's exported bash renderer, including Tern's describe
+hooks, and hands omp's own `bash` results to it unchanged. Other tools
 use omp's default cards. Keep model content and persisted details unchanged by
 display adapters. Update `tests/omp-presentation.test.ts`, then exercise the
 actual omp ANSI TUI and Tern path. A missing or reshaped required omp module
@@ -308,7 +315,7 @@ from source and from a compiled executable. A host type change therefore fails
 Run `bun run check` and `OMOMP_LANG=en bun run test`, then validate the actual
 installed omp runtime. Stub-host tests alone do not qualify host
 compatibility. Confirm checkout loading, `omp plugin install` loading through
-`omp.extensions`, exec/write/kill cards, and Tern terminal interactions;
+`omp.extensions`, bash/write/kill cards, and Tern terminal interactions;
 required host modules must fail loading rather than silently degrade. Record
 observed qualification in `CHANGELOG.md` with environment and evidence.
 
@@ -336,72 +343,68 @@ section must list none of them, and omp must still read no
 ### `exec.initFile`
 
 Through real omp: with a user value whose file defines an alias and an
-export, an `exec_command` under zsh and under bash must show both, omp's
-`bash` tool must show neither, and a project `.omp/plugin-overrides.json`
-value must replace the user one.
+export, a terminal in the session's shell, under zsh and under bash must show
+both, a `bash` call without `pty` must show neither, and a project
+`.omp/plugin-overrides.json` value must replace the user one.
 
-### Shell bridge
+### Session shell
 
-`@oh-my-pi/pi-coding-agent/config/registry` must still export `lookup`, and
-`lookup("shellPath").get(host.pi.settings)` must still return omp's effective
-setting as a string or undefined, and `@oh-my-pi/pi-utils` must still export
-`procmgr.isCmdShell` (the factory fails loading without it). Through real
-interactive omp, a `shellPath` overlay must outrank `SHELL` and an explicit
-`shell` must outrank both; with none of them set, `exec_command` must run in
-pi-shell (`shell` names the omp binary and `<omp> bash -c` runs POSIX syntax);
-an explicit `shell: "C:\\Windows\\System32\\cmd.exe"` must fail with one
-notice naming its source and no cmd process; an explicit `shell` that does not
-exist must return `spawn … ENOENT` and no output rather than another shell
-(omp itself rejects a missing `shellPath` at startup, before the extension
-loads); later input writes, kills and listings must repeat the session's
-shell; and the default `workdir` must still follow omp's cwd.
+`loadTerminalHost` imports `BashTool`, `settings` and `AgentRegistry` from the
+root, `exec/bash-executor`'s `executeBash`, `exec/settings`'s
+`cfgBashGitGuard`, `exec/non-interactive-env`'s `buildNonInteractiveEnv`,
+`exec/shell-process`'s `shellProcessCommand` and `shellMounts`,
+`internal-urls/router`'s `InternalUrlRouter`, `internal-urls/url-filesystem`'s
+`InternalUrlFilesystem` and `UrlFsError`, `task/settings`'s `ovnfsCommand` and
+`tools/settings`'s `cfgLaunchEnabled`; `@oh-my-pi/pi-utils` must still export
+`procmgr.isCmdShell`. A missing export fails loading. The seed repeats
+`BashTool`'s private session seed (`tools/bash.ts`): compare its session key,
+seed key, minimizer, git guard and overlay options with the current one on
+every upgrade.
+
+Through real interactive omp, in a main agent, a subagent and `omp -p`: after
+a `bash` call exports a variable, defines a function and an alias, a terminal
+without `shell` must see all three, read `local://` and `skill://` paths and
+start in a URL `cwd`; one with `shell: "/bin/sh"` must see the export only and
+refuse a URL `cwd`; an explicit `shell: "C:\\Windows\\System32\\cmd.exe"` must
+fail with one notice and no cmd process; an explicit `shell` that does not
+exist must return `spawn … ENOENT` and no output rather than another shell;
+later input writes, kills and listings must repeat the session's shell; and
+the default `cwd` must still follow omp's cwd.
 `OMP_ACTUAL_TERMINAL_BASH` names the bash a bash selection resolves to.
 
 ### GitHub view cache
 
 The factory imports omp's
 `tools/gh-cache-invalidation.invalidateGithubCacheForBashCommand` and calls it
-with the raw `cmd` before spawning, as `BashTool.execute` does. Requalify that
-this export still exists and that a `gh issue close` through `exec_command`
-makes the next `issue://` read refetch.
+with the raw `command` before spawning a terminal, as `BashTool.execute` does.
+Requalify that this export still exists and that a `gh issue close` in a
+terminal makes the next `issue://` read refetch.
 
-### Command approval
+### `bash` registration
 
-Command approval is ported from
-[`can1357/oh-my-pi` v18.22.2 (`e1ae2cc998ef`)](https://github.com/can1357/oh-my-pi/blob/v18.22.2/packages/coding-agent/src/tools/bash.ts),
-`packages/coding-agent/src/tools/bash.ts` (internal rule helpers and
-`BashTool.approval`). The host exports none of these pattern judgements, so the
-port is copied, not called: `BashTool.approval` needs a full ToolSession and
-would inherit `bash.interceptor`. The shell judgements the host does export are
-injected, including the `NAME=` prefix test `isShellEnvironmentAssignment`.
-Differences are argument name `cmd`, explicit bound-session settings (the
-session's own `bash.patterns` and the operator layers from `grantAuthority()`),
-injected host helpers, and typed boundary parsing. Operator `deny` and `prompt`
-rules are not lifted by project `allow` rules, and rule ordering and every
-compound/critical branch follow v18.22.2. `bash.allowedEnvVars` and per-rule
-`env` allow lists are not ported, so an allow that depends on a leading env
-assignment asks for approval instead of passing.
-The POSIX-shell predicate is copied from `packages/utils/src/procmgr.ts` into
-`src/shell.ts`, where `exec.initFile` uses it too.
-Factory loading imports root `AgentRegistry` / `CRITICAL_BASH_PATTERNS`,
-`exec/settings`'s `cfgBashPatterns` / `cfgBashAllowCompoundCommands`,
-`tools/shell-tokenize`'s `tokenizeShellSegments` / `isShellEnvironmentAssignment` /
-`extractLiteralAndChainSegments`, and `tools/approval`'s `truncateForPrompt`.
-Missing exports reject plugin loading; synchronous approval imports nothing.
+The plugin registers `bash` over omp's own. A call without `pty: true`, or with
+`name`, goes through `ctx.invokeTool`, which must still run the built-in tool
+unwrapped (not approved again) with the call's signal and update callback.
+Approval, approval details and description come from a `BashTool` built per
+call from the session's settings with `hasUI: false`, so its description
+carries no pty paragraph of omp's own. omp's tool proxy must still read
+`description`, `parameters` and `formatApprovalDetails` from the definition on
+every access, and a re-registered `bash` must still lose omp's built-in
+renderer, which `src/omp-presentation.ts` therefore supplies.
 
-On omp upgrades, compare the port with the current built-in functions, then
-run real omp comparisons with compound approval both off and on: ordered
-first-match, whole-chain restrictions, all-segments-allow, deny/prompt/critical
-precedence, and display truncation. Requalify the internal session interface:
-registry registration before `session_start`, `ctx.agent.id`, the exact
-`sessionManager` identity, live `session.settings` and `getShellConfig().shell`;
-switches/branches must retain the same session without registry lookup.
-Create real child agents with distinct settings overlays and a private-registry
-Unbound child; ensure pending/Unbound reads no settings and returns bare `exec`.
-Verify the host's tool proxy and our presentation spread retain `approval` and
-`formatApprovalDetails`, deny calls spawn nothing, and real TUI confirmation
-shows the critical reason and `Command: …`. Only approval uses this binding;
-PTY shell selection keeps its existing host bridge.
+On omp upgrades compare `BashTool`'s schema (`tools/bash.ts`) with
+`src/bash-tool.ts`. Then, in real omp: `/dump` in a main agent, a subagent and
+`omp -p` must show the same `bash` fields, `pty` and the terminal fields
+included; a `bash` call without `pty` must keep omp's own approval, execution,
+result and card, named services included; a terminal call with an allowed
+leading `NAME=value` (`bash.allowedEnvVars`) must pass approval while
+`--approval-mode always-ask` still prompts, a denied call must spawn nothing,
+and the confirmation must show omp's own details. Requalify the session
+binding too: registry registration before `session_start`, `ctx.agent.id`,
+the exact `sessionManager` identity and live `session.settings`;
+switches/branches must keep the same session without a registry lookup, and
+child agents with distinct settings overlays must each be judged by their
+own.
 
 ### `term://` resources and screenshots
 
@@ -437,7 +440,7 @@ unchanged default-card/message styling in ANSI/Tern. With a short
 `remind_after_ms`, a silent monitor must send exactly one `monitor_silent`
 notice on its own, and a delivered match must restart its clock. Without any
 monitor, a real whiptail/debconf dialog (`ucf --debconf-ok` on a modified file
-in a Debian container through `exec_command`) and an apt `[Y/n]` prompt must
+in a Debian container through a `bash` terminal) and an apt `[Y/n]` prompt must
 each enqueue one `input_wait` notice that triggers a turn, and none while an
 attached call shows the prompt. For the lifecycle, a real `read term://` of a
 returned terminal must mark it read (`list_sessions` `lifecycle.read`), and an
@@ -496,8 +499,9 @@ parked subagent's terminal.
 ### Presentation
 
 `toolRenderers.bash` from `@oh-my-pi/pi-tui/tools` must still expose
-`renderCall`/`renderResult`/`describeCall`/`describeResult`/`mergeCallAndResult`/`inline`
-and accept `{command, cwd}` args and `{exitCode, wallTimeMs, async}` details.
+`renderCall`/`renderResult`/`describeCall`/`describeResult`/`mergeCallAndResult`/`inline`,
+accept `{command, cwd}` args and `{exitCode, wallTimeMs, async}` details, and
+render omp's own `bash` results passed to it unchanged.
 Package installation validation must still await the extension factory and
 propagate its rejection.
 

@@ -61,57 +61,23 @@ export function findOnPath(
 	return undefined;
 }
 
-export type LaunchShell =
-	| {
-		readonly kind: "pi-shell";
-		readonly shell: string;
-	}
-	| {
-		readonly kind: "shell";
-		readonly shell: string;
-	};
-
-export type ShellSource = "call" | "shellPath" | "SHELL";
+/**
+ * The shell a terminal runs: the session's own shell (omp's shell process, started from the
+ * session shell's state), or the shell the call names.
+ */
+export type TerminalShell =
+	| { readonly kind: "session" }
+	| { readonly kind: "explicit"; readonly shell: string };
 
 export type ShellChoice =
-	| LaunchShell
-	| {
-		readonly kind: "refused";
-		readonly shell: string;
-		readonly reason: "cmd";
-		readonly source: ShellSource;
-	};
+	| TerminalShell
+	| { readonly kind: "refused"; readonly shell: string; readonly reason: "cmd" };
 
-export interface DefaultShellOptions {
-	readonly omp?: string;
-	readonly isWindows?: boolean;
-	readonly requestedSource?: "call" | "shellPath";
-	readonly isCmdShell: (shell: string) => boolean;
-}
-
-export function resolveDefaultShell(
-	env: NodeJS.ProcessEnv | undefined,
-	requested: string | undefined,
-	options: DefaultShellOptions,
-): ShellChoice {
+/** A blank `shell` argument is no choice; cmd is never launched. */
+export function chooseShell(requested: string | undefined, isCmdShell: (shell: string) => boolean): ShellChoice {
 	const choice = requested?.trim();
-	const explicit = choice || (env ?? process.env).SHELL?.trim();
-	if (explicit) {
-		return options.isCmdShell(explicit)
-			? { kind: "refused", shell: explicit, reason: "cmd", source: choice ? (options.requestedSource ?? "call") : "SHELL" }
-			: { kind: "shell", shell: explicit };
-	}
-	if (options.isWindows ?? IS_WINDOWS) return { kind: "pi-shell", shell: options.omp ?? process.execPath };
-	return { kind: "shell", shell: "bash" };
-}
-
-export function shellArgv(shell: LaunchShell, cmd: string): string[] {
-	switch (shell.kind) {
-		case "pi-shell":
-			return [shell.shell, "bash", "-c", cmd];
-		case "shell":
-			return buildShellCommand(shell.shell, cmd);
-	}
+	if (!choice) return { kind: "session" };
+	return isCmdShell(choice) ? { kind: "refused", shell: choice, reason: "cmd" } : { kind: "explicit", shell: choice };
 }
 
 const resolvedBinaryCache = new Map<string, string>();

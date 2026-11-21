@@ -8,7 +8,7 @@ export const DEFAULT_PTY_COLS = 120;
 export const DEFAULT_PTY_ROWS = 80;
 
 export interface SpawnOptions {
-	command: string[];
+	command: readonly string[];
 	cwd: string;
 	env: NodeJS.ProcessEnv;
 	cols?: number;

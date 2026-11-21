@@ -91,7 +91,7 @@ const PROMPTER = [
 ].join("");
 
 function prompter(id: number, alerts: InputWaitAlert[]): ExecSession {
-	return ExecSession.spawn(id, { title: "Test terminal", command: [process.execPath, "-e", PROMPTER],
+	return ExecSession.spawn(id, { title: "Test terminal", shell: "node", command: [process.execPath, "-e", PROMPTER],
 		cwd: process.cwd(), env: { ...process.env },
 		inputWait: { quietMs: 150, onAlert: (alert) => alerts.push(alert) }, });
 }
@@ -143,7 +143,7 @@ describe("session input-wait alerts", () => {
 	it("alerts through the coordinator while a non-matching monitor watches the same session", async (t) => {
 		const delivered: NoticeMessage[] = [];
 		const coordinator = new CompletionCoordinator({ notices: new NoticeDispatcher({ send: (message) => { delivered.push(message); }, debounceMs: 5 }) });
-		const session = ExecSession.spawn(9203, { title: "Test terminal", command: [process.execPath, "-e", PROMPTER],
+		const session = ExecSession.spawn(9203, { title: "Test terminal", shell: "node", command: [process.execPath, "-e", PROMPTER],
 			cwd: process.cwd(), env: { ...process.env },
 			inputWait: { quietMs: 150, onAlert: (alert) => coordinator.alertInputWait(alert) }, });
 		t.after(async () => { coordinator.shutdown(); await close(session); });

@@ -43,7 +43,7 @@ function screenResult(observation: TerminalObservation) {
 describe("bounded tool results", () => {
 	it("preserves the existing process response contract with explicit operation state", () => {
 		const details = finalizeProcessResult({
-			operation: "exec_command",
+			operation: "bash",
 			wallTimeSec: 0.25,
 			collected: finalScreen("hello\nworld\n"),
 			totalBytes: 12,
@@ -57,7 +57,7 @@ describe("bounded tool results", () => {
 			yieldTimeMs: 250,
 		});
 
-		assert.equal(details.operation, "exec_command");
+		assert.equal(details.operation, "bash");
 		assert.equal(details.status, "running");
 		assert.equal(details.running, true);
 		assert.equal(details.session_id, 7);
@@ -104,7 +104,7 @@ describe("bounded tool results", () => {
 	it("bounds model-visible metadata outside the output body", () => {
 		const huge = `bad\x1b]52;c;payload\x07${"x".repeat(100_000)}`;
 		const details = finalizeProcessResult({
-			operation: "exec_command",
+			operation: "bash",
 			wallTimeSec: 0,
 			collected: finalScreen("small output"),
 			sessionId: undefined,
@@ -180,7 +180,7 @@ describe("bounded tool results", () => {
 		assert.equal((await screen.observe()).kind, "unchanged");
 		const projection = await screen.project();
 		const details = finalizeProcessResult({
-			operation: "exec_command",
+			operation: "bash",
 			wallTimeSec: 0.1,
 			collected: { kind: "final-screen", projection, terminalUrl: "term://unit" },
 			sessionId: undefined,

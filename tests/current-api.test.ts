@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { activate } from "../src/index.ts";
+import { stubTerminalHost } from "./stub-shell.ts";
 
 
 test("session startup preserves builtin bash without a keep-builtin-bash flag", async () => {
@@ -12,14 +13,14 @@ test("session startup preserves builtin bash without a keep-builtin-bash flag", 
 		return list && (async (event: unknown, ctx: ExtensionContext) => { for (const handler of list) await handler(event, ctx); });
 	} };
 	const flags: string[] = [];
-	let active = ["bash", "read", "exec_command"];
+	let active = ["bash", "read", "write_stdin"];
 	activate({
 		registerTool: () => {}, registerCommand: () => {}, registerFlag: (name: string) => { flags.push(name); }, registerMessageRenderer: () => {},
 		on: (name: string, handler: Handler) => { registered.set(name, [...(registered.get(name) ?? []), handler]); },
 		getFlag: () => { throw new Error("startup must not require a builtin-bash flag"); },
 		getActiveTools: () => active,
 		setActiveTools: (names: string[]) => { active = names; },
-	} as unknown as ExtensionAPI);
+	} as unknown as ExtensionAPI, undefined, stubTerminalHost());
 	let widgetReads = 0;
 	const ctx = { mode: "print", hasUI: false, ui: {
 		setStatus: () => {},
@@ -28,7 +29,7 @@ test("session startup preserves builtin bash without a keep-builtin-bash flag", 
 	await handlers.get("session_start")?.({}, ctx);
 	assert.equal(flags.includes("keep-builtin-bash"), false);
 	assert.equal(widgetReads, 0, "no widget work or legacy capability probes with no sessions");
-	assert.deepEqual(active, ["bash", "read", "exec_command"]);
+	assert.deepEqual(active, ["bash", "read", "write_stdin"]);
 	assert.ok(handlers.has("agent_start"));
 	assert.ok(handlers.has("agent_end"));
 	assert.ok(handlers.has("session_stop"));
@@ -40,5 +41,5 @@ test("a rejected run-event registration fails activation rather than selecting a
 	assert.throws(() => activate({
 		registerTool: () => {}, registerCommand: () => {}, registerFlag: () => {}, registerMessageRenderer: () => {},
 		on: (event: string) => { if (event === "agent_end") throw new Error("registration rejected"); },
-	} as unknown as ExtensionAPI), /registration rejected/);
+	} as unknown as ExtensionAPI, undefined, stubTerminalHost()), /registration rejected/);
 });

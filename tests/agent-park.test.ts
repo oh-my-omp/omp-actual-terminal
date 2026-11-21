@@ -4,7 +4,7 @@ import type { AgentRef, AgentStatus, RegistryEvent } from "@oh-my-pi/pi-coding-a
 import type { AgentSessionHandle } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { type AgentGeneration, type AgentHost, type AgentIdentity, parkedRuntimes, parseAgentHost } from "../src/agent-park.ts";
 import { activate } from "../src/index.ts";
-import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";
+import { STUB_SESSION, stubShellHost, stubTerminalHost } from "./stub-shell.ts";
 
 const MINUTE = 60_000;
 const AGENT = "0-Worker";
@@ -81,7 +81,7 @@ function makeHarness(): Harness {
 	const sent: Sent[] = [];
 	let now = Date.now();
 	let sweep: (() => void) | undefined;
-	const stubCtx = { cwd: process.cwd(), ui: { notify() {}, setStatus() {}, setWidget() {} }, hasUI: false, agent: { id: AGENT } };
+	const stubCtx = { cwd: process.cwd(), ui: { notify() {}, setStatus() {}, setWidget() {} }, hasUI: false, agent: { id: AGENT }, ...STUB_SESSION };
 	const pi = {
 		registerTool: (def: ToolDef) => { tools[def.name] = def; },
 		on: (event: string, handler: Handler) => { (handlers[event] ??= []).push(handler); },
@@ -89,7 +89,7 @@ function makeHarness(): Harness {
 		getFlag: () => false, getActiveTools: () => ["bash"], setActiveTools() {},
 		sendMessage: (message: Sent["message"]) => { sent.push({ message }); },
 	};
-	activate(pi as unknown as Parameters<typeof activate>[0], undefined, undefined, undefined, undefined, {
+	activate(pi as unknown as Parameters<typeof activate>[0], undefined, stubTerminalHost(), undefined, {
 		nowFn: () => now,
 		setIntervalFn: (cb) => { sweep = cb; return 1; },
 		clearIntervalFn: () => { sweep = undefined; },
@@ -142,7 +142,7 @@ function alive(pid: number): boolean {
 }
 
 async function startBackground(h: Harness, cmd: string, extra: object = {}): Promise<{ sid: number; pid: number }> {
-	const started = await h.call("exec_command", { cmd, title: "job", shell: "/bin/sh", yield_time_ms: 250, ...extra });
+	const started = await h.call("bash", { pty: true, command: cmd, title: "job", shell: "/bin/sh", yield_time_ms: 250, ...extra });
 	const sid = started.details.session_id;
 	assert.ok(sid !== undefined, JSON.stringify(started.details));
 	const pid = (await h.listed(sid))?.pid;

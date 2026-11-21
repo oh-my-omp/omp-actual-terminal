@@ -30,7 +30,7 @@ async function renderedDelta(cols: number, rows: number, before: string, after: 
 }
 
 async function terminalSession(id: number): Promise<ExecSession> {
-	const session = ExecSession.spawn(id, { title: "Test terminal", command: [process.execPath, "-e", "process.stdin.setRawMode(true); process.stdout.write('READY\\r\\n'); process.stdin.on('data', b => { if (b.toString().includes('EXIT')) process.stdout.write('LAST MATCH', () => process.exit(4)); else process.stdout.write(b.toString().replace(/\\n/g, '\\r\\n')); });"],
+	const session = ExecSession.spawn(id, { title: "Test terminal", shell: "node", command: [process.execPath, "-e", "process.stdin.setRawMode(true); process.stdout.write('READY\\r\\n'); process.stdin.on('data', b => { if (b.toString().includes('EXIT')) process.stdout.write('LAST MATCH', () => process.exit(4)); else process.stdout.write(b.toString().replace(/\\n/g, '\\r\\n')); });"],
 		cwd: process.cwd(), env: { ...process.env }, });
 	const ready = await session.collect({ deadlineMs: Date.now() + 3000 });
 	assert.equal(ready.kind, "screen");
@@ -39,7 +39,7 @@ async function terminalSession(id: number): Promise<ExecSession> {
 }
 
 async function readySession(id: number): Promise<ExecSession> {
-	const session = ExecSession.spawn(id, { title: "Test terminal", command: [process.execPath, "-e", "process.stdin.setRawMode(true); process.stdout.write('READY\\r\\n'); process.stdin.on('data', b => process.stdout.write(b.toString().replace(/\\n/g, '\\r\\n')));"],
+	const session = ExecSession.spawn(id, { title: "Test terminal", shell: "node", command: [process.execPath, "-e", "process.stdin.setRawMode(true); process.stdout.write('READY\\r\\n'); process.stdin.on('data', b => process.stdout.write(b.toString().replace(/\\n/g, '\\r\\n')));"],
 		cwd: process.cwd(), env: { ...process.env }, });
 	for (let attempt = 0; attempt < 150 && !session.liveSnapshot()?.text.includes("READY"); attempt++) await delay(20);
 	assert.match(session.liveSnapshot()?.text ?? "", /READY/);

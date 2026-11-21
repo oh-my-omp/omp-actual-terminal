@@ -296,7 +296,7 @@ describe("terminal HUD view description", () => {
 		assert.equal(withRole(view, "omp.jobs.split").length, 0);
 		const empty = onlyRole(view, "omp.jobs.empty");
 		assert.equal(onlyRoleOf(empty, "omp.jobs.empty.title", "text").p?.text, "No terminals");
-		assert.match(String(onlyRoleOf(empty, "omp.jobs.empty.note", "text").p?.text), /exec_command/);
+		assert.match(String(onlyRoleOf(empty, "omp.jobs.empty.note", "text").p?.text), /pty: true/);
 		assert.deepEqual(buttonActs(view), [{ click: CLOSE_ACTION }]);
 	});
 
@@ -567,7 +567,7 @@ function makeHarness(t: TestContext, initiallyNative = false, ModeClass: new () 
 			for (const listener of nativeListeners) listener(on);
 		},
 		spawn(command = [process.execPath, "-e", "process.stdin.resume()"], cols = 80, insert = true) {
-			const session = ExecSession.spawn(store.allocateId(), { title: "Test terminal", command, cwd: process.cwd(), env: process.env, cols, rows: 24, });
+			const session = ExecSession.spawn(store.allocateId(), { title: "Test terminal", shell: "test", command, cwd: process.cwd(), env: process.env, cols, rows: 24, });
 			sessions.push(session);
 			assert.equal(session.failureMessage, null, "child spawn succeeds");
 			if (insert) store.insert(session);

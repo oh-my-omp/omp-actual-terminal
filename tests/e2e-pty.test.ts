@@ -5,7 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { readTerminal } from "../src/terminal-resource.ts";
 import { activate } from "../src/index.ts";
 import { IS_WINDOWS } from "../src/shell.ts";
-import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";
+import { STUB_SESSION, stubShellHost, stubTerminalHost } from "./stub-shell.ts";
 
 
 /**
@@ -29,6 +29,7 @@ function makeHarness() {
 		cwd: process.cwd(),
 		ui: { notify: () => {}, setStatus: () => {} },
 		hasUI: false,
+		...STUB_SESSION,
 	};
 	const pi = {
 		registerTool: (def: any) => { tools[def.name] = def; },
@@ -40,7 +41,7 @@ function makeHarness() {
 		setActiveTools: () => {},
 	};
 	const api = pi as unknown as Parameters<typeof activate>[0];
-	activate(api, undefined, STUB_SHELL_PATH, undefined, undefined, {}, undefined, undefined, undefined, stubShellHost);
+	activate(api, undefined, stubTerminalHost(), undefined, {}, undefined, undefined, undefined, stubShellHost);
 	return {
 		async call(toolName: string, params: any, signal?: AbortSignal) {
 			return tools[toolName].execute("id", params, signal, undefined, stubCtx);
@@ -77,7 +78,7 @@ describe("omp-actual-terminal PTY mode", () => {
 		await h.emit("session_start");
 		try {
 			// `echo` ends each line itself: `tty` does not on uutils coreutils (Ubuntu 26.04).
-			const r = await h.call("exec_command", { title: "Test command", cmd: 't=$(tty) && echo "tty=$t" && echo "seen=$TERM"',
+			const r = await h.call("bash", { pty: true, title: "Test command", command: 't=$(tty) && echo "tty=$t" && echo "seen=$TERM"',
 
 				yield_time_ms: 1500, });
 			assert.match(r.details.output, /^tty=\/dev\//m, `output=${r.details.output}`);
@@ -96,7 +97,7 @@ describe("omp-actual-terminal PTY mode", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		try {
-			const r1 = await h.call("exec_command", { title: "Test command", cmd: "python3 -q",
+			const r1 = await h.call("bash", { pty: true, title: "Test command", command: "python3 -q",
 
 				yield_time_ms: 800, });
 			const sid = r1.details.session_id;
@@ -133,7 +134,7 @@ describe("omp-actual-terminal PTY mode", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		try {
-			const r1 = await h.call("exec_command", { title: "Test command", cmd: fixture, yield_time_ms: 1500 });
+			const r1 = await h.call("bash", { pty: true, title: "Test command", command: fixture, yield_time_ms: 1500 });
 			const sid = r1.details.session_id;
 			assert.equal(typeof sid, "number", `fixture did not stay alive: ${JSON.stringify(r1.details)}`);
 
@@ -161,7 +162,7 @@ describe("omp-actual-terminal PTY mode", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		try {
-			const r = await h.call("exec_command", { title: "Test command", cmd: "echo tty-cmd", shell: "cmd",
+			const r = await h.call("bash", { pty: true, title: "Test command", command: "echo tty-cmd", shell: "cmd",
 				yield_time_ms: 20000, });
 			assert.equal(r.details.session_id, undefined, JSON.stringify(r.details));
 			assert.match(String(r.details.failure_message), /never launches cmd/, JSON.stringify(r.details));
@@ -175,7 +176,7 @@ describe("omp-actual-terminal PTY mode", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		try {
-			const r1 = await h.call("exec_command", { title: "Test command", cmd: "while true; do echo alive; sleep 0.2; done",
+			const r1 = await h.call("bash", { pty: true, title: "Test command", command: "while true; do echo alive; sleep 0.2; done",
 
 				yield_time_ms: 400, });
 			const sid = r1.details.session_id;
