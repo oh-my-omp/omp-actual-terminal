@@ -120,6 +120,25 @@ describe("SessionStore", () => {
 		assert.equal((b as unknown as StubSession).terminatedWith, "SIGTERM");
 	});
 
+	it("terminateAll excludes already-exited sessions from its returned live list while still clearing and evicting them", () => {
+		const evicted: Array<{ id: string; reason: string }> = [];
+		const store = new SessionStore({
+			maxSessions: 10,
+			lruProtectedCount: 2,
+			onEvict: (s, reason) => evicted.push({ id: s.id, reason }),
+		});
+		const exited = stub(1, 1000, /*exited*/ true);
+		const live = stub(2, 2000, /*exited*/ false);
+		store.insert(exited);
+		store.insert(live);
+		const drained = store.terminateAll();
+		assert.deepEqual(drained.map((s) => s.id), ["bg_2"]);
+		assert.equal(store.size, 0);
+		assert.equal((exited as unknown as StubSession).terminatedWith, null);
+		assert.equal((live as unknown as StubSession).terminatedWith, "SIGTERM");
+		assert.deepEqual(evicted.map((e) => e.id).sort(), ["bg_1", "bg_2"]);
+	});
+
 	it("onEvict callback fires for LRU and shutdown", () => {
 		const events: Array<{ id: string; reason: string }> = [];
 		const store = new SessionStore({
