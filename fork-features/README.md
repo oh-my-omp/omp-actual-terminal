@@ -61,16 +61,15 @@ retained as compatibility shims.
   workflow files back in does not re-enable them.
 - `Sync upstream` (`.github/workflows/sync-upstream.yml`) merges `upstream/main`
   into `main` daily through PRs gated on `CI`.
-- `omomp-check` (`.github/workflows/omomp-check.yml`) calls
-  `oh-my-omp/.github`'s reusable check workflow in `copies` mode on every PR
-  and push to `main`: it compares the copies declared in `omomp-shared.json`
-  against oh-my-omp/shared main. Repository tests and typechecking stay in
+- `omomp-check` (`.github/workflows/omomp-check.yml`) runs on every PR and
+  push to `main`: it checks out oh-my-omp/shared main, runs its `deps.ts check`
+  and compares the copies declared in `omomp-shared.json` against it with
+  `verify.ts`. Repository tests and typechecking stay in
   `ci.yml`, which keeps upstream's runner layout.
-- `omomp-release` (`.github/workflows/omomp-release.yml`) is the omomp caller
-  file: a daily run at 02:00 GMT+9 (`cron: "0 17 * * *"`) and
-  `workflow_dispatch` call
-  `oh-my-omp/.github/.github/workflows/omomp-release.yml@main` with
-  `version-files: package-lock.json`. A run promotes `## [Unreleased]` of
+- `omomp-release` (`.github/workflows/omomp-release.yml`) is the omomp release:
+  a daily run at 02:00 GMT+9 (`cron: "0 17 * * *"`) and `workflow_dispatch`
+  run `release.ts` from oh-my-omp/shared main with
+  `--version-files package-lock.json`. A run promotes `## [Unreleased]` of
   `CHANGELOG.md` to `## [X.Y.Z] - YYYY-MM-DD` under a fresh empty
   `## [Unreleased]`, bumps `package.json` and both version fields of
   `package-lock.json`, commits `chore: release X.Y.Z` on `main`, and moves

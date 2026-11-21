@@ -50,8 +50,8 @@
 
 - `Publish to npm` 和 `Interaction limit reminder` 已用 `gh workflow disable` 禁用：fork 不向 npm 发布任何内容，提醒跟踪的是上游自己的互动限制。这是仓库状态，所以把 workflow 文件同步回来也不会重新启用它们。
 - `Sync upstream`（`.github/workflows/sync-upstream.yml`）每天通过以 `CI` 为门禁的 PR 把 `upstream/main` 合并进 `main`。
-- `omomp-check`（`.github/workflows/omomp-check.yml`）在每个 PR 和 main push 上以 `copies` 模式调用 `oh-my-omp/.github` 的可复用检查 workflow：把 `omomp-shared.json` 声明的副本与 oh-my-omp/shared main 逐字节比对。仓库自身的测试和类型检查留在 `ci.yml`，保留上游的运行器布局。
-- `omomp-release`（`.github/workflows/omomp-release.yml`）是 omomp 的调用文件：每天 GMT+9 02:00 一次（`cron: "0 17 * * *"`）以及 `workflow_dispatch` 调用 `oh-my-omp/.github/.github/workflows/omomp-release.yml@main`，传 `version-files: package-lock.json`。一次运行把 `CHANGELOG.md` 顶部的 `## [Unreleased]` 提升为 `## [X.Y.Z] - YYYY-MM-DD`，在其上新开一个空的 `## [Unreleased]`，升级 `package.json` 和 `package-lock.json` 的两个版本字段，在 `main` 上提交 `chore: release X.Y.Z`，并在一次原子推送中同时移动 `main`、tag `vX.Y.Z` 和 `release` 分支。合并进入 `main` 不改版本号、也不发布；版本号不手动修改。`## [Unreleased]` 下没有顶层列表项时，运行报告 `nothing-to-release`，不推送任何 ref。
+- `omomp-check`（`.github/workflows/omomp-check.yml`）在每个 PR 和 main push 上检出 oh-my-omp/shared main，运行它的 `deps.ts check`，并用 `verify.ts` 把 `omomp-shared.json` 声明的副本与它逐字节比对。仓库自身的测试和类型检查留在 `ci.yml`，保留上游的运行器布局。
+- `omomp-release`（`.github/workflows/omomp-release.yml`）是 omomp 的发布：每天 GMT+9 02:00 一次（`cron: "0 17 * * *"`）以及 `workflow_dispatch` 运行 oh-my-omp/shared main 上的 `release.ts`，传 `--version-files package-lock.json`。一次运行把 `CHANGELOG.md` 顶部的 `## [Unreleased]` 提升为 `## [X.Y.Z] - YYYY-MM-DD`，在其上新开一个空的 `## [Unreleased]`，升级 `package.json` 和 `package-lock.json` 的两个版本字段，在 `main` 上提交 `chore: release X.Y.Z`，并在一次原子推送中同时移动 `main`、tag `vX.Y.Z` 和 `release` 分支。合并进入 `main` 不改版本号、也不发布；版本号不手动修改。`## [Unreleased]` 下没有顶层列表项时，运行报告 `nothing-to-release`，不推送任何 ref。
 
 ## 预期的同步冲突
 

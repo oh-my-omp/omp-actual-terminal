@@ -12,6 +12,27 @@ permissions:
 
 jobs:
   check:
-    uses: oh-my-omp/.github/.github/workflows/omomp-check.yml@main
-    with:
-      mode: copies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@main
+        with:
+          path: repository
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/checkout@main
+        with:
+          repository: oh-my-omp/shared
+          ref: main
+          path: omomp-shared
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@main
+        with:
+          bun-version: latest
+
+      - name: Dependency convention
+        run: bun omomp-shared/deps.ts check repository
+
+      - name: Compare shared copies
+        run: bun omomp-shared/verify.ts repository
