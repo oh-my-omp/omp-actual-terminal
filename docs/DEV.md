@@ -454,7 +454,8 @@ agent and a subagent: a terminal's `bash` result must carry `job_id: bg_N`
 that `write_stdin` and `kill_session` accept; the main session's jobs page and
 `/jobs` must list the terminal under its `title`; an exit 0 must show the job
 completed, a non-zero exit failed and `kill_session` cancelled, each with the
-last screen above how it returned; cancelling the job from the jobs page must
+last screen above how it returned on the jobs page and the tray card, whose
+`progressText` takes that text too; cancelling the job from the jobs page must
 end the terminal as the Console's End does; and a running terminal alone must
 not keep the run awaiting background work.
 

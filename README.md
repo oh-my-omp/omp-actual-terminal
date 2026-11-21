@@ -141,8 +141,9 @@ When omp renders natively in Tern:
   carries its current screen, updated within half a second of a change: the
   tray card shows its last lines, the card's closer look more of them, and
   the jobs page's output pane the whole screen. Once the terminal returns,
-  the jobs page shows its last screen followed by how it returned. The tray
-  card's Open goes to the jobs page with that terminal selected.
+  the tray and the jobs page show its last screen followed by how it
+  returned. The tray card's Open goes to the jobs page with that terminal
+  selected.
 - **Open from the jobs page.** omp's jobs page lists every terminal as a job.
   With a terminal selected, a subagent's included, its status row offers Open
   (key `o`) before Cancel job; every other job keeps only omp's own actions.

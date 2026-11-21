@@ -148,14 +148,17 @@ describe("terminals as omp jobs", () => {
 		assert.equal(h.jobs.getJob(id)?.progressText, "first screen line\ntyped\ngot typed");
 	});
 
-	it("settles with the last screen followed by how the terminal returned", async () => {
+	it("settles with the last screen followed by how the terminal returned, in the tray's progress too", async () => {
 		const h = await makeHarness();
 		const ok = await start(h, "sleep 0.4; printf 'done here\\n'; exit 0");
-		const bad = await start(h, "sleep 0.4; printf 'broke here\\n'; exit 3");
+		// The first line reaches the progress before the second is printed, so a stale progress would show it alone.
+		const bad = await start(h, "printf 'started\\n'; sleep 0.8; printf 'broke here\\n'; exit 3");
 		assert.equal(await statusOf(h.jobs, ok, "completed"), "completed");
 		assert.equal(await statusOf(h.jobs, bad, "failed"), "failed");
 		assert.equal(h.jobs.getJob(ok)?.resultText, "done here\n\nreturned normally");
-		assert.match(h.jobs.getJob(bad)?.errorText ?? "", /^broke here\n\nreturned abnormally \(/);
+		assert.equal(h.jobs.getJob(ok)?.progressText, "done here\n\nreturned normally");
+		assert.match(h.jobs.getJob(bad)?.errorText ?? "", /^started\nbroke here\n\nreturned abnormally \(/);
+		assert.equal(h.jobs.getJob(bad)?.progressText, h.jobs.getJob(bad)?.errorText);
 	});
 
 	it("returns omp's limit error verbatim and starts nothing at capacity", async () => {

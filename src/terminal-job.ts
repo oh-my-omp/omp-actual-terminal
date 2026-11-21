@@ -86,12 +86,15 @@ export class TerminalJob {
 			if (signal.aborted) onAbort();
 			else signal.addEventListener("abort", onAbort, { once: true });
 			const end = await ended.promise;
-			// Once settled, the jobs page shows this text: the last screen and how the terminal returned.
+			// Once settled, the jobs page shows this text: the last screen and how the terminal returned. The
+			// tray shows a job's progress ahead of its result, so the progress becomes the same text.
 			const screen = screenText(await spec.settledScreen());
-			switch (end.kind) {
-				case "completed": return withScreen(screen, "returned normally");
-				case "failed": throw new Error(withScreen(screen, `returned abnormally (${end.reason})`));
-			}
+			const text = end.kind === "completed"
+				? withScreen(screen, "returned normally")
+				: withScreen(screen, `returned abnormally (${end.reason})`);
+			await reportProgress(text);
+			if (end.kind === "failed") throw new Error(text);
+			return text;
 		}, {
 			ownerId: host.ownerId,
 			process: { command: spec.command, cwd: spec.cwd, pids: spec.pids },
