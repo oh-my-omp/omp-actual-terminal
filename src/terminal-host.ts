@@ -1,5 +1,7 @@
-import type * as Root from "@oh-my-pi/pi-coding-agent";
 import type { BashTool, ImageAttachmentEntry, Settings, ToolSession, ToolTier } from "@oh-my-pi/pi-coding-agent";
+import type * as BashModule from "@oh-my-pi/pi-coding-agent/tools/bash";
+import type * as SettingsModule from "@oh-my-pi/pi-coding-agent/config/settings";
+import type * as AgentRegistryModule from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type * as BashExecutor from "@oh-my-pi/pi-coding-agent/exec/bash-executor";
 import type * as ExecSettings from "@oh-my-pi/pi-coding-agent/exec/settings";
 import type * as NonInteractiveEnv from "@oh-my-pi/pi-coding-agent/exec/non-interactive-env";
@@ -98,7 +100,9 @@ export function terminalEnvFrom(
 	return env;
 }
 
-type RootModule = Partial<Pick<typeof Root, "BashTool" | "settings" | "Settings" | "AgentRegistry">>;
+type BashToolModule = Partial<Pick<typeof BashModule, "BashTool">>;
+type HostSettingsModule = Partial<Pick<typeof SettingsModule, "settings">>;
+type RegistryModule = Partial<Pick<typeof AgentRegistryModule, "AgentRegistry">>;
 type ExecutorModule = Partial<Pick<typeof BashExecutor, "executeBash">>;
 type ExecSettingsModule = Partial<Pick<typeof ExecSettings, "cfgBashGitGuard">>;
 type NonInteractiveModule = Partial<Pick<typeof NonInteractiveEnv, "buildNonInteractiveEnv">>;
@@ -114,11 +118,13 @@ function missing(what: string): never {
 }
 
 export async function loadTerminalHost(): Promise<TerminalHost> {
-	const [root, executor, execSettings, nonInteractive, shellProcess, router, urlFilesystem, taskSettings, toolSettings, configRegistry]: [
-		RootModule, ExecutorModule, ExecSettingsModule, NonInteractiveModule, ShellProcessModule, RouterModule, UrlFilesystemModule, TaskSettingsModule,
-		ToolSettingsModule, ConfigRegistryModule,
+	const [bashModule, settingsModule, registryModule, executor, execSettings, nonInteractive, shellProcess, router, urlFilesystem, taskSettings, toolSettings, configRegistry]: [
+		BashToolModule, HostSettingsModule, RegistryModule, ExecutorModule, ExecSettingsModule, NonInteractiveModule, ShellProcessModule, RouterModule,
+		UrlFilesystemModule, TaskSettingsModule, ToolSettingsModule, ConfigRegistryModule,
 	] = await Promise.all([
-		import("@oh-my-pi/pi-coding-agent"),
+		import("@oh-my-pi/pi-coding-agent/tools/bash"),
+		import("@oh-my-pi/pi-coding-agent/config/settings"),
+		import("@oh-my-pi/pi-coding-agent/registry/agent-registry"),
 		import("@oh-my-pi/pi-coding-agent/exec/bash-executor"),
 		import("@oh-my-pi/pi-coding-agent/exec/settings"),
 		import("@oh-my-pi/pi-coding-agent/exec/non-interactive-env"),
@@ -129,7 +135,9 @@ export async function loadTerminalHost(): Promise<TerminalHost> {
 		import("@oh-my-pi/pi-coding-agent/tools/settings"),
 		import("@oh-my-pi/pi-coding-agent/config/registry"),
 	]);
-	const { BashTool: Bash, settings, AgentRegistry } = root;
+	const { BashTool: Bash } = bashModule;
+	const { settings } = settingsModule;
+	const { AgentRegistry } = registryModule;
 	const { executeBash } = executor;
 	const { cfgBashGitGuard } = execSettings;
 	const { buildNonInteractiveEnv } = nonInteractive;
@@ -139,9 +147,9 @@ export async function loadTerminalHost(): Promise<TerminalHost> {
 	const { ovnfsCommand } = taskSettings;
 	const { cfgLaunchEnabled } = toolSettings;
 	const { lookup } = configRegistry;
-	if (typeof Bash !== "function") missing("@oh-my-pi/pi-coding-agent lacks BashTool");
-	if (settings === undefined) missing("@oh-my-pi/pi-coding-agent lacks settings");
-	if (AgentRegistry === undefined || typeof AgentRegistry.global !== "function") missing("@oh-my-pi/pi-coding-agent lacks AgentRegistry.global()");
+	if (typeof Bash !== "function") missing("tools/bash lacks BashTool");
+	if (settings === undefined) missing("config/settings lacks settings");
+	if (AgentRegistry === undefined || typeof AgentRegistry.global !== "function") missing("registry/agent-registry lacks AgentRegistry.global()");
 	if (typeof executeBash !== "function") missing("exec/bash-executor lacks executeBash()");
 	if (cfgBashGitGuard === undefined || typeof cfgBashGitGuard.get !== "function") missing("exec/settings lacks cfgBashGitGuard");
 	if (typeof buildNonInteractiveEnv !== "function") missing("exec/non-interactive-env lacks buildNonInteractiveEnv()");
