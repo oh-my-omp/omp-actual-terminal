@@ -14,13 +14,13 @@ function agentRef(status: AgentStatus, generation = 1): AgentRef {
 	return { id: AGENT, generation, displayName: AGENT, kind: "sub", status, session: null, sessionFile: null, createdAt: 0, lastActivity: 0 };
 }
 
-interface ListedSession { session_id: number; pid?: number; running: boolean }
-interface ToolResult { details: { session_id?: number; killed?: boolean; sessions?: ListedSession[] } }
+interface ListedSession { job_id: string; pid?: number; running: boolean }
+interface ToolResult { details: { job_id?: string; killed?: boolean; sessions?: ListedSession[] } }
 interface ToolDef {
 	name: string;
 	execute: (toolCallId: string, params: object, signal: undefined, onUpdate: undefined, ctx: object) => Promise<ToolResult>;
 }
-interface Sent { message: { details: { notices: Array<{ session_id: number; kind: string }> } } }
+interface Sent { message: { details: { notices: Array<{ job_id: string; kind: string }> } } }
 type Handler = (event: object, ctx: object) => unknown;
 
 class FakeOmp implements AgentHost {
@@ -70,7 +70,7 @@ interface Harness {
 	emit(event: string): Promise<void>;
 	call(name: string, params: object): Promise<ToolResult>;
 	advance(ms: number): void;
-	listed(id: number): Promise<ListedSession | undefined>;
+	listed(id: string): Promise<ListedSession | undefined>;
 }
 
 const live = new Set<Harness>();
@@ -81,7 +81,7 @@ function makeHarness(): Harness {
 	const sent: Sent[] = [];
 	let now = Date.now();
 	let sweep: (() => void) | undefined;
-	const stubCtx = { cwd: process.cwd(), ui: { notify() {}, setStatus() {}, setWidget() {} }, hasUI: false, agent: { id: AGENT }, ...STUB_SESSION };
+	const stubCtx = { cwd: process.cwd(), ui: { notify() {}, setStatus() {}, setWidget() {} }, hasUI: false, ...STUB_SESSION, agent: { id: AGENT } };
 	const pi = {
 		registerTool: (def: ToolDef) => { tools[def.name] = def; },
 		on: (event: string, handler: Handler) => { (handlers[event] ??= []).push(handler); },
@@ -111,7 +111,7 @@ function makeHarness(): Harness {
 			sweep?.();
 		},
 		async listed(id) {
-			return (await harness.call("list_sessions", {})).details.sessions?.find((s) => s.session_id === id);
+			return (await harness.call("list_sessions", {})).details.sessions?.find((s) => s.job_id === id);
 		},
 	};
 	live.add(harness);
@@ -141,9 +141,9 @@ function alive(pid: number): boolean {
 	try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-async function startBackground(h: Harness, cmd: string, extra: object = {}): Promise<{ sid: number; pid: number }> {
+async function startBackground(h: Harness, cmd: string, extra: object = {}): Promise<{ sid: string; pid: number }> {
 	const started = await h.call("bash", { pty: true, command: cmd, title: "job", shell: "/bin/sh", yield_time_ms: 250, ...extra });
-	const sid = started.details.session_id;
+	const sid = started.details.job_id;
 	assert.ok(sid !== undefined, JSON.stringify(started.details));
 	const pid = (await h.listed(sid))?.pid;
 	assert.ok(pid !== undefined);
@@ -173,7 +173,7 @@ describe("a subagent's terminals across omp's park", { skip: process.platform ==
 		assert.ok(alive(pid), "the park killed nothing");
 		const revived = await revive();
 		assert.equal((await revived.listed(sid))?.running, true);
-		const killed = await revived.call("kill_session", { session_id: sid });
+		const killed = await revived.call("kill_session", { job_id: sid });
 		assert.equal(killed.details.killed, true);
 		assert.equal(alive(pid), false);
 		assert.equal(first.sent.length + revived.sent.length, 0);
@@ -202,7 +202,7 @@ describe("a subagent's terminals across omp's park", { skip: process.platform ==
 		omp.reviver = async () => { revived = await revive(); };
 		assert.ok(await waitFor(() => (revived?.sent.length ?? 0) > 0), "the problem reached the revived agent");
 		assert.equal(omp.revives, 1);
-		assert.deepEqual(revived!.sent[0].message.details.notices.map((n) => [n.session_id, n.kind]), [[sid, "abnormal_return"]]);
+		assert.deepEqual(revived!.sent[0].message.details.notices.map((n) => [n.job_id, n.kind]), [[sid, "abnormal_return"]]);
 		assert.equal(first.sent.length, 0, "nothing went to the parked activation");
 	});
 
@@ -228,7 +228,7 @@ describe("a subagent's terminals across omp's park", { skip: process.platform ==
 		assert.equal(first.sent.length, 0);
 		const problem = await startBackground(first, "sleep 0.3; exit 3");
 		assert.ok(await waitFor(() => first.sent.length > 0), "the abnormal return woke the agent");
-		assert.deepEqual(first.sent[0].message.details.notices.map((n) => [n.session_id, n.kind]), [[problem.sid, "abnormal_return"]]);
+		assert.deepEqual(first.sent[0].message.details.notices.map((n) => [n.job_id, n.kind]), [[problem.sid, "abnormal_return"]]);
 	});
 });
 

@@ -98,7 +98,7 @@ export type ResultView =
 	| {
 			readonly kind: "backgrounded";
 			readonly output: string;
-			readonly sessionId: number;
+			readonly jobId: string;
 			readonly wallTimeMs: number | undefined;
 			readonly marker: string | null;
 	  }
@@ -133,7 +133,7 @@ type PersistedDetails = {
 		| "operation"
 		| "status"
 		| "output"
-		| "session_id"
+		| "job_id"
 		| "exit_code"
 		| "signal"
 		| "failure_message"
@@ -197,9 +197,9 @@ export function parseResultView(result: PiTuiTools.ToolRenderResult, isPartial: 
 	switch (details.operation) {
 		case "bash":
 		case "write_stdin": {
-			const sessionId = optionalNumber(details.session_id);
-			if (details.status === "running" && sessionId !== undefined) {
-				return { kind: "backgrounded", output, sessionId, wallTimeMs, marker };
+			const jobId = optionalString(details.job_id);
+			if (details.status === "running" && jobId !== undefined) {
+				return { kind: "backgrounded", output, jobId, wallTimeMs, marker };
 			}
 			if (details.status === "exited") {
 				return {
@@ -246,7 +246,7 @@ export function toShellResult(view: ResultView): ShellResult {
 				withNotices(view.output, [view.marker]),
 				{
 					wallTimeMs: view.wallTimeMs,
-					async: { state: "running", jobId: tr(`session ${view.sessionId}`, `会话 ${view.sessionId}`), type: "bash" },
+					async: { state: "running", jobId: view.jobId, type: "bash" },
 				},
 				false,
 			);
@@ -305,10 +305,8 @@ function stringifyChars(chars: string): string {
 	return safe.length > 40 ? `${safe.slice(0, 37)}…` : safe;
 }
 
-export function writeStdinShellArgs(args: StreamedArgs<"session_id" | "chars" | "chars_b64">): ShellArgs {
-	const target = typeof args?.session_id === "number"
-		? tr(`session ${args.session_id}`, `会话 ${args.session_id}`)
-		: tr("session ?", "会话 ?");
+export function writeStdinShellArgs(args: StreamedArgs<"job_id" | "chars" | "chars_b64">): ShellArgs {
+	const target = optionalString(args?.job_id) ?? "?";
 	if (typeof args?.chars === "string" && args.chars.length > 0) {
 		return { command: tr(
 			`# stdin → ${target}: "${stringifyChars(args.chars)}"`,
@@ -322,10 +320,8 @@ export function writeStdinShellArgs(args: StreamedArgs<"session_id" | "chars" | 
 	return { command: tr(`# stdin → ${target}: (input required)`, `# 输入 → ${target}：（需要输入）`) };
 }
 
-export function killShellArgs(args: StreamedArgs<"session_id" | "signal">): ShellArgs {
-	const target = typeof args?.session_id === "number"
-		? tr(`session ${args.session_id}`, `会话 ${args.session_id}`)
-		: tr("session ?", "会话 ?");
+export function killShellArgs(args: StreamedArgs<"job_id" | "signal">): ShellArgs {
+	const target = optionalString(args?.job_id) ?? "?";
 	const signal = optionalString(args?.signal) ?? "SIGTERM";
 	return { command: tr(`# kill ${target} (${signal})`, `# 结束 ${target}（${signal}）`) };
 }
@@ -430,7 +426,7 @@ async function presentOnOmp(pi: ExtensionAPI): Promise<ExtensionAPI> {
 
 export interface ActivatedExtension {
 	readonly store: () => SessionStore;
-	readonly kill: (id: number) => Promise<boolean>;
+	readonly kill: (id: string) => Promise<boolean>;
 }
 
 async function loadOmpAppearance(): Promise<() => TerminalAppearance> {

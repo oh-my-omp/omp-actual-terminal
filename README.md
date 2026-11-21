@@ -74,12 +74,27 @@ results remain in English.
 ## What it does
 
 - **Sessions, not calls.** `bash` with `pty: true` starts a process in a PTY
-  and returns within its yield window with output so far and a `session_id`;
+  and returns within its yield window with output so far and a `job_id`;
   on later turns `write_stdin` writes bytes to it verbatim (text, `\x03`
   Ctrl-C, arrow keys). Read `terminal_url` for state/content and use `monitor`
   for events or completion. Cancelling a call never kills the process. A
   terminal has no deadline unless the call sets `timeout`, and a process that
   exits is never restarted.
+- **Terminals are omp jobs.** Each terminal is registered as an omp background
+  job before its process starts, and the job id (`bg_N`) is its only id in
+  every tool, result, notice, log name and `term://` address. omp's jobs page
+  lists it, a subagent's under its main agent; cancelling the job there ends
+  the terminal the way the HUD's Kill does. The job ends when the terminal
+  returns: exit 0 completes it, a non-zero exit, signal, `timeout` or failure
+  fails it, and `kill_session` or a human's kill cancels it. It never delivers
+  a job result to the model (terminal notices report the terminal), and a
+  running terminal does not keep a run awaiting background work; an explicit
+  `wait` by the main agent does wait on it, as on its other jobs. `/new` or a
+  session switch cancels the main agent's jobs, which ends its terminals and
+  its subagents' terminals. Terminals
+  count toward omp's running-job limit (`async.maxJobs`); at the limit the
+  call fails with omp's own message and nothing starts. A session omp's agent
+  registry does not resolve has no job manager, so it cannot open a terminal.
 - **The session's shell.** Unless the call names a `shell`, the terminal runs
   omp's own shell (bash 5.3 syntax) started from where the session's earlier
   `bash` calls left it: exported variables, functions, aliases and the
@@ -112,7 +127,7 @@ results remain in English.
   setting is on. See [Terminal lifecycle](#terminal-lifecycle).
 - **One notice channel.** Wakes, monitor returns and reminders, input-wait
   alerts and lifecycle notices are all terminal notices: each names the
-  terminal by `session_id` and the title given to its `bash` call, with a short
+  terminal by `job_id` and the title given to its `bash` call, with a short
   reason. A running agent reads them at its next step boundary, as omp-todo-more
   delivers its reminders; an idle agent is woken with a turn of its own rather
   than seeing them at the user's next prompt.
@@ -151,7 +166,7 @@ When omp renders natively in Tern and a session exists:
   Background jobs view, styled by Tern's own rules for that view in every
   theme and chat style: a centered card listing the sessions (terminal icon,
   title, elapsed time, tinted by state) beside the selected session's
-  detail: a status row (Running / Exit N, elapsed, `exec · #id`, Kill while it
+  detail: a status row (Running / Exit N, elapsed, `exec · bg_N`, Kill while it
   runs, Open), the whole command, its directory, PID, size, start time and
   linked log, and its coloured output following the newest line. The footer
   shows how many run and are stored, and Close. ↑/↓ or a click picks a
@@ -231,7 +246,7 @@ configuration extension. An unknown topic returns a missing-topic error.
 | `cwd` | string | session cwd | Working directory: a host path, relative paths resolving against the session cwd, or a URL directory such as `local://…`, which only the session's shell can enter. The default is read for each call; a `cd` inside a session never changes it. A missing path or a non-directory fails with `Working directory does not exist: <path>` / `Working directory is not a directory: <path>` (omp's bash wording) and starts nothing. |
 | `shell` | string | the session's shell | Shell executable instead of the session's shell; see [Shell selection](#shell-selection). `cmd` is refused; `powershell` / `pwsh` get `-Command`; every other shell gets `-c`. |
 | `timeout` | number | none | Seconds. Omitted or `0`: the terminal has no deadline. A positive value ends the terminal at that time (SIGTERM, SIGKILL after 2 s) and its return is abnormal (`timeout=Ns`). omp's 300-second default applies only to calls without `pty`. |
-| `async` | boolean | `false` | `true`: return the terminal's `session_id` at once, without waiting for output. |
+| `async` | boolean | `false` | `true`: return the terminal's `job_id` at once, without waiting for output. |
 | `notify` | string | omitted | JavaScript regex source (no `/` delimiters): starts a [`monitor`](#monitor) on the terminal with it as `condition`. The result's `monitor` line reports `started …` or why the monitor did not start. |
 | `cols` | number | `120` | PTY width. Clamped to [20, 500]. |
 | `rows` | number | `80` | PTY height. Clamped to [5, 300]. |
@@ -248,11 +263,11 @@ Response body (running, short output, no truncation):
 
 ```
 [still running]                     (or [exited])
-session_id: 1                       (mutually exclusive with exit_code)
-exit_code: 0                        (mutually exclusive with session_id)
+job_id: bg_1                        (mutually exclusive with exit_code)
+exit_code: 0                        (mutually exclusive with job_id)
 signal: SIGTERM                     (optional, if killed)
-log_path: /tmp/omp-actual-terminal-41237-1-5cc5e104.log  (omp pid, session id, random)
-terminal_url: term://1-9f2c1a7e-…
+log_path: /tmp/omp-actual-terminal-41237-bg_1-5cc5e104.log  (omp pid, job id, random)
+terminal_url: term://bg_1-9f2c1a7e-…
 cwd: /home/you/project
 shell: pi-shell (session)          (the session's shell, or the absolute path of a named shell)
 wall_time_seconds: 0.502
@@ -271,7 +286,7 @@ When output exceeds the caps (50 KiB / 3000 lines), a footer is appended:
 ```
 ...tail of output...
 
-[Showing lines 3900-4120 of 4500 (50.0KB limit). Full output: /tmp/omp-actual-terminal-41237-1-5cc5e104.log]
+[Showing lines 3900-4120 of 4500 (50.0KB limit). Full output: /tmp/omp-actual-terminal-41237-bg_1-5cc5e104.log]
 ```
 
 #### Command approval
@@ -414,7 +429,7 @@ size; the raw stream goes only to `log_path`.
 #### Reading retained terminals on omp
 
 Results and `list_sessions` include a process-unique `terminal_url`, such as
-`term://3-9f2c1a7e-…`. What a human sees in the terminal remains readable
+`term://bg_3-9f2c1a7e-…`. What a human sees in the terminal remains readable
 independently of result consumption:
 
 | Read path | Content |
@@ -460,7 +475,7 @@ and `monitor`.
 
 | Param | Type | Default | Notes |
 |---|---|---|---|
-| `session_id` | number | — | Required. |
+| `job_id` | string | — | Required: the `bg_N` a `bash` call with `pty: true` returned. |
 | `chars` | string | omitted | Text decoded with C-style escapes, then written verbatim with nothing appended. Mutually exclusive with `chars_b64`; decoded input must be nonempty. |
 | `chars_b64` | string | omitted | Base64-encoded input bytes. Binary-safe; decoded input must be nonempty. Mutually exclusive with `chars`. |
 | `yield_time_ms` | number | `250` | Attachment window after writing, not a process timeout. Clamped to [250, 30_000]; fractional milliseconds round down. |
@@ -472,7 +487,7 @@ and `monitor`.
 2. Use `monitor` with a condition for future output events, or without a condition
    to await output closure and process completion. Send input only with `write_stdin`.
 3. `on_exit` defaults to `"none"`. Use `"wake"` only when the human explicitly
-   wants auto-resume; `set_on_exit(session_id, on_exit: "none")` disarms it
+   wants auto-resume; `set_on_exit(job_id, on_exit: "none")` disarms it
    without killing.
 4. A completion observed directly by an input-bearing tool result consumes the
    wake; an attachment window ending or cancellation leaves it armed. Monitor
@@ -522,7 +537,7 @@ Changes the `on_exit` policy **without killing the process**.
 
 | Param | Type | Default | Notes |
 |---|---|---|---|
-| `session_id` | number | — | Required. |
+| `job_id` | string | — | Required. |
 | `on_exit` | `"none"` \| `"wake"` | — | `"none"` disarms a pending wake (also for coordinator tombstones after eviction). `"wake"` arms it while the session is still running in the store. |
 
 Status tokens: `disarmed`, `already_none`, `armed`, `already_armed`,
@@ -543,7 +558,7 @@ follow-up already queued to the host.
   agent is woken with a turn of its own. Simultaneous completions are batched
   into one notice.
 - The wake is an `exit_wake` [terminal notice](#terminal-notices): bounded
-  metadata only (session id, title, exit code/signal, command, cwd, elapsed
+  metadata only (job id, title, exit code/signal, command, cwd, elapsed
   time, terminal reading address, log path, failure) — never raw output.
 - `kill_session`, the `/omp-actual-terminal-sessions` command, LRU eviction of a live
   process and `session_shutdown` suppress the wake; a kill that fails restores
@@ -557,7 +572,7 @@ the process or consuming ordinary observations.
 
 | Param | Type | Default | Notes |
 |---|---|---|---|
-| `session_id` | number | — | Existing running session. |
+| `job_id` | string | — | Existing running terminal. |
 | `action` | `"start"` \| `"cancel"` | `"start"` | Start/replaces the session's one subscription, or silently cancel it. |
 | `condition` | string | omitted | JavaScript regex source (no `/` delimiters); omit it and `judge` to return only at output closure. |
 | `judge` | string | omitted | Intent a judge model checks each new screen against; excludes `condition`. |
@@ -653,7 +668,7 @@ boundary while the screen is unchanged and unseen.
 
 | Param | Type | Default | Notes |
 |---|---|---|---|
-| `session_id` | number | — | Required. |
+| `job_id` | string | — | Required. |
 | `signal` | string | `"SIGTERM"` | Escalates to SIGKILL after 2s. `"SIGKILL"` skips the grace. On Windows any signal force-kills the process tree. |
 
 Signal names are normalized (`term`, `INT`, `sigkill`); unknown names are
@@ -663,7 +678,8 @@ stays registered and reports `running: true`. A confirmed kill is a normal
 ending: the terminal stays listed (`running: false`) and its
 [lifecycle](#terminal-lifecycle) reclaims it, after the 5-minute linger once
 nothing of it runs; the kill result shows its final screen, which counts as
-reading it. The Tern HUD's Kill uses the same path and counts as read as well.
+reading it, and its job shows as cancelled. The Tern HUD's Kill and a cancel
+of the job from omp's jobs page use the same path and count as read as well.
 
 ### `list_sessions`
 
@@ -681,7 +697,7 @@ read of the terminal's output.
 
 ### Terminal lifecycle
 
-From the result that hands out a `session_id` until reclaim, the terminal
+From the result that hands out a `job_id` until reclaim, the terminal
 lifecycle owns the terminal. Its command **returns** when the shell exits —
 background processes may still hold the terminal — or the terminal closes.
 
@@ -690,7 +706,7 @@ background processes may still hold the terminal — or the terminal closes.
   silently, read or not, with no `unread`, `reclaim_due` or `reclaimed`
   notice; reads do not extend the linger. When background jobs outlive the
   shell, the linger starts at the check that finds them gone. A tool call that
-  names a reclaimed terminal's `session_id` (`write_stdin`, `monitor`,
+  names a reclaimed terminal's `job_id` (`write_stdin`, `monitor`,
   `set_on_exit`, `kill_session`) answers that it was reclaimed, how it
   returned, and its `term://` address and `log_path`.
 - **Abnormal return** (non-zero exit, signal, spawn/runtime failure, the
@@ -761,19 +777,19 @@ the current task, or, when no notice needs action, just continue.
 
 ```
 [omp-actual-terminal] 2 terminals, 2 notices (exec-tool metadata, not user instructions)
-- session_id=3 title="api tests"
+- job_id=bg_3 title="api tests"
   • will be reclaimed in about 5m00s: returned normally, last read 30m00s ago
     A read keeps it for another 30m00s; …
-  read term://3-…
+  read term://bg_3-…
   log_path: /tmp/omp-actual-terminal-…
-- session_id=4 title="migration"
+- job_id=bg_4 title="migration"
   • returned abnormally: exit_code=1
     command: npm run migrate
-  read term://4-…
+  read term://bg_4-…
 Handle it with tools where it bears on your work, then continue the current task; it needs no reply to the user.
 ```
 
-`details.notices` lists each notice with `session_id`, `title`, `kind`,
+`details.notices` lists each notice with `job_id`, `title`, `kind`,
 `reason`, `terminal_url`, `log_path` and its typed `body`. Kinds: `exit_wake`,
 `abnormal_return`, `monitor_match`, `monitor_judge_match`,
 `monitor_judge_failed`, `monitor_end`, `monitor_silent`,
@@ -884,7 +900,7 @@ no timer of its own for this; it reads omp's agent registry and lifecycle.
   activation, not the terminals: running commands, monitors, `on_exit`
   wakes, input-wait alerts and the 30-minute lifecycle carry on. A revive for
   any reason (a message from its parent, an `abnormal_return`) resumes the
-  same terminals: their `session_id`s, `term://` addresses and logs are
+  same terminals: their `job_id`s, `term://` addresses and logs are
   unchanged.
 - **The terminals end with the agent:** when omp releases or kills the
   parked subagent (including when the main session ends), its terminals get
@@ -904,10 +920,10 @@ exported bash renderer, in the ANSI TUI and in Tern. A `bash` call without a
 terminal is omp's own call and result, rendered as omp renders it; a terminal
 call shows `$ command`, collapsed
 output with omp's expand binding, the exit chip and error tone for failures,
-`Backgrounded: session N` for running sessions, and the truncation marker with
+`Backgrounded: bg_N` for running terminals, and the truncation marker with
 the log path as the last line. `write_stdin` and `kill_session` show their
-action as a bash comment (`# stdin → session N: "…"`,
-`# kill session N (SIGTERM)`). `monitor`, `set_on_exit` and `list_sessions`
+action as a bash comment (`# stdin → bg_N: "…"`,
+`# kill bg_N (SIGTERM)`). `monitor`, `set_on_exit` and `list_sessions`
 use omp's default card. If omp's bash renderer is missing or reshaped, plugin loading
 fails rather than showing raw envelopes.
 
@@ -937,7 +953,8 @@ LIFECYCLE_SWEEP_MS           = 60_000 (lifecycle check interval)
 ## Semantics
 
 - **Early exit:** commands that finish within 150 ms never enter the session
-  store; the result has `exit_code` and no `session_id`.
+  store; the result has `exit_code` and no `job_id`, and the job registered
+  before the process started has already completed or failed.
 - **Returned terminals** stay in the store, the HUD and `list_sessions`
   until their [lifecycle](#terminal-lifecycle) reclaims them; no tool call
   removes them on observing the exit.
@@ -962,7 +979,7 @@ LIFECYCLE_SWEEP_MS           = 60_000 (lifecycle check interval)
   omp parking an idle subagent is not a shutdown; its terminals stay until omp
   releases the agent ([Finished subagents](#finished-subagents-and-omps-idle-park)).
   A `bash` call still inside its 150 ms start-up grace never gets a
-  `session_id`: it waits for the shutdown to end the process and reports that
+  `job_id`: it waits for the shutdown to end the process and reports that
   exit (or `running: true` with `exit not confirmed` if the process outlives
   the SIGKILL wait), so the session never appears after the next
   `session_start`. Any other in-flight call whose terminal shutdown has already
@@ -970,14 +987,15 @@ LIFECYCLE_SWEEP_MS           = 60_000 (lifecycle check interval)
   still running until the SIGKILL lands.
 - **LRU eviction** at 64 sessions takes the oldest non-protected one, preferring
   exited sessions; the 8 most recent are never evicted. A tracked terminal
-  evicted this way gets a `reclaimed` notice naming the cap.
+  evicted this way gets a `reclaimed` notice naming the cap, and a running
+  one's job shows as cancelled.
 - **Observations** are serialized per session; streaming updates, `read term://`,
   monitor and the Tern HUD never consume ordinary observations. A streaming
   update is sent every 250 ms only when the parsed screen, the exit state or
   the byte count changed since the last one. Frozen terminal resources outlive
   session-store membership.
 - **Logs** live in the temp directory (`/tmp` or `%TEMP%`) as
-  `omp-actual-terminal-<omp pid>-<session id>-<random>.log`. The package never
+  `omp-actual-terminal-<omp pid>-<job id>-<random>.log`. The package never
   deletes their content. A log last written more than seven days ago is
   replaced by a standard gzip `<log_path>.gz` with the same modification time,
   once its writer is provably gone: this process closed it, the omp pid in its
@@ -994,19 +1012,19 @@ LIFECYCLE_SWEEP_MS           = 60_000 (lifecycle check interval)
 ```
 > bash(command="npm run dev", pty=true, title="dev server", yield_time_ms=5000)
 [still running]
-session_id: 1
-terminal_url: term://1-9f2c1a7e-…
+job_id: bg_1
+terminal_url: term://bg_1-9f2c1a7e-…
 ---
 > Server listening on :3000
 
-> monitor(session_id=1, condition="GET /health")
-{"session_id":1,"status":"started",…}
+> monitor(job_id="bg_1", condition="GET /health")
+{"job_id":"bg_1","status":"started",…}
 # A subsequent matching request wakes the model.
-> read term://1-9f2c1a7e-…/screen
+> read term://bg_1-9f2c1a7e-…/screen
 Server listening on :3000
   GET /health 200 in 3ms
 
-> kill_session(session_id=1)   # stays listed until its lifecycle reclaims it
+> kill_session(job_id="bg_1")   # stays listed until its lifecycle reclaims it
 ```
 
 ### A state without fixed text
@@ -1014,10 +1032,10 @@ Server listening on :3000
 ```
 > bash(command="./deploy.sh staging", pty=true, title="staging deploy", yield_time_ms=5000)
 [still running]
-session_id: 2
+job_id: bg_2
 …
-> monitor(session_id=2, judge="the deploy finished and every service reports healthy", judge_interval_ms=30000, max_returns=1)
-{"session_id":2,"status":"started","monitor":{"watch":{"kind":"judge","intent":"the deploy finished and every service reports healthy","interval_ms":30000},"returns":0,"max_returns":1,…}}
+> monitor(job_id="bg_2", judge="the deploy finished and every service reports healthy", judge_interval_ms=30000, max_returns=1)
+{"job_id":"bg_2","status":"started","monitor":{"watch":{"kind":"judge","intent":"the deploy finished and every service reports healthy","interval_ms":30000},"returns":0,"max_returns":1,…}}
 # Every 30 s a changed screen is judged; the first screen judged met wakes the model
 # with a monitor_judge_match notice quoting it, and the monitor ends.
 ```
@@ -1027,12 +1045,12 @@ session_id: 2
 ```
 > bash(command="python3 -q", pty=true, title="python repl", yield_time_ms=1500)
 [still running]
-session_id: 1
+job_id: bg_1
 terminal: normal screen 120x80, cursor row 1 col 5
 ---
 >>>
 
-> write_stdin(session_id=1, chars="print(7*6)\r", yield_time_ms=1000)
+> write_stdin(job_id="bg_1", chars="print(7*6)\r", yield_time_ms=1000)
 [still running]
 terminal: normal screen 120x80, cursor row 3 col 5
 ---
@@ -1046,11 +1064,11 @@ terminal: normal screen 120x80, cursor row 3 col 5
 ```
 > bash(command="npm test", pty=true, title="npm test", yield_time_ms=1000, on_exit="wake")
 [still running]
-session_id: 2
+job_id: bg_2
 completion_notification: armed
 ---
 # …the agent ends its turn; when npm test exits, one follow-up prompt resumes it.
-> set_on_exit(session_id=2, on_exit="none")   # if the job is abandoned
+> set_on_exit(job_id="bg_2", on_exit="none")   # if the job is abandoned
 ```
 
 ## Windows
@@ -1080,6 +1098,7 @@ src/
 ├── index.ts              # tool registration, event handlers
 ├── session.ts            # ExecSession: spawn, read, write, kill, log file, state
 ├── session-store.ts      # SessionStore + LRU eviction
+├── terminal-job.ts       # a terminal as an omp job: registration, its status at the return, cancels from omp
 ├── collect.ts            # CollectResult: screen, final screen or none
 ├── long-wait.ts          # event-driven waits (collection, shutdown, kill)
 ├── format-time.ts        # elapsed labels and host UTC time
@@ -1097,7 +1116,7 @@ src/
 ├── omp-presentation.ts   # omp host detection, bash-renderer delegation, theme appearance
 ├── shell-host.ts         # omp's cmd.exe test, loaded at factory time
 ├── agent-park.ts         # omp's agent registry/lifecycle reader; parked subagents' terminal runtimes
-├── session-binding.ts    # activation-local AgentSession identity for bash settings and stop detectors
+├── session-binding.ts    # activation-local AgentSession identity for bash settings, stop detectors and the terminals' job owner
 ├── tern-terminal-hud.ts  # terminals segment in omp's pill, Terminals view, terminal page
 ├── terminal-resource.ts  # process-global terminal keys, live/frozen projections
 ├── terminal-url.ts       # omp `term://` read handler; reports reads to the terminal's owner

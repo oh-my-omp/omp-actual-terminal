@@ -77,7 +77,7 @@ export interface InputWaitAlert {
 }
 
 export function inputWaitNotice(input: {
-	readonly sessionId: number;
+	readonly jobId: string;
 	readonly title: string;
 	readonly command: string;
 	readonly prompt: InputPrompt;
@@ -87,7 +87,7 @@ export function inputWaitNotice(input: {
 	readonly logPath: string;
 }): TerminalNotice {
 	return {
-		identity: { sessionId: input.sessionId, title: input.title, terminalUrl: input.terminalUrl, logPath: input.logPath },
+		identity: { jobId: input.jobId, title: input.title, terminalUrl: input.terminalUrl, logPath: input.logPath },
 		body: { kind: "input_wait", command: input.command, prompt: input.prompt.kind, screen: input.screen, quietMs: input.quietMs, lines: input.prompt.lines },
 	};
 }

@@ -32,7 +32,7 @@ import { loadStopConfig } from "./stop-config.ts";
 import { detectStop, type StopHost } from "./stop-gate.ts";
 import { screenJudge, type ScreenJudge } from "./screen-judge.ts";
 import { renderStopConfigReason, renderStopReason } from "./stop-reasons.ts";
-import { type LifecycleClock, type ReclaimResult, TerminalLifecycle } from "./terminal-lifecycle.ts";
+import { type LifecycleClock, type ReclaimResult, type ShellExit, TerminalLifecycle } from "./terminal-lifecycle.ts";
 import { buildNoticeDisplayMessage, NoticeDispatcher, type NoticeGate, type NoticeMessage, outcomeText } from "./terminal-notice.ts";
 import { type CollectResult, NO_OUTPUT } from "./collect.ts";
 import { CompletionCoordinator, type OnExitPolicy, sanitizeMeta } from "./completion.ts";
@@ -45,6 +45,7 @@ import { sanitizeOutputText } from "./output-safety.ts";
 import type { MonitorScriptResult } from "./script-result.ts";
 import { ExecSession } from "./session.ts";
 import { SessionStore } from "./session-store.ts";
+import { type JobHost, TerminalJob } from "./terminal-job.ts";
 import { buildShellCommand, chooseShell, IS_WINDOWS, resolveBinary, resolveWindowsShell, type TerminalShell } from "./shell.ts";
 import type { TerminalAppearance } from "./terminal-screen.ts";
 import {
@@ -61,6 +62,7 @@ import { unescapeChars } from "./unescape.ts";
 
 
 const DEFAULT_WRITE_STDIN_YIELD_MS = 250;
+const JOB_ID_DESCRIPTION = "Job id (`bg_N`) from a `bash` call with `pty: true`.";
 const EARLY_EXIT_GRACE_PERIOD_MS = 150;
 const SHUTDOWN_TERM_GRACE_MS = 1000;
 const SHUTDOWN_KILL_GRACE_MS = 500;
@@ -124,7 +126,9 @@ interface ExtensionCtx extends ParkedRuntime {
 	lifecycle: TerminalLifecycle;
 	ui: ExtensionContext["ui"] | undefined;
 	widgetVisible: boolean;
-	exitUnsubscribers: Map<number, () => void>;
+	exitUnsubscribers: Map<string, () => void>;
+	/** The jobs of terminals that have not returned yet, by job id. */
+	jobs: Map<string, TerminalJob>;
 	/**
 	 * Membership is ownership: session_shutdown
 	 * terminates these and removes them, so a terminal call whose session is
@@ -142,7 +146,7 @@ interface ExtensionCtx extends ParkedRuntime {
 }
 
 type WriteStdinArgs = {
-	session_id: number;
+	job_id: string;
 	chars?: string;
 	chars_b64?: string;
 	yield_time_ms?: number;
@@ -217,6 +221,8 @@ interface CallingSession {
 	readonly skills: readonly Skill[] | undefined;
 	readonly attachments: readonly ImageAttachmentEntry[];
 	readonly bash: NativeBash;
+	/** Where the session's terminals become omp jobs; undefined when the session is unbound or omp gives it no job manager. */
+	readonly jobs: JobHost | undefined;
 }
 
 /** A located working directory: a host directory, or a URL directory only the session's shell can enter. */
@@ -259,7 +265,7 @@ async function runTerminal(
 	const setupFailure = (shell: string, failure: string): ResponseShape => finalizeResponse({
 		wallTimeSec: 0,
 		collected: NO_OUTPUT,
-		sessionId: undefined,
+		jobId: undefined,
 		exitCode: -1,
 		signal: null,
 		failure,
@@ -293,6 +299,10 @@ async function runTerminal(
 				: IS_WINDOWS ? resolveWindowsShell(chosen.shell) : resolveBinary(chosen.shell),
 		};
 	const shellLabel = shell.kind === "session" ? SESSION_SHELL_LABEL : shell.shell;
+	const jobHost = caller.jobs;
+	if (jobHost === undefined) {
+		return setupFailure(shellLabel, "every terminal is an omp job, and this session has no omp job manager (omp's agent registry does not resolve it, or omp gave it none); no terminal opened.");
+	}
 
 	const approval = caller.bash.approval({ command: request.command });
 	const tier = typeof approval === "string" ? approval : approval.tier;
@@ -360,8 +370,30 @@ async function runTerminal(
 
 	ctx.invalidateGithubCache?.(request.command);
 
-	const id = ctx.store.allocateId();
-	const session = ExecSession.spawn(id, {
+	let spawned: ExecSession | undefined;
+	let job: TerminalJob;
+	try {
+		job = TerminalJob.open(jobHost, {
+			label: request.title,
+			command: request.command,
+			cwd: shownCwd,
+			pids: () => spawned !== undefined && !spawned.hasExited && spawned.pid !== undefined ? [spawned.pid] : [],
+			cancelled: () => {
+				const target = spawned;
+				if (target === undefined) return;
+				if (ctx.store.get(target.id) !== target) {
+					target.kill("SIGTERM");
+					return;
+				}
+				void terminateSessionById(ctx, target.id, "SIGTERM", { kind: "human" }).then(() => updateRunningSessionsUi(ctx));
+			},
+		});
+	} catch (error) {
+		if (source !== undefined) await rm(source, { force: true });
+		return setupFailure(shellLabel, error instanceof Error ? error.message : String(error));
+	}
+	ctx.jobs.set(job.id, job);
+	const session = ExecSession.spawn(job.id, {
 		command,
 		shell: shellLabel,
 		cwd: hostCwd,
@@ -373,6 +405,14 @@ async function runTerminal(
 		appearance: ctx.appearance,
 		inputWait: { quietMs: INPUT_WAIT_QUIET_MS, onAlert: (alert) => ctx.coordinator.alertInputWait(alert) },
 	});
+	spawned = session;
+	// The job ends when the terminal returns: its shell exits, or its terminal closes first.
+	const settleJob = (exit: ShellExit): void => {
+		if (ctx.jobs.get(job.id) === job) ctx.jobs.delete(job.id);
+		job.returned(exit, session.failureMessage);
+	};
+	session.onShellExit(settleJob);
+	session.onExit(() => settleJob(session.shellExit ?? { exitCode: session.exitCode, signal: session.signal }));
 	// The shell process sources the prelude when it starts; the file goes with the terminal.
 	if (source !== undefined) {
 		const prelude = source;
@@ -384,7 +424,7 @@ async function runTerminal(
 		return finalizeResponse({
 			wallTimeSec: 0,
 			collected: NO_OUTPUT,
-			sessionId: undefined,
+			jobId: undefined,
 			exitCode: -1,
 			signal: null,
 			failure: session.failureMessage,
@@ -421,7 +461,7 @@ async function runTerminal(
 				wallTimeSec: wallSec,
 				collected,
 				totalBytes: session.totalBytesSeen,
-				sessionId: undefined,
+				jobId: undefined,
 				exitCode: session.exitCode,
 				signal: session.signal,
 				failure: session.failureMessage,
@@ -444,7 +484,7 @@ async function runTerminal(
 				wallTimeSec: (Date.now() - start) / 1000,
 				collected,
 				totalBytes: session.totalBytesSeen,
-				sessionId: undefined,
+				jobId: undefined,
 				exitCode: session.exitCode,
 				signal: session.signal,
 				failure: exited ? session.failureMessage : "terminated by session_shutdown; exit not confirmed",
@@ -501,7 +541,7 @@ async function runTerminal(
 				wallTimeSec: wallSec,
 				collected,
 				totalBytes: session.totalBytesSeen,
-				sessionId: session.id,
+				jobId: session.id,
 				exitCode: undefined,
 				signal: null,
 				failure: null,
@@ -524,7 +564,7 @@ async function runTerminal(
 			wallTimeSec: wallSec,
 			collected,
 			totalBytes: session.totalBytesSeen,
-			sessionId: undefined,
+			jobId: undefined,
 			exitCode: session.exitCode,
 			signal: session.signal,
 			failure: session.failureMessage,
@@ -556,8 +596,8 @@ async function startNotifyMonitor(ctx: ExtensionCtx, session: ExecSession, condi
 	}
 }
 
-function missingSessionText(ctx: ExtensionCtx, sid: number, text: string): string {
-	const gone = ctx.lifecycle.reclaimed(sid);
+function missingTerminalText(ctx: ExtensionCtx, jobId: string, text: string): string {
+	const gone = ctx.lifecycle.reclaimed(jobId);
 	if (!gone) return text;
 	const returned = gone.outcome ? `returned ${outcomeText(gone.outcome)} and ` : "";
 	const where = gone.identity.terminalUrl ? `read ${gone.identity.terminalUrl} or log_path ${gone.identity.logPath}` : `read log_path ${gone.identity.logPath}`;
@@ -574,9 +614,9 @@ async function runWriteStdin(
 	const finalizeResponse = (input: FinalizeInput): ResponseShape =>
 		finalizeProcessResult({ ...input, operation: "write_stdin" });
 	const writeBytes = resolveWriteInput(args);
-	const session = ctx.store.get(args.session_id);
+	const session = ctx.store.get(args.job_id);
 	if (!writeBytes?.length) throw new EmptyPollRemovedError(session?.terminalUrl);
-	if (!session) throw new Error(missingSessionText(ctx, args.session_id, `unknown session_id: ${args.session_id}`));
+	if (!session) throw new Error(missingTerminalText(ctx, args.job_id, `unknown job_id: ${args.job_id}`));
 
 	const yieldTimeMs = clampYield(args.yield_time_ms, DEFAULT_WRITE_STDIN_YIELD_MS);
 
@@ -602,7 +642,7 @@ async function runWriteStdin(
 					wallTimeSec: wallSec,
 					collected,
 					totalBytes: session.totalBytesSeen,
-					sessionId: undefined,
+					jobId: undefined,
 					exitCode: session.exitCode,
 					signal: session.signal,
 					failure: session.failureMessage,
@@ -631,7 +671,7 @@ async function runWriteStdin(
 				wallTimeSec: wallSec,
 				collected,
 				totalBytes: session.totalBytesSeen,
-				sessionId: undefined,
+				jobId: undefined,
 				exitCode: session.exitCode,
 				signal: session.signal,
 				failure: session.failureMessage ?? writeFailure,
@@ -650,7 +690,7 @@ async function runWriteStdin(
 			wallTimeSec: wallSec,
 			collected,
 			totalBytes: session.totalBytesSeen,
-			sessionId: session.id,
+			jobId: session.id,
 			exitCode: undefined,
 			signal: null,
 			failure: writeFailure,
@@ -694,13 +734,15 @@ type TerminateOrigin =
 
 async function terminateSessionById(
 	ctx: ExtensionCtx,
-	sid: number,
+	sid: string,
 	initial: NodeJS.Signals,
 	origin: TerminateOrigin,
 ): Promise<TerminateOutcome | undefined> {
 	if (origin.kind !== "human") ctx.coordinator.cancelMonitor(sid);
 	const session = ctx.store.get(sid);
 	if (!session) return undefined;
+	// The model or a person ends it: its job shows cancelled, not as a failure of the command.
+	if (origin.kind !== "reclaim") ctx.jobs.get(sid)?.cancel();
 	// Explicit kill: suppress the wake BEFORE signaling so the induced exit can
 	// never race a wake enqueue, and mark the coming return as a normal ending.
 	ctx.coordinator.suppress(sid);
@@ -748,7 +790,7 @@ function runningSessions(ctx: ExtensionCtx): ExecSession[] {
 	return ctx.store
 		.values()
 		.filter((s) => !s.hasExited)
-		.sort((a, b) => a.id - b.id);
+		.sort((a, b) => a.startedAt - b.startedAt);
 }
 
 function sessionWord(count: number): string {
@@ -775,8 +817,8 @@ function formatRunningSessionsWidget(ctx: ExtensionCtx, sessions: ExecSession[])
 			const held = s.shellExited ? tr(" (shell exited, terminal held)", "（shell 已退出，终端仍被占用）") : "";
 			const elapsed = formatElapsedUi(now - s.startedAt);
 			return tr(
-				`  #${s.id} ${elapsed}${wake}${held} ${oneLineCommand(s.title, 40)} — ${oneLineCommand(s.displayCommand, 60)} (${s.cwd})`,
-				`  #${s.id} ${elapsed}${wake}${held} ${oneLineCommand(s.title, 40)} — ${oneLineCommand(s.displayCommand, 60)}（${s.cwd}）`,
+				`  ${s.id} ${elapsed}${wake}${held} ${oneLineCommand(s.title, 40)} — ${oneLineCommand(s.displayCommand, 60)} (${s.cwd})`,
+				`  ${s.id} ${elapsed}${wake}${held} ${oneLineCommand(s.title, 40)} — ${oneLineCommand(s.displayCommand, 60)}（${s.cwd}）`,
 			);
 		}),
 	];
@@ -837,12 +879,12 @@ function watchSessionExit(ctx: ExtensionCtx, session: ExecSession): void {
 	ctx.exitUnsubscribers.set(session.id, unsubscribe);
 }
 
-function unwatchSessionExit(ctx: ExtensionCtx, id: number): void {
+function unwatchSessionExit(ctx: ExtensionCtx, id: string): void {
 	ctx.exitUnsubscribers.get(id)?.();
 	ctx.exitUnsubscribers.delete(id);
 }
 
-function removeSession(ctx: ExtensionCtx, id: number): ExecSession | undefined {
+function removeSession(ctx: ExtensionCtx, id: string): ExecSession | undefined {
 	unwatchSessionExit(ctx, id);
 	return ctx.store.remove(id);
 }
@@ -861,7 +903,7 @@ function buildStreamUpdate(session: ExecSession, operation: ProcessOperation): A
 		content: [{ type: "text", text }],
 		details: {
 			operation,
-			session_id: session.id,
+			job_id: session.id,
 			pid: session.pid,
 			running: !session.hasExited,
 			total_bytes: session.totalBytesSeen,
@@ -972,12 +1014,15 @@ function createRuntime(opts: RuntimeOptions): ExtensionCtx {
 		store: new SessionStore({
 			maxSessions: MAX_SESSIONS, lruProtectedCount: LRU_PROTECTED_COUNT,
 			onEvict: (session, reason) => {
-				if (reason === "lru" && !session.hasExited) coordinator.monitorEndReason(session.id, "lru_terminated");
+				if (reason !== "lru") return;
+				ctx.jobs.get(session.id)?.cancel();
+				if (!session.hasExited) coordinator.monitorEndReason(session.id, "lru_terminated");
 			},
 		}),
 		ui: undefined,
 		widgetVisible: false,
 		exitUnsubscribers: new Map(),
+		jobs: new Map(),
 		pendingSessions: new Set(),
 		shuttingDown: false,
 		appearance: opts.appearance,
@@ -1009,6 +1054,8 @@ async function endRuntime(ctx: ExtensionCtx): Promise<void> {
 	ctx.lifecycle.shutdown();
 	ctx.coordinator.shutdown();
 	ctx.notices.stop();
+	// The plugin ends these terminals: their jobs show cancelled.
+	for (const job of ctx.jobs.values()) job.cancel();
 	const drained = ctx.store.terminateAll();
 	for (const s of ctx.pendingSessions) {
 		void s.releaseForShutdown();
@@ -1081,7 +1128,7 @@ export function activate(
 			await ctx.lifecycle.collectReturned();
 			updateRunningSessionsUi(ctx);
 		},
-		tracked: (sessionId) => ctx.lifecycle.isTracked(sessionId),
+		tracked: (jobId) => ctx.lifecycle.isTracked(jobId),
 		verdict: (verdict) => {
 			switch (verdict.kind) {
 				case "done":
@@ -1235,10 +1282,7 @@ export function activate(
 				const wake = ctx.coordinator.isArmed(s.id) ? tr(" [wake]", " [已唤醒]") : "";
 				const held = s.shellExited ? tr(" (shell exited, terminal held)", "（shell 已退出，终端仍被占用）") : "";
 				const elapsed = formatElapsedUi(now - s.startedAt);
-				return tr(
-					`#${s.id} ${elapsed}${wake}${held} ${oneLineCommand(s.title, 40)} — ${oneLineCommand(s.displayCommand, 60)}`,
-					`#${s.id} ${elapsed}${wake}${held} ${oneLineCommand(s.title, 40)} — ${oneLineCommand(s.displayCommand, 60)}`,
-				);
+				return `${s.id} ${elapsed}${wake}${held} ${oneLineCommand(s.title, 40)} — ${oneLineCommand(s.displayCommand, 60)}`;
 			});
 			const KILL_ALL = tr(
 				`Kill all ${sessions.length} ${sessionWord(sessions.length)}`,
@@ -1252,7 +1296,7 @@ export function activate(
 				[...labels, KILL_ALL],
 			);
 			if (!choice) return;
-			const targets = choice === KILL_ALL ? sessions : sessions.filter((s) => choice.startsWith(`#${s.id} `));
+			const targets = choice === KILL_ALL ? sessions : sessions.filter((s) => choice.startsWith(`${s.id} `));
 			let killed = 0;
 			let failed = 0;
 			for (const s of targets) {
@@ -1312,6 +1356,9 @@ export function activate(
 						skills: bound?.skills,
 						attachments: bound?.getImageAttachments() ?? [],
 						bash: terminalHost.bash(settings),
+						jobs: binding.kind === "bound" && binding.session.asyncJobManager !== undefined
+							? { manager: binding.session.asyncJobManager, ownerId: binding.rootAgentId }
+							: undefined,
 					}, signal, onUpdate, toolCallId);
 					updateRunningSessionsUi(ctx);
 					return {
@@ -1325,7 +1372,7 @@ export function activate(
 	pi.registerTool(bashTool);
 
 	const writeStdinParameters = Type.Object({
-		session_id: Type.Number({ description: "Session id from a bash pty call." }),
+		job_id: Type.String({ description: JOB_ID_DESCRIPTION }),
 		chars: Type.Optional(Type.String({
 			description: "Text with C-style escapes: \\xHH, \\uHHHH, \\u{H\u2026}, \\n \\r \\t \\0 \\a \\e \\b \\f \\v \\\\ \\\". Unknown \\X preserved literally. Mutually exclusive with chars_b64.",
 		})),
@@ -1341,7 +1388,7 @@ export function activate(
 		...writeStdinDocumentation,
 		label: tr("Send input", "发送输入"),
 		description:
-			"Send input to a running session's PTY; returns output like a bash pty call." +
+			"Send input to a running terminal; returns output like a bash pty call." +
 			writeStdinTopicPointers,
 		parameters: writeStdinParameters,
 		async execute(toolCallId, params, signal, onUpdate, eventCtx) {
@@ -1356,7 +1403,7 @@ export function activate(
 	} satisfies ToolDefinition<typeof writeStdinParameters> & { docTopics(): Readonly<Record<string, string>> });
 
 	const setOnExitParameters = Type.Object({
-		session_id: Type.Number({ description: "Session id from a bash pty call." }),
+		job_id: Type.String({ description: JOB_ID_DESCRIPTION }),
 		on_exit: Type.Enum(["none", "wake"], {
 			description: '"none": disarm (also after eviction) as soon as auto-resume is unwanted. "wake": arm auto-resume while running, only when the human explicitly asked.',
 		}),
@@ -1366,35 +1413,35 @@ export function activate(
 		...setOnExitDocumentation,
 		label: tr("Set exit wake", "设置退出唤醒"),
 		description:
-			"Change a session's on_exit policy without stopping the process." + setOnExitTopicPointers,
+			"Change a terminal's on_exit policy without stopping the process." + setOnExitTopicPointers,
 		parameters: setOnExitParameters,
 		async execute(_toolCallId, params, _signal, _onUpdate, eventCtx) {
 			ctx.ui ??= eventCtx.ui;
-			const { session_id: sid, on_exit: policy } = params as { session_id: number; on_exit: OnExitPolicy };
-			const session = ctx.store.get(sid);
+			const { job_id: jobId, on_exit: policy } = params;
+			const session = ctx.store.get(jobId);
 			if (policy === "wake" && !session) {
 				return {
-					content: [{ type: "text", text: missingSessionText(ctx, sid, `No such session: ${sid}`) }],
-					details: { session_id: sid, found: false },
+					content: [{ type: "text", text: missingTerminalText(ctx, jobId, `No such terminal: ${jobId}`) }],
+					details: { job_id: jobId, found: false },
 				};
 			}
-			const status = ctx.coordinator.setOnExit(sid, policy, session);
+			const status = ctx.coordinator.setOnExit(jobId, policy, session);
 			if (!session && status === "already_none") {
 				return {
-					content: [{ type: "text", text: missingSessionText(ctx, sid, `No such session: ${sid}`) }],
-					details: { session_id: sid, found: false },
+					content: [{ type: "text", text: missingTerminalText(ctx, jobId, `No such terminal: ${jobId}`) }],
+					details: { job_id: jobId, found: false },
 				};
 			}
 			const running = session ? !session.hasExited : false;
-			const armed = ctx.coordinator.isArmed(sid);
+			const armed = ctx.coordinator.isArmed(jobId);
 			const text =
-				`set_on_exit session_id=${sid} on_exit=${policy} → ${status}` +
-				(session ? (running ? " (process still running)" : " (process already exited)") : " (no store session; coordinator only)") +
+				`set_on_exit job_id=${jobId} on_exit=${policy} → ${status}` +
+				(session ? (running ? " (process still running)" : " (process already exited)") : " (no stored terminal; coordinator only)") +
 				(armed ? "; wake armed" : "; wake not armed");
 			return {
 				content: [{ type: "text", text }],
 				details: {
-					session_id: sid,
+					job_id: jobId,
 					found: true,
 					on_exit: policy,
 					status,
@@ -1409,7 +1456,7 @@ export function activate(
 	} satisfies ToolDefinition<typeof setOnExitParameters> & { docTopics(): Readonly<Record<string, string>> });
 
 	const monitorParameters = Type.Object({
-		session_id: Type.Number({ description: "Existing running session id." }),
+		job_id: Type.String({ description: JOB_ID_DESCRIPTION }),
 		action: Type.Optional(Type.Enum(["start", "cancel"], { description: "start (default) establishes or replaces; cancel removes silently." })),
 		condition: Type.Optional(Type.String({ description: "JavaScript regex source without / delimiters. Omit both condition and judge to await completion only." })),
 		judge: Type.Optional(Type.String({ description: "Intent the judge checks each new screen against, e.g. \"the server is ready to accept requests\"; each screen judged met wakes you. Excludes condition." })),
@@ -1422,26 +1469,26 @@ export function activate(
 		...monitorDocumentation,
 		label: tr("Monitor", "监视"),
 		description:
-			"Wait for a running session's future output: each batch matching condition or each new screen the judge finds meets your intent wakes you; with neither, its end wakes you once." +
+			"Wait for a running terminal's future output: each batch matching condition or each new screen the judge finds meets your intent wakes you; with neither, its end wakes you once." +
 			monitorTopicPointers,
 		parameters: monitorParameters,
 		async execute(_toolCallId, params, signal) {
 			let details: MonitorScriptResult;
 			try {
 				if (params.action === "cancel") {
-					details = { session_id: params.session_id, status: ctx.coordinator.cancelMonitor(params.session_id) ? "cancelled" : "not_monitored" };
+					details = { job_id: params.job_id, status: ctx.coordinator.cancelMonitor(params.job_id) ? "cancelled" : "not_monitored" };
 				} else {
-					const session = ctx.store.get(params.session_id);
-					if (!session) throw new MonitorError("unknown_session", missingSessionText(ctx, params.session_id, `No such session: ${params.session_id}`));
+					const session = ctx.store.get(params.job_id);
+					if (!session) throw new MonitorError("unknown_job", missingTerminalText(ctx, params.job_id, `No such terminal: ${params.job_id}`));
 					const monitor = await ctx.coordinator.startMonitor(session, {
 						condition: params.condition, judge: params.judge, judgeIntervalMs: params.judge_interval_ms,
 						maxReturns: params.max_returns, remindAfterMs: params.remind_after_ms,
 					}, signal);
-					details = { session_id: params.session_id, status: "started", monitor };
+					details = { job_id: params.job_id, status: "started", monitor };
 				}
 			} catch (error) {
 				if (!(error instanceof MonitorError)) throw error;
-				details = { session_id: params.session_id, status: "error", code: error.code, message: error.message };
+				details = { job_id: params.job_id, status: "error", code: error.code, message: error.message };
 			}
 			return {
 				content: [{ type: "text", text: JSON.stringify(details) }],
@@ -1452,7 +1499,7 @@ export function activate(
 	} satisfies ToolDefinition<typeof monitorParameters> & { docTopics(): Readonly<Record<string, string>> });
 
 	const killSessionParameters = Type.Object({
-		session_id: Type.Number({ description: "Session to terminate." }),
+		job_id: Type.String({ description: JOB_ID_DESCRIPTION }),
 		signal: Type.Optional(Type.String({
 			description: 'Initial signal (default "SIGTERM"). Examples: SIGINT, SIGHUP, SIGKILL.',
 		})),
@@ -1462,23 +1509,23 @@ export function activate(
 		...killSessionDocumentation,
 		label: tr("Terminate session", "结束会话"),
 		description:
-			"Terminate a session: SIGTERM, then SIGKILL after 2 s; on Windows any signal force-kills the process tree." +
+			"Terminate a terminal: SIGTERM, then SIGKILL after 2 s; on Windows any signal force-kills the process tree." +
 			killSessionTopicPointers,
 		parameters: killSessionParameters,
 		async execute(toolCallId, params, _signal, _onUpdate, eventCtx) {
 			ctx.ui ??= eventCtx.ui;
-			const sid = (params as { session_id: number; signal?: string }).session_id;
-			const initial = normalizeSignal((params as { signal?: string }).signal);
+			const sid = params.job_id;
+			const initial = normalizeSignal(params.signal);
 			const startedAt = Date.now();
 			const outcome = await terminateSessionById(ctx, sid, initial, { kind: "model", toolCallId });
 			if (!outcome) {
 				return {
-					content: [{ type: "text", text: missingSessionText(ctx, sid, `No such session: ${sid}`) }],
+					content: [{ type: "text", text: missingTerminalText(ctx, sid, `No such terminal: ${sid}`) }],
 					details: {
 						operation: "kill_session",
 						status: "kill_failed",
 						running: false,
-						session_id: sid,
+						job_id: sid,
 						found: false,
 					} as const,
 				};
@@ -1489,7 +1536,7 @@ export function activate(
 				? session.failureMessage
 				: [
 						`process still running after ${initial}${escalated ? " and SIGKILL escalation" : ""}; ` +
-							"the session remains registered — retry kill_session or check permissions",
+							"the terminal remains registered — retry kill_session or check permissions",
 						session.failureMessage,
 					]
 					.filter((value): value is string => Boolean(value))
@@ -1498,7 +1545,7 @@ export function activate(
 				wallTimeSec: (Date.now() - startedAt) / 1000,
 				collected,
 				totalBytes: session.totalBytesSeen,
-				sessionId: sid,
+				jobId: sid,
 				pid: session.pid,
 				requestedSignal: initial,
 				exitCode: session.exitCode,
@@ -1532,11 +1579,11 @@ export function activate(
 			const now = Date.now();
 			const stored = ctx.store.values();
 			const sessions = stored
-				.sort((a, b) => a.id - b.id)
+				.sort((a, b) => a.startedAt - b.startedAt)
 				.map((s) => {
 					const life = ctx.lifecycle.status(s.id);
 					return {
-						session_id: s.id,
+						job_id: s.id,
 						title: s.title,
 						command: s.displayCommand,
 						cwd: s.cwd,
@@ -1567,7 +1614,7 @@ export function activate(
 						const life = s.lifecycle ? `  [returned ${s.lifecycle.returned}; ${s.lifecycle.read ? "read" : "unread"}; ${s.lifecycle.phase}]` : "";
 						const wake = s.wake_armed ? " [wake]" : "";
 						const monitor = s.monitor ? ` [monitor ${s.monitor.returns}/${s.monitor.max_returns} ${watchLabel(s.monitor.watch)} remind_after=${formatElapsed(s.monitor.remind_after_ms)}]` : "";
-						return `  ${String(s.session_id).padStart(3)}  ${JSON.stringify(s.title)}  pid=${String(s.pid ?? "?").padStart(6)}  ${((s.elapsed_ms / 1000).toFixed(1) + "s").padStart(8)}${wake}${monitor}  ${oneLineCommand(s.command, 60)}${exited}${life}\n        shell: ${sanitizeMeta(s.shell ?? "")}\n        log: ${s.log_path}${s.terminal_url ? `\n        terminal_url: ${s.terminal_url}` : ""}`;
+						return `  ${s.job_id.padStart(6)}  ${JSON.stringify(s.title)}  pid=${String(s.pid ?? "?").padStart(6)}  ${((s.elapsed_ms / 1000).toFixed(1) + "s").padStart(8)}${wake}${monitor}  ${oneLineCommand(s.command, 60)}${exited}${life}\n        shell: ${sanitizeMeta(s.shell ?? "")}\n        log: ${s.log_path}${s.terminal_url ? `\n        terminal_url: ${s.terminal_url}` : ""}`;
 					})
 				: ["  (no terminals)"];
 			const header = `omp-actual-terminal terminals (${runningCount} running, ${returnedCount} returned):`;
@@ -1580,7 +1627,7 @@ export function activate(
 
 	return {
 		store: () => ctx.store,
-		kill: async (id) => {
+		kill: async (id: string) => {
 			const outcome = await terminateSessionById(ctx, id, "SIGTERM", { kind: "human" });
 			updateRunningSessionsUi(ctx);
 			return outcome?.killed === true;

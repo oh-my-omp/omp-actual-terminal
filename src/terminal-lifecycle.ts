@@ -12,7 +12,7 @@ export interface ShellExit {
 }
 
 export interface LifecycleSession {
-	readonly id: number;
+	readonly id: string;
 	readonly title: string;
 	readonly displayCommand: string;
 	readonly terminalUrl: string | undefined;
@@ -31,13 +31,14 @@ export interface LifecycleSession {
 
 type Deadline = { readonly kind: "open" } | { readonly kind: "expired"; readonly seconds: number };
 
-interface Ending {
+export interface Ending {
 	readonly killed: boolean;
 	readonly interrupted: boolean;
 	readonly deadline: Deadline;
 }
 
-const NATURAL: Ending = { killed: false, interrupted: false, deadline: { kind: "open" } };
+/** An ending nobody caused: neither killed, interrupted nor past its `timeout`. */
+export const NATURAL_ENDING: Ending = { killed: false, interrupted: false, deadline: { kind: "open" } };
 
 const INTERRUPT_BYTES: readonly number[] = [0x03, 0x1c];
 
@@ -78,7 +79,7 @@ export interface ReclaimedTerminal {
 
 export interface TerminalLifecycleOptions extends LifecycleClock {
 	readonly notices: NoticeDispatcher;
-	readonly reclaim: (sessionId: number) => Promise<ReclaimResult>;
+	readonly reclaim: (jobId: string) => Promise<ReclaimResult>;
 	readonly ttlMs?: number;
 	readonly graceMs?: number;
 	readonly lingerMs?: number;
@@ -87,7 +88,7 @@ export interface TerminalLifecycleOptions extends LifecycleClock {
 }
 
 export function identityOf(session: LifecycleSession): TerminalIdentity {
-	return { sessionId: session.id, title: session.title, terminalUrl: session.terminalUrl, logPath: session.logPath };
+	return { jobId: session.id, title: session.title, terminalUrl: session.terminalUrl, logPath: session.logPath };
 }
 
 export function classifyReturn(exit: ShellExit, failureMessage: string | null, ending: Ending): TerminalOutcome {
@@ -102,9 +103,9 @@ export function classifyReturn(exit: ShellExit, failureMessage: string | null, e
 }
 
 export class TerminalLifecycle {
-	private readonly tracked = new Map<number, Tracked>();
-	private readonly toolReads = new Map<string, Set<number>>();
-	private readonly gone = new Map<number, ReclaimedTerminal>();
+	private readonly tracked = new Map<string, Tracked>();
+	private readonly toolReads = new Map<string, Set<string>>();
+	private readonly gone = new Map<string, ReclaimedTerminal>();
 	private sweeper: unknown;
 	private stopped = false;
 	private readonly ttlMs: number;
@@ -125,7 +126,7 @@ export class TerminalLifecycle {
 
 	track(session: LifecycleSession): void {
 		if (this.stopped || this.tracked.has(session.id)) return;
-		const entry: Tracked = { session, life: { kind: "running", ending: NATURAL }, unsubscribe: [] };
+		const entry: Tracked = { session, life: { kind: "running", ending: NATURAL_ENDING }, unsubscribe: [] };
 		this.tracked.set(session.id, entry);
 		entry.unsubscribe.push(
 			session.onShellExit((exit) => this.returned(entry, exit)),
@@ -136,44 +137,44 @@ export class TerminalLifecycle {
 		this.ensureSweeper();
 	}
 
-	isTracked(sessionId: number): boolean {
-		return this.tracked.has(sessionId);
+	isTracked(jobId: string): boolean {
+		return this.tracked.has(jobId);
 	}
 
-	reclaimed(sessionId: number): ReclaimedTerminal | undefined {
-		return this.gone.get(sessionId);
+	reclaimed(jobId: string): ReclaimedTerminal | undefined {
+		return this.gone.get(jobId);
 	}
 
-	status(sessionId: number): { readonly outcome: TerminalOutcome; readonly read: boolean; readonly phase: Phase["kind"] } | undefined {
-		const life = this.tracked.get(sessionId)?.life;
+	status(jobId: string): { readonly outcome: TerminalOutcome; readonly read: boolean; readonly phase: Phase["kind"] } | undefined {
+		const life = this.tracked.get(jobId)?.life;
 		return life?.kind === "returned" ? { outcome: life.outcome, read: life.read.kind === "read", phase: life.phase.kind } : undefined;
 	}
 
-	noteKill(sessionId: number): void {
-		const entry = this.tracked.get(sessionId);
+	noteKill(jobId: string): void {
+		const entry = this.tracked.get(jobId);
 		if (entry?.life.kind === "running") entry.life = { kind: "running", ending: { ...entry.life.ending, killed: true } };
 	}
 
 	/** The terminal's `timeout` ended it: whatever ends it now is an abnormal return. */
-	noteDeadline(sessionId: number, seconds: number): void {
-		const entry = this.tracked.get(sessionId);
+	noteDeadline(jobId: string, seconds: number): void {
+		const entry = this.tracked.get(jobId);
 		if (entry?.life.kind === "running") entry.life = { kind: "running", ending: { ...entry.life.ending, deadline: { kind: "expired", seconds } } };
 	}
 
-	killFailed(sessionId: number): void {
-		const entry = this.tracked.get(sessionId);
+	killFailed(jobId: string): void {
+		const entry = this.tracked.get(jobId);
 		if (entry?.life.kind === "running") entry.life = { kind: "running", ending: { ...entry.life.ending, killed: false } };
 	}
 
-	noteInput(sessionId: number, bytes: Uint8Array): void {
-		const entry = this.tracked.get(sessionId);
+	noteInput(jobId: string, bytes: Uint8Array): void {
+		const entry = this.tracked.get(jobId);
 		if (entry?.life.kind === "running") {
 			entry.life = { kind: "running", ending: { ...entry.life.ending, interrupted: carriesInterrupt(bytes) } };
 		}
 	}
 
-	markRead(sessionId: number): void {
-		const entry = this.tracked.get(sessionId);
+	markRead(jobId: string): void {
+		const entry = this.tracked.get(jobId);
 		if (!entry) return;
 		// A read can race the shell-exit event; the session state is authoritative.
 		if (entry.life.kind === "running" && (entry.session.shellExited || entry.session.hasExited)) this.returned(entry, entry.session.shellExit);
@@ -185,13 +186,13 @@ export class TerminalLifecycle {
 		this.linger(entry);
 	}
 
-	noteToolRead(toolCallId: string, sessionId: number): void {
-		const entry = this.tracked.get(sessionId);
+	noteToolRead(toolCallId: string, jobId: string): void {
+		const entry = this.tracked.get(jobId);
 		if (!entry) return;
 		if (entry.life.kind === "running" && !(entry.session.shellExited || entry.session.hasExited)) return;
 		let ids = this.toolReads.get(toolCallId);
 		if (!ids) this.toolReads.set(toolCallId, ids = new Set());
-		ids.add(sessionId);
+		ids.add(jobId);
 	}
 
 	commitToolReads(toolCallId: string, isError: boolean): void {
@@ -213,11 +214,11 @@ export class TerminalLifecycle {
 		});
 	}
 
-	private forget(sessionId: number): void {
-		const entry = this.tracked.get(sessionId);
+	private forget(jobId: string): void {
+		const entry = this.tracked.get(jobId);
 		if (!entry) return;
 		for (const unsubscribe of entry.unsubscribe) unsubscribe();
-		this.tracked.delete(sessionId);
+		this.tracked.delete(jobId);
 		if (this.tracked.size === 0) this.stopSweeper();
 	}
 
@@ -310,13 +311,13 @@ export class TerminalLifecycle {
 		for (const notice of results) if (notice) void this.opts.notices.submit(notice);
 	}
 
-	async collectReturned(): Promise<ReadonlySet<number>> {
+	async collectReturned(): Promise<ReadonlySet<string>> {
 		const entries = [...this.tracked.values()].filter((entry) => entry.life.kind === "returned" && entry.life.phase.kind !== "reclaiming");
 		const results = await Promise.all(entries.map(async (entry) => {
 			const result = await this.reclaimEntry(entry, entry.life);
 			return result?.kind === "gone" ? entry.session.id : undefined;
 		}));
-		return new Set(results.filter((id): id is number => id !== undefined));
+		return new Set(results.filter((id): id is string => id !== undefined));
 	}
 
 	private async reclaimEntry(entry: Tracked, onHeld: Life): Promise<ReclaimResult | undefined> {

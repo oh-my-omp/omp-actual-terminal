@@ -7,7 +7,7 @@ import type { NoticeDispatcher, TerminalNotice } from "./terminal-notice.ts";
 export type OnExitPolicy = "none" | "wake";
 
 export interface CompletionSessionLike {
-	readonly id: number;
+	readonly id: string;
 	readonly title: string;
 	readonly displayCommand: string;
 	readonly cwd: string;
@@ -22,7 +22,7 @@ export interface CompletionSessionLike {
 }
 
 export interface CompletionSnapshot {
-	sessionId: number;
+	jobId: string;
 	title: string;
 	command: string;
 	cwd: string;
@@ -36,7 +36,7 @@ export interface CompletionSnapshot {
 }
 
 interface CompletionRecord {
-	sessionId: number;
+	jobId: string;
 	armed: boolean;
 	exited: boolean;
 	observed: boolean;
@@ -75,8 +75,8 @@ export function sanitizeMeta(raw: string): string {
 }
 
 export class CompletionCoordinator {
-	private readonly records = new Map<number, CompletionRecord>();
-	private monitors = new Map<number, MonitorSubscription>();
+	private readonly records = new Map<string, CompletionRecord>();
+	private monitors = new Map<string, MonitorSubscription>();
 	private readonly opts: Required<Pick<CompletionCoordinatorOptions, "notices" | "debounceMs">> & CompletionCoordinatorOptions;
 	private debounceHandle: unknown;
 	private stopped = false;
@@ -138,8 +138,8 @@ export class CompletionCoordinator {
 		}, signal);
 		if (result !== "accepted") {
 			subscription.cancel();
-			throw new MonitorError(result === "not_running" ? "session_not_running" : "monitor_cancelled",
-				result === "not_running" ? "session is no longer running" : "monitor establishment was cancelled");
+			throw new MonitorError(result === "not_running" ? "job_not_running" : "monitor_cancelled",
+				result === "not_running" ? "terminal is no longer running" : "monitor establishment was cancelled");
 		}
 		if (signal?.aborted) {
 			if (current(subscription)) {
@@ -152,19 +152,19 @@ export class CompletionCoordinator {
 		return subscription.status();
 	}
 
-	monitorStatus(sessionId: number): MonitorStatus | undefined { return this.monitors.get(sessionId)?.status(); }
+	monitorStatus(jobId: string): MonitorStatus | undefined { return this.monitors.get(jobId)?.status(); }
 
-	cancelMonitor(sessionId: number): boolean {
-		const subscription = this.monitors.get(sessionId);
+	cancelMonitor(jobId: string): boolean {
+		const subscription = this.monitors.get(jobId);
 		if (!subscription) return false;
-		this.monitors.delete(sessionId);
+		this.monitors.delete(jobId);
 		subscription.cancel();
 		this.scheduleFlush();
 		return true;
 	}
 
-	monitorEndReason(sessionId: number, reason: MonitorEndReason): void {
-		this.monitors.get(sessionId)?.setEndReason(reason);
+	monitorEndReason(jobId: string, reason: MonitorEndReason): void {
+		this.monitors.get(jobId)?.setEndReason(reason);
 	}
 
 	alertInputWait(alert: InputWaitAlert): void {
@@ -174,13 +174,13 @@ export class CompletionCoordinator {
 
 	/**
 	 * Call ONLY once a bash pty call has
-	 * committed to returning a background session_id.
+	 * committed to returning a background job_id.
 	 */
 	register(session: CompletionSessionLike): void {
 		if (this.stopped) return;
 		if (this.records.has(session.id)) return;
 		const record: CompletionRecord = {
-			sessionId: session.id,
+			jobId: session.id,
 			armed: true,
 			exited: false,
 			observed: false,
@@ -196,8 +196,8 @@ export class CompletionCoordinator {
 		record.unsubscribeExit = session.onExit(() => this.recordExit(record));
 	}
 
-	isArmed(sessionId: number): boolean {
-		const r = this.records.get(sessionId);
+	isArmed(jobId: string): boolean {
+		const r = this.records.get(jobId);
 		return !!r && r.armed && !r.observed && !r.suppressed;
 	}
 
@@ -205,12 +205,12 @@ export class CompletionCoordinator {
 	 * Disarm cannot recall a follow-up that `send` has already handed to pi.
 	 */
 	setOnExit(
-		sessionId: number,
+		jobId: string,
 		policy: OnExitPolicy,
 		session?: CompletionSessionLike | null,
 	): "disarmed" | "already_none" | "armed" | "already_armed" | "too_late" {
 		if (this.stopped) return policy === "wake" ? "too_late" : "already_none";
-		const existing = this.records.get(sessionId);
+		const existing = this.records.get(jobId);
 
 		if (policy === "none") {
 			if (!existing) return "already_none";
@@ -223,7 +223,7 @@ export class CompletionCoordinator {
 			if (existing.observed || existing.suppressed) return "too_late";
 			return "already_armed";
 		}
-		if (!session || session.id !== sessionId || session.hasExited) return "too_late";
+		if (!session || session.id !== jobId || session.hasExited) return "too_late";
 		this.register(session);
 		return "armed";
 	}
@@ -235,7 +235,7 @@ export class CompletionCoordinator {
 		record.exited = true;
 		const s = record.session;
 		record.snapshot = {
-			sessionId: s.id,
+			jobId: s.id,
 			title: s.title,
 			command: s.displayCommand,
 			cwd: s.cwd,
@@ -251,20 +251,20 @@ export class CompletionCoordinator {
 	}
 
 
-	beginObservation(sessionId: number, toolCallId: string): void {
-		this.records.get(sessionId)?.observers.add(toolCallId);
+	beginObservation(jobId: string, toolCallId: string): void {
+		this.records.get(jobId)?.observers.add(toolCallId);
 	}
 
-	releaseObservation(sessionId: number, toolCallId: string): void {
-		const r = this.records.get(sessionId);
+	releaseObservation(jobId: string, toolCallId: string): void {
+		const r = this.records.get(jobId);
 		if (!r) return;
 		r.observers.delete(toolCallId);
 		r.pendingTerminal.delete(toolCallId);
 		if (r.exited) this.scheduleFlush();
 	}
 
-	markPendingTerminal(sessionId: number, toolCallId: string): void {
-		const r = this.records.get(sessionId);
+	markPendingTerminal(jobId: string, toolCallId: string): void {
+		const r = this.records.get(jobId);
 		if (!r) return;
 		r.observers.add(toolCallId);
 		r.pendingTerminal.add(toolCallId);
@@ -293,26 +293,26 @@ export class CompletionCoordinator {
 		this.resolveRecord(record);
 	}
 
-	observeViaListing(sessionId: number): void {
-		const r = this.records.get(sessionId);
+	observeViaListing(jobId: string): void {
+		const r = this.records.get(jobId);
 		if (!r) return;
 		this.commitObserved(r);
 	}
 
 
 	/** Suppress the wake BEFORE signaling the process on an explicit kill. */
-	suppress(sessionId: number): void {
-		const r = this.records.get(sessionId);
+	suppress(jobId: string): void {
+		const r = this.records.get(jobId);
 		if (r) r.suppressed = true;
 	}
 
-	confirmKill(sessionId: number): void {
-		const r = this.records.get(sessionId);
+	confirmKill(jobId: string): void {
+		const r = this.records.get(jobId);
 		if (r) this.resolveRecord(r);
 	}
 
-	restoreAfterFailedKill(sessionId: number): void {
-		const r = this.records.get(sessionId);
+	restoreAfterFailedKill(jobId: string): void {
+		const r = this.records.get(jobId);
 		if (!r) return;
 		r.suppressed = false;
 		if (r.exited) this.scheduleFlush();
@@ -351,9 +351,9 @@ export class CompletionCoordinator {
 	}
 
 	private resolveRecord(record: CompletionRecord): void {
-		if (this.records.get(record.sessionId) !== record) return;
+		if (this.records.get(record.jobId) !== record) return;
 		record.unsubscribeExit();
-		this.records.delete(record.sessionId);
+		this.records.delete(record.jobId);
 	}
 
 
@@ -375,7 +375,7 @@ export class CompletionCoordinator {
 				!r.observed &&
 				!r.suppressed &&
 				!r.wakeQueued &&
-				!this.monitors.has(r.sessionId) &&
+				!this.monitors.has(r.jobId) &&
 				r.observers.size === 0 &&
 				r.snapshot
 			) {
@@ -388,12 +388,12 @@ export class CompletionCoordinator {
 	private submitWake(record: CompletionRecord, s: CompletionSnapshot): void {
 		// Reserve BEFORE submitting so a re-entrant flush cannot double-submit.
 		record.wakeQueued = true;
-		const live = () => !this.stopped && this.records.get(record.sessionId) === record && !record.observed && !record.suppressed;
+		const live = () => !this.stopped && this.records.get(record.jobId) === record && !record.observed && !record.suppressed;
 		void this.opts.notices.submit({
-			identity: { sessionId: s.sessionId, title: s.title, terminalUrl: s.terminalUrl, logPath: s.logPath },
+			identity: { jobId: s.jobId, title: s.title, terminalUrl: s.terminalUrl, logPath: s.logPath },
 			body: { kind: "exit_wake", command: s.command, cwd: s.cwd, elapsedMs: s.elapsedMs, exitCode: s.exitCode, signal: s.signal, failure: s.failureMessage },
 		}, live).then((outcome) => {
-			if (this.records.get(record.sessionId) !== record) return;
+			if (this.records.get(record.jobId) !== record) return;
 			switch (outcome) {
 				case "delivered":
 				case "withheld":

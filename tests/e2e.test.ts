@@ -126,11 +126,11 @@ describe("omp-actual-terminal e2e", () => {
 		await h.emit("session_start");
 		try {
 			const started = await h.call("bash", { pty: true, title: "Test command", command: "sleep 0.5; echo unobserved-marker; exec cat", yield_time_ms: 250 });
-			const sid = started.details.session_id;
+			const sid = started.details.job_id;
 			const url: string = started.details.terminal_url;
 			assert.ok(await waitFor(async () => (await readTerminal(url.slice(7))).screenLines.some((line) => line.includes("unobserved-marker"))));
 			for (const input of [{}, { chars: "" }, { chars_b64: "" }, { chars_b64: " \n" }]) {
-				await assert.rejects(h.call("write_stdin", { session_id: sid, ...input }), (error: unknown) => {
+				await assert.rejects(h.call("write_stdin", { job_id: sid, ...input }), (error: unknown) => {
 					assert.ok(error instanceof EmptyPollRemovedError);
 					assert.equal(error.code, "empty_poll_removed");
 					assert.ok(error.message.includes(`read ${url}`), error.message);
@@ -138,12 +138,12 @@ describe("omp-actual-terminal e2e", () => {
 					return true;
 				});
 			}
-			const after = await h.call("write_stdin", { session_id: sid, chars: "after\n" });
+			const after = await h.call("write_stdin", { job_id: sid, chars: "after\n" });
 			assert.equal(after.details.running, true);
 			assert.match(after.details.output, /unobserved-marker/);
 			assert.match(after.details.output, /after/);
 			for (const input of [{}, { chars: "" }, { chars_b64: "" }]) {
-				await assert.rejects(h.call("write_stdin", { session_id: -1, ...input }), EmptyPollRemovedError);
+				await assert.rejects(h.call("write_stdin", { job_id: "bg_0", ...input }), EmptyPollRemovedError);
 			}
 		} finally {
 			await h.emit("session_shutdown");
@@ -166,10 +166,10 @@ describe("omp-actual-terminal e2e", () => {
 		assert.equal(r1.details.exit_code, 0, `powershell details=${JSON.stringify(r1.details)}`);
 		assert.ok(
 			r1.details.output.includes("ps-ok"),
-			`powershell output=${JSON.stringify(r1.details.output)} session_id=${r1.details.session_id}`,
+			`powershell output=${JSON.stringify(r1.details.output)} job_id=${r1.details.job_id}`,
 		);
 		const r2 = await h.call("bash", { pty: true, title: "Test command", command: "echo cmd-ok", shell: "cmd", yield_time_ms: 20000 });
-		assert.equal(r2.details.session_id, undefined, JSON.stringify(r2.details));
+		assert.equal(r2.details.job_id, undefined, JSON.stringify(r2.details));
 		assert.match(String(r2.details.failure_message), /never launches cmd/, JSON.stringify(r2.details));
 		assert.doesNotMatch(r2.details.output, /cmd-ok/);
 		assert.match(h.uiEvents.notifications.at(-1)?.message ?? "", /session's shell/);
@@ -244,7 +244,7 @@ describe("omp-actual-terminal e2e", () => {
 		try {
 			await h.emit("session_start");
 			const result = await h.call("bash", { pty: true, title: "No seed", command: "echo must-not-run" });
-			assert.equal(result.details.session_id, undefined, JSON.stringify(result.details));
+			assert.equal(result.details.job_id, undefined, JSON.stringify(result.details));
 			assert.match(String(result.details.failure_message), /could not read the session shell's state: seed refused/);
 			assert.doesNotMatch(result.details.output, /must-not-run/);
 			const listed = await h.call("list_sessions", {});
@@ -280,9 +280,9 @@ describe("omp-actual-terminal e2e", () => {
 					shell: "/bin/sh",
 					yield_time_ms: 1000, }, undefined,
 				(partial: { details: { shell?: string } }) => initialUpdates.push(partial),);
-			const sid: unknown = started.details.session_id;
-			assert.equal(typeof sid, "number", JSON.stringify(started.details));
-			assert.ok(typeof sid === "number");
+			const sid: unknown = started.details.job_id;
+			assert.equal(typeof sid, "string", JSON.stringify(started.details));
+			assert.ok(typeof sid === "string");
 			assert.match(started.details.output, /interpreter:\/bin\/sh/);
 			assertReportedShell(started, "/bin/sh");
 			assert.ok(initialUpdates.length > 0, "expected a streaming update from the live readline loop");
@@ -297,31 +297,31 @@ describe("omp-actual-terminal e2e", () => {
 			const pollUpdates: Array<{ details: { shell?: string } }> = [];
 			const polled = await h.call(
 				"write_stdin",
-				{ session_id: sid, chars: "still-original\n", yield_time_ms: 1000 },
+				{ job_id: sid, chars: "still-original\n", yield_time_ms: 1000 },
 				undefined,
 				(partial: { details: { shell?: string } }) => pollUpdates.push(partial),
 			);
-			assert.equal(polled.details.session_id, sid);
+			assert.equal(polled.details.job_id, sid);
 			assert.match(polled.details.output, /reply:still-original/);
 			assertReportedShell(polled, "/bin/sh");
 			assert.ok(pollUpdates.length > 0, "expected a streaming update while the old PTY remains live");
 			assert.ok(pollUpdates.every((update) => update.details.shell === "/bin/sh"));
 
 			const listed = await h.call("list_sessions", {});
-			const entries: Array<{ session_id: number; shell?: string }> = listed.details.sessions;
-			assert.equal(entries.find((entry) => entry.session_id === sid)?.shell, "/bin/sh");
+			const entries: Array<{ job_id: string; shell?: string }> = listed.details.sessions;
+			assert.equal(entries.find((entry) => entry.job_id === sid)?.shell, "/bin/sh");
 			assert.ok(
 				listed.details && typeof listed.details === "object" && "sessions" in listed.details,
 			);
 			assert.ok(Array.isArray(listed.details.sessions));
 			const structuredEntry: unknown = listed.details.sessions.find(
-				(entry: unknown) => typeof entry === "object" && entry !== null && "session_id" in entry && entry.session_id === sid,
+				(entry: unknown) => typeof entry === "object" && entry !== null && "job_id" in entry && entry.job_id === sid,
 			);
 			assert.ok(structuredEntry && typeof structuredEntry === "object" && "shell" in structuredEntry);
 			assert.equal(structuredEntry.shell, "/bin/sh");
 			assert.ok(listed.content[0].text.includes("shell: /bin/sh"));
 
-			const killed = await h.call("kill_session", { session_id: sid });
+			const killed = await h.call("kill_session", { job_id: sid });
 			assert.equal(killed.details.killed, true, JSON.stringify(killed.details));
 			assertReportedShell(killed, "/bin/sh");
 		} finally {
@@ -334,7 +334,7 @@ describe("omp-actual-terminal e2e", () => {
 		await h.emit("session_start");
 		try {
 			const r = await h.call("bash", { pty: true, title: "Refused shell", command: "echo must-not-run", shell: "cmd.exe" });
-			assert.equal(r.details.session_id, undefined, JSON.stringify(r.details));
+			assert.equal(r.details.job_id, undefined, JSON.stringify(r.details));
 			assert.equal(r.details.shell, "cmd.exe");
 			assert.match(String(r.details.failure_message), /never launches cmd/, JSON.stringify(r.details));
 			assert.doesNotMatch(r.details.output, /must-not-run/);
@@ -347,12 +347,12 @@ describe("omp-actual-terminal e2e", () => {
 		}
 	});
 
-	it("short-lived command returns exit_code and no session_id", async () => {
+	it("short-lived command returns exit_code and no job_id", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r = await h.call("bash", { pty: true, title: "Test command", command: "echo hello && echo world" });
 		assert.equal(r.details.exit_code, 0);
-		assert.equal(r.details.session_id, undefined);
+		assert.equal(r.details.job_id, undefined);
 		assert.ok(r.details.output.includes("hello"));
 		assert.ok(r.details.output.includes("world"));
 		await h.emit("session_shutdown");
@@ -364,17 +364,17 @@ describe("omp-actual-terminal e2e", () => {
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "for i in 1 2 3; do echo tock $i; sleep 0.2; done",
 			yield_time_ms: 250, });
 		assert.ok(
-			typeof r1.details.session_id === "number",
-			`first yield should return session_id; got ${JSON.stringify(r1.details)}`,
+			typeof r1.details.job_id === "string",
+			`first yield should return job_id; got ${JSON.stringify(r1.details)}`,
 		);
-		const sid = r1.details.session_id;
+		const sid = r1.details.job_id;
 
 		await new Promise((r) => setTimeout(r, 800));
 
 		const projection = await readTerminal(r1.details.terminal_url.slice(7));
 		assert.ok(projection.screenLines.some((line) => line.includes("tock 3")));
 		const listed = await h.call("list_sessions", {});
-		assert.equal(listed.details.sessions.find((s: { session_id: number }) => s.session_id === sid)?.exit_code, 0);
+		assert.equal(listed.details.sessions.find((s: { job_id: string }) => s.job_id === sid)?.exit_code, 0);
 		await h.emit("session_shutdown");
 	});
 
@@ -385,17 +385,17 @@ describe("omp-actual-terminal e2e", () => {
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "for i in 1 2 3 4 5; do echo tick $i; sleep 0.3; done",
 			yield_time_ms: 600, });
 		assert.equal(r1.details.exit_code, undefined, "should still be running");
-		assert.ok(typeof r1.details.session_id === "number", `got session_id=${r1.details.session_id}`);
-		const sid = r1.details.session_id;
+		assert.ok(typeof r1.details.job_id === "string", `got job_id=${r1.details.job_id}`);
+		const sid = r1.details.job_id;
 		assert.ok(r1.details.output.includes("tick 1"), `first out: ${r1.details.output}`);
 
-		const monitoring = await h.call("monitor", { session_id: sid });
+		const monitoring = await h.call("monitor", { job_id: sid });
 		assert.equal(monitoring.details.status, "started");
 		assert.ok(await waitFor(() => h.sentMessages.some((m) => m.customType === "omp-actual-terminal-notice" && m.content.includes("monitor ended:"))));
 		const projection = await readTerminal(r1.details.terminal_url.slice(7));
 		assert.ok(projection.screenLines.some((line) => line.includes("tick 5")));
 		const listed = await h.call("list_sessions", {});
-		assert.equal(listed.details.sessions.find((s: { session_id: number }) => s.session_id === sid)?.exit_code, 0);
+		assert.equal(listed.details.sessions.find((s: { job_id: string }) => s.job_id === sid)?.exit_code, 0);
 		await h.emit("session_shutdown");
 	});
 
@@ -404,24 +404,24 @@ describe("omp-actual-terminal e2e", () => {
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "stty -echo; exec cat",
 			yield_time_ms: 300, });
-		assert.ok(typeof r1.details.session_id === "number", `got ${JSON.stringify(r1.details)}`);
-		const sid = r1.details.session_id;
+		assert.ok(typeof r1.details.job_id === "string", `got ${JSON.stringify(r1.details)}`);
+		const sid = r1.details.job_id;
 
 		const r2 = await h.call("write_stdin", {
-			session_id: sid,
+			job_id: sid,
 			chars: "hello from stdin\n",
 			yield_time_ms: 400,
 		});
 		assert.ok(r2.details.output.includes("hello from stdin"), `got ${JSON.stringify(r2.details)}`);
-		assert.ok(typeof r2.details.session_id === "number");
+		assert.ok(typeof r2.details.job_id === "string");
 
 		const r3 = await h.call("write_stdin", {
-			session_id: sid,
+			job_id: sid,
 			chars: "\x04",
 			yield_time_ms: 5000,
 		});
 		assert.equal(r3.details.exit_code, 0);
-		assert.equal(r3.details.session_id, undefined);
+		assert.equal(r3.details.job_id, undefined);
 		await h.emit("session_shutdown");
 	});
 
@@ -430,14 +430,14 @@ describe("omp-actual-terminal e2e", () => {
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 60",
 			yield_time_ms: 300, });
-		assert.ok(typeof r1.details.session_id === "number");
-		const sid = r1.details.session_id;
+		assert.ok(typeof r1.details.job_id === "string");
+		const sid = r1.details.job_id;
 
 		const t0 = Date.now();
-		const r2 = await h.call("kill_session", { session_id: sid });
+		const r2 = await h.call("kill_session", { job_id: sid });
 		const dt = Date.now() - t0;
 		assert.ok(dt < 2500, `kill_session took too long: ${dt}ms`);
-		assert.equal(r2.details.session_id, sid);
+		assert.equal(r2.details.job_id, sid);
 		assert.ok(r2.details.signal === "SIGTERM" || r2.details.exit_code != null, `details=${JSON.stringify(r2.details)}`);
 		await h.emit("session_shutdown");
 	});
@@ -448,8 +448,8 @@ describe("omp-actual-terminal e2e", () => {
 		try {
 			const started = await h.call("bash", { pty: true, title: "Test command", command: 'sleep 0.8; for i in $(seq 1 4000); do echo "kill-line-${i}-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; done; sleep 60',
 				yield_time_ms: 250, });
-			const sid = started.details.session_id;
-			assert.ok(typeof sid === "number", JSON.stringify(started.details));
+			const sid = started.details.job_id;
+			assert.ok(typeof sid === "string", JSON.stringify(started.details));
 			const logPath = started.details.log_path;
 			assert.ok(typeof logPath === "string");
 			assert.ok(
@@ -463,7 +463,7 @@ describe("omp-actual-terminal e2e", () => {
 				"noisy command did not finish its output burst",
 			);
 
-			const killed = await h.call("kill_session", { session_id: sid });
+			const killed = await h.call("kill_session", { job_id: sid });
 			assert.equal(killed.details.operation, "kill_session");
 			assert.equal(killed.details.status, "killed");
 			assert.equal(killed.details.running, false);
@@ -495,9 +495,9 @@ describe("omp-actual-terminal e2e", () => {
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "trap '' TERM; sleep 60",
 			shell: "bash",
 			yield_time_ms: 300, });
-		const sid = r1.details.session_id;
-		assert.ok(typeof sid === "number");
-		const r2 = await h.call("kill_session", { session_id: sid });
+		const sid = r1.details.job_id;
+		assert.ok(typeof sid === "string");
+		const r2 = await h.call("kill_session", { job_id: sid });
 		if (IS_WINDOWS) {
 			// Don't assert
 			// on exit timing (taskkill on a loaded runner can exceed the 2s
@@ -505,7 +505,7 @@ describe("omp-actual-terminal e2e", () => {
 			assert.equal(r2.details.escalated, false, `details=${JSON.stringify(r2.details)}`);
 			const l = await h.call("list_sessions", {});
 			assert.ok(
-				!l.details.sessions.some((s: any) => s.session_id === sid && s.running),
+				!l.details.sessions.some((s: any) => s.job_id === sid && s.running),
 				`session ${sid} still listed as running: ${JSON.stringify(l.details)}`,
 			);
 		} else {
@@ -525,7 +525,7 @@ describe("omp-actual-terminal e2e", () => {
 			bg = Number(/bg=(\d+)/.exec(r1.details.output)?.[1]);
 			assert.ok(bg > 0, r1.details.output);
 			assert.match(r1.details.note ?? "", /shell has exited/, JSON.stringify(r1.details));
-			const killed = await h.call("kill_session", { session_id: r1.details.session_id });
+			const killed = await h.call("kill_session", { job_id: r1.details.job_id });
 			assert.equal(killed.details.killed, true, JSON.stringify(killed.details));
 			assert.throws(() => process.kill(bg, 0), "the held-open group member survived kill_session");
 			bg = 0;
@@ -547,11 +547,11 @@ describe("omp-actual-terminal e2e", () => {
 		const r2 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 11", yield_time_ms: 300 });
 		const l = await h.call("list_sessions", {});
 		assert.equal(l.details.running_count, 2, `details=${JSON.stringify(l.details)}`);
-		const ids = l.details.sessions.map((s: any) => s.session_id);
-		assert.ok(ids.includes(r1.details.session_id));
-		assert.ok(ids.includes(r2.details.session_id));
-		await h.call("kill_session", { session_id: r1.details.session_id });
-		await h.call("kill_session", { session_id: r2.details.session_id });
+		const ids = l.details.sessions.map((s: any) => s.job_id);
+		assert.ok(ids.includes(r1.details.job_id));
+		assert.ok(ids.includes(r2.details.job_id));
+		await h.call("kill_session", { job_id: r1.details.job_id });
+		await h.call("kill_session", { job_id: r2.details.job_id });
 		await h.emit("session_shutdown");
 	});
 
@@ -559,8 +559,8 @@ describe("omp-actual-terminal e2e", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 10", yield_time_ms: 300 });
-		const sid = r1.details.session_id;
-		assert.ok(typeof sid === "number");
+		const sid = r1.details.job_id;
+		assert.ok(typeof sid === "string");
 
 		await h.emit("session_tree", { oldLeafId: "old", newLeafId: "new" });
 		assert.equal(h.uiEvents.statuses.get("omp-actual-terminal.sessions"), "omp-actual-terminal: 1 session running");
@@ -568,14 +568,14 @@ describe("omp-actual-terminal e2e", () => {
 		const widgetContent = widget?.content;
 		if (!widgetContent) assert.fail(`widget=${JSON.stringify(widget)}`);
 		assert.ok(widgetContent[0].includes("1 session still running"), `widget=${JSON.stringify(widget)}`);
-		assert.ok(widgetContent.some((line) => line.includes(`#${sid}`)), `widget=${JSON.stringify(widget)}`);
+		assert.ok(widgetContent.some((line) => line.includes(`${sid} `)), `widget=${JSON.stringify(widget)}`);
 		assert.ok(widgetContent.some((line) => line.includes("set_on_exit") || line.includes("write_stdin")), `widget=${JSON.stringify(widget)}`);
 		assert.ok(
 			h.uiEvents.notifications.some((n) => n.type === "warning" && n.message.includes("still running after /tree")),
 			`notifications=${JSON.stringify(h.uiEvents.notifications)}`,
 		);
 
-		await h.call("kill_session", { session_id: sid });
+		await h.call("kill_session", { job_id: sid });
 		assert.equal(h.uiEvents.statuses.get("omp-actual-terminal.sessions"), undefined);
 		assert.equal(h.uiEvents.widgets.get("omp-actual-terminal.sessions")?.content, undefined);
 		await h.emit("session_shutdown");
@@ -585,8 +585,8 @@ describe("omp-actual-terminal e2e", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 0.4", yield_time_ms: 250 });
-		const sid = r1.details.session_id;
-		assert.ok(typeof sid === "number", `details=${JSON.stringify(r1.details)}`);
+		const sid = r1.details.job_id;
+		assert.ok(typeof sid === "string", `details=${JSON.stringify(r1.details)}`);
 		assert.equal(h.uiEvents.statuses.get("omp-actual-terminal.sessions"), "omp-actual-terminal: 1 session running");
 
 		// Poll, don't fixed-sleep: `sleep 0.4` can take >700ms wall time on a
@@ -597,7 +597,7 @@ describe("omp-actual-terminal e2e", () => {
 		);
 
 		const r2 = await h.call("list_sessions", {});
-		assert.equal(r2.details.sessions.find((s: { session_id: number }) => s.session_id === sid)?.exit_code, 0);
+		assert.equal(r2.details.sessions.find((s: { job_id: string }) => s.job_id === sid)?.exit_code, 0);
 		await h.emit("session_shutdown");
 	});
 
@@ -605,8 +605,8 @@ describe("omp-actual-terminal e2e", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 0.4", yield_time_ms: 250 });
-		const sid = r1.details.session_id;
-		assert.ok(typeof sid === "number", `details=${JSON.stringify(r1.details)}`);
+		const sid = r1.details.job_id;
+		assert.ok(typeof sid === "string", `details=${JSON.stringify(r1.details)}`);
 
 		await h.emit("session_tree", { oldLeafId: "old", newLeafId: "new" });
 		assert.ok(h.uiEvents.widgets.get("omp-actual-terminal.sessions")?.content?.[0].includes("1 session still running"));
@@ -618,7 +618,7 @@ describe("omp-actual-terminal e2e", () => {
 		);
 
 		const r2 = await h.call("list_sessions", {});
-		assert.equal(r2.details.sessions.find((s: { session_id: number }) => s.session_id === sid)?.exit_code, 0);
+		assert.equal(r2.details.sessions.find((s: { job_id: string }) => s.job_id === sid)?.exit_code, 0);
 		await h.emit("session_shutdown");
 	});
 
@@ -627,10 +627,10 @@ describe("omp-actual-terminal e2e", () => {
 		await h.emit("session_start");
 		const short = await h.call("bash", { pty: true, title: "Test command", command: "sleep 1.2", yield_time_ms: 250 });
 		const long = await h.call("bash", { pty: true, title: "Test command", command: "sleep 10", yield_time_ms: 250 });
-		const shortSid = short.details.session_id;
-		const longSid = long.details.session_id;
-		assert.ok(typeof shortSid === "number", `short=${JSON.stringify(short.details)}`);
-		assert.ok(typeof longSid === "number", `long=${JSON.stringify(long.details)}`);
+		const shortSid = short.details.job_id;
+		const longSid = long.details.job_id;
+		assert.ok(typeof shortSid === "string", `short=${JSON.stringify(short.details)}`);
+		assert.ok(typeof longSid === "string", `long=${JSON.stringify(long.details)}`);
 
 		await h.emit("session_tree", { oldLeafId: "old", newLeafId: "new" });
 		assert.equal(h.uiEvents.statuses.get("omp-actual-terminal.sessions"), "omp-actual-terminal: 2 sessions running");
@@ -640,12 +640,12 @@ describe("omp-actual-terminal e2e", () => {
 			`status did not decrement: ${h.uiEvents.statuses.get("omp-actual-terminal.sessions")}`,
 		);
 		const widget = h.uiEvents.widgets.get("omp-actual-terminal.sessions")?.content?.join("\n") ?? "";
-		assert.ok(widget.includes(`#${longSid}`), `widget=${widget}`);
-		assert.ok(!widget.includes(`#${shortSid}`), `widget=${widget}`);
+		assert.ok(widget.includes(`${longSid} `), `widget=${widget}`);
+		assert.ok(!widget.includes(`${shortSid} `), `widget=${widget}`);
 
 		const listed = await h.call("list_sessions", {});
-		assert.equal(listed.details.sessions.find((s: { session_id: number }) => s.session_id === shortSid)?.exit_code, 0);
-		await h.call("kill_session", { session_id: longSid });
+		assert.equal(listed.details.sessions.find((s: { job_id: string }) => s.job_id === shortSid)?.exit_code, 0);
+		await h.call("kill_session", { job_id: longSid });
 		await h.emit("session_shutdown");
 	});
 
@@ -654,8 +654,8 @@ describe("omp-actual-terminal e2e", () => {
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 10", yield_time_ms: 200 });
 		const r2 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 11", yield_time_ms: 200 });
-		assert.ok(r1.details.session_id);
-		assert.ok(r2.details.session_id);
+		assert.ok(r1.details.job_id);
+		assert.ok(r2.details.job_id);
 		await h.emit("session_shutdown");
 		const l = await h.call("list_sessions", {});
 		assert.equal(l.details.running_count, 0);
@@ -668,7 +668,7 @@ describe("omp-actual-terminal e2e", () => {
 		await new Promise((r) => setTimeout(r, 40)); // inside the grace window
 		await h.emit("session_shutdown");
 		const r = await inflight;
-		assert.equal(r.details.session_id, undefined, JSON.stringify(r.details));
+		assert.equal(r.details.job_id, undefined, JSON.stringify(r.details));
 		const reportedExit = r.details.exit_code != null || Boolean(r.details.signal);
 		const unconfirmed = r.details.running === true && /exit not confirmed/.test(r.details.failure_message ?? "");
 		assert.ok(reportedExit || unconfirmed, JSON.stringify(r.details));
@@ -686,7 +686,7 @@ describe("omp-actual-terminal e2e", () => {
 		await new Promise((r) => setTimeout(r, 40)); // inside the grace window
 		await h.emit("session_shutdown");
 		const r = await inflight;
-		assert.equal(r.details.session_id, undefined, JSON.stringify(r.details));
+		assert.equal(r.details.job_id, undefined, JSON.stringify(r.details));
 		assert.equal(r.details.signal, "SIGKILL", JSON.stringify(r.details));
 		assert.equal(r.details.shell, "/bin/bash", JSON.stringify(r.details));
 		await h.emit("session_start");
@@ -704,15 +704,15 @@ describe("omp-actual-terminal e2e", () => {
 			const h = makeHarness();
 			await h.emit("session_start");
 			const r1 = await h.call("bash", { pty: true, title: "Test command", command: "trap '' TERM HUP; echo trap-ready; sleep 30", yield_time_ms: 250 });
-			const sid = r1.details.session_id;
-			assert.ok(typeof sid === "number", JSON.stringify(r1.details));
+			const sid = r1.details.job_id;
+			assert.ok(typeof sid === "string", JSON.stringify(r1.details));
 			const logPath: string = r1.details.log_path;
 			assert.ok(await waitFor(() => readFileSync(logPath, "utf8").includes("trap-ready")), "SIGTERM trap was not installed");
-			const listed: Array<{ session_id: number; pid: number }> = (await h.call("list_sessions", {})).details.sessions;
-			const pid = listed.find((s) => s.session_id === sid)?.pid;
+			const listed: Array<{ job_id: string; pid: number }> = (await h.call("list_sessions", {})).details.sessions;
+			const pid = listed.find((s) => s.job_id === sid)?.pid;
 			assert.ok(typeof pid === "number");
 
-			const inflight = h.call("write_stdin", { session_id: sid, chars: "x", yield_time_ms: 500 });
+			const inflight = h.call("write_stdin", { job_id: sid, chars: "x", yield_time_ms: 500 });
 			await h.emit("session_shutdown"); // releases the terminal now; returns after the SIGKILL escalation
 			const r = await inflight;
 			assert.equal(r.details.running, true, JSON.stringify(r.details));
@@ -740,7 +740,7 @@ describe("omp-actual-terminal e2e", () => {
 			const h = makeHarness();
 			await h.emit("session_start");
 			const r = await h.call("bash", { pty: true, title: "Test command", command: "sleep 10", yield_time_ms: 200 });
-			assert.ok(r.details.session_id);
+			assert.ok(r.details.job_id);
 			await h.emit("session_shutdown", {
 				type: "session_shutdown",
 				reason,
@@ -761,20 +761,20 @@ describe("omp-actual-terminal e2e", () => {
 		const r = await promise;
 		const dt = Date.now() - t0;
 		assert.ok(dt < 2000, `should have returned near abort time; dt=${dt}`);
-		assert.ok(typeof r.details.session_id === "number", `${JSON.stringify(r.details)}`);
-		const sid = r.details.session_id;
+		assert.ok(typeof r.details.job_id === "string", `${JSON.stringify(r.details)}`);
+		const sid = r.details.job_id;
 		const list = await h.call("list_sessions", {});
-		assert.ok(list.details.sessions.some((s: any) => s.session_id === sid));
-		await h.call("kill_session", { session_id: sid });
+		assert.ok(list.details.sessions.some((s: any) => s.job_id === sid));
+		await h.call("kill_session", { job_id: sid });
 		await h.emit("session_shutdown");
 	});
 
-	it("unknown session_id throws", async () => {
+	it("unknown job_id throws", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		await assert.rejects(
-			() => h.call("write_stdin", { session_id: 9999, chars: "hi\n" }),
-			/unknown session_id/,
+			() => h.call("write_stdin", { job_id: "bg_9999", chars: "hi\n" }),
+			/unknown job_id/,
 		);
 		await h.emit("session_shutdown");
 	});
@@ -782,7 +782,7 @@ describe("omp-actual-terminal e2e", () => {
 	it("kill_session on unknown id returns found: false", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
-		const r = await h.call("kill_session", { session_id: 9999 });
+		const r = await h.call("kill_session", { job_id: "bg_9999" });
 		assert.equal(r.details.found, false);
 		await h.emit("session_shutdown");
 	});
@@ -821,10 +821,10 @@ describe("omp-actual-terminal e2e", () => {
 		const l = await h.call("list_sessions", {});
 		assert.equal(l.details.running_count, 1);
 		const entry = l.details.sessions[0];
-		assert.equal(entry.session_id, r1.details.session_id);
+		assert.equal(entry.job_id, r1.details.job_id);
 		assert.equal(entry.log_path, r1.details.log_path);
 		assert.ok(existsSync(entry.log_path));
-		await h.call("kill_session", { session_id: r1.details.session_id });
+		await h.call("kill_session", { job_id: r1.details.job_id });
 		await h.emit("session_shutdown");
 	});
 
@@ -832,8 +832,8 @@ describe("omp-actual-terminal e2e", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 10", yield_time_ms: 200 });
-		const sid = r1.details.session_id;
-		const r2 = await h.call("kill_session", { session_id: sid });
+		const sid = r1.details.job_id;
+		const r2 = await h.call("kill_session", { job_id: sid });
 		assert.equal(r2.details.log_path, r1.details.log_path);
 		await h.emit("session_shutdown");
 	});
@@ -848,7 +848,7 @@ describe("omp-actual-terminal e2e", () => {
 				await assert.rejects(() => h.call("bash", args), /not found on PATH/);
 			} else {
 				const result = await h.call("bash", args);
-				assert.equal(result.details.session_id, undefined, JSON.stringify(result.details));
+				assert.equal(result.details.job_id, undefined, JSON.stringify(result.details));
 				assert.match(String(result.details.failure_message), /ENOENT/);
 				assert.notEqual(result.details.exit_code, 0);
 				assert.doesNotMatch(result.details.output, /fallback-must-not-run/);
@@ -878,7 +878,7 @@ describe("omp-actual-terminal e2e", () => {
 			] as const) {
 				const marker = join(root, `ran-${workdir}`);
 				const r = await h.call("bash", { pty: true, title: "Test command", command: `echo > "${marker}"`, cwd: workdir });
-				assert.equal(r.details.session_id, undefined, JSON.stringify(r.details));
+				assert.equal(r.details.job_id, undefined, JSON.stringify(r.details));
 				assert.equal(r.details.failure_message, message, JSON.stringify(r.details));
 				assert.equal(existsSync(marker), false, "nothing may run for an unusable workdir");
 			}
@@ -893,10 +893,10 @@ describe("omp-actual-terminal e2e", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 60", yield_time_ms: 300 });
-		const sid = r1.details.session_id;
-		assert.ok(typeof sid === "number");
-		const r2 = await h.call("kill_session", { session_id: sid, signal: "term" });
-		assert.equal(r2.details.session_id, sid);
+		const sid = r1.details.job_id;
+		assert.ok(typeof sid === "string");
+		const r2 = await h.call("kill_session", { job_id: sid, signal: "term" });
+		assert.equal(r2.details.job_id, sid);
 		assert.ok(r2.details.signal === "SIGTERM" || r2.details.exit_code != null, JSON.stringify(r2.details));
 		await h.emit("session_shutdown");
 	});
@@ -904,7 +904,7 @@ describe("omp-actual-terminal e2e", () => {
 	it("kill_session rejects unknown signal names instead of silently no-opping", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
-		await assert.rejects(() => h.call("kill_session", { session_id: 1, signal: "BOGUS" }), /unknown signal/);
+		await assert.rejects(() => h.call("kill_session", { job_id: "bg_1", signal: "BOGUS" }), /unknown signal/);
 		await h.emit("session_shutdown");
 	});
 
@@ -912,13 +912,13 @@ describe("omp-actual-terminal e2e", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 0.3", yield_time_ms: 250 });
-		const sid = r1.details.session_id;
-		assert.ok(typeof sid === "number", JSON.stringify(r1.details));
+		const sid = r1.details.job_id;
+		assert.ok(typeof sid === "string", JSON.stringify(r1.details));
 		assert.ok(await waitFor(() => h.uiEvents.statuses.get("omp-actual-terminal.sessions") === undefined), "exit was not observed");
 
 		const l1 = await h.call("list_sessions", {});
 		assert.equal(l1.details.running_count, 0, JSON.stringify(l1.details));
-		const entry = l1.details.sessions.find((s: any) => s.session_id === sid);
+		const entry = l1.details.sessions.find((s: any) => s.job_id === sid);
 		assert.ok(entry, `returned session should remain listed: ${JSON.stringify(l1.details)}`);
 		assert.equal(entry.running, false);
 		assert.equal(entry.exit_code, 0);
@@ -928,7 +928,7 @@ describe("omp-actual-terminal e2e", () => {
 
 		const l2 = await h.call("list_sessions", {});
 		assert.equal(l2.details.sessions.length, 1, JSON.stringify(l2.details));
-		assert.equal(l2.details.sessions[0].session_id, sid);
+		assert.equal(l2.details.sessions[0].job_id, sid);
 		assert.equal(l2.details.sessions[0].running, false);
 		await h.emit("session_shutdown");
 	});
@@ -937,10 +937,10 @@ describe("omp-actual-terminal e2e", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "trap '' TERM; sleep 30", shell: "bash", yield_time_ms: 300 });
-		const sid = r1.details.session_id;
-		assert.ok(typeof sid === "number", JSON.stringify(r1.details));
+		const sid = r1.details.job_id;
+		assert.ok(typeof sid === "string", JSON.stringify(r1.details));
 		const l = await h.call("list_sessions", {});
-		const pid = l.details.sessions.find((s: any) => s.session_id === sid)?.pid;
+		const pid = l.details.sessions.find((s: any) => s.job_id === sid)?.pid;
 		assert.ok(typeof pid === "number");
 
 		await h.emit("session_shutdown");
@@ -961,11 +961,11 @@ describe("omp-actual-terminal e2e", () => {
 		assert.ok(last.details.output.length >= first.details.output.length, "output should grow");
 		assert.ok(last.details.output.includes("beat-1"), last.details.output);
 		assert.ok(
-			updates.every((u) => typeof u.details.session_id === "number"),
-			"partial updates should carry session_id",
+			updates.every((u) => typeof u.details.job_id === "string"),
+			"partial updates should carry job_id",
 		);
-		if (r.details.session_id !== undefined) {
-			await h.call("kill_session", { session_id: r.details.session_id });
+		if (r.details.job_id !== undefined) {
+			await h.call("kill_session", { job_id: r.details.job_id });
 		}
 		await h.emit("session_shutdown");
 	});
@@ -982,7 +982,7 @@ describe("omp-actual-terminal e2e", () => {
 			assert.notDeepEqual(updates[i], updates[i - 1], `update ${i} repeats update ${i - 1}`);
 		}
 		assert.ok(updates.length <= 3, `silence streams no repeats; got ${updates.length} updates`);
-		await h.call("kill_session", { session_id: r.details.session_id });
+		await h.call("kill_session", { job_id: r.details.job_id });
 		await h.emit("session_shutdown");
 	});
 
@@ -990,10 +990,10 @@ describe("omp-actual-terminal e2e", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 30", yield_time_ms: 250 });
-		const sid = r1.details.session_id;
-		assert.ok(typeof sid === "number");
+		const sid = r1.details.job_id;
+		assert.ok(typeof sid === "string");
 
-		h.uiEvents.selectResponses.push((options) => options.find((o) => o.startsWith(`#${sid} `)));
+		h.uiEvents.selectResponses.push((options) => options.find((o) => o.startsWith(`${sid} `)));
 		await h.invokeCommand("omp-actual-terminal-sessions");
 
 		const l = await h.call("list_sessions", {});
@@ -1102,7 +1102,7 @@ describe("bash pty fields", { skip: IS_WINDOWS }, () => {
 			const started = Date.now();
 			const r = await h.call("bash", { command: "echo before-deadline; sleep 30", pty: true, title: "Deadline", timeout: 1, yield_time_ms: 6000 });
 			assert.ok(Date.now() - started < 5000, "the deadline, not the yield, must end the call");
-			assert.equal(r.details.session_id, undefined, JSON.stringify(r.details));
+			assert.equal(r.details.job_id, undefined, JSON.stringify(r.details));
 			assert.equal(r.details.status, "exited");
 			assert.match(r.details.output, /before-deadline/);
 			assert.match(String(r.details.failure_message), /timeout: ended after 1s/);
@@ -1118,7 +1118,7 @@ describe("bash pty fields", { skip: IS_WINDOWS }, () => {
 			const started = Date.now();
 			const r = await h.call("bash", { command: "sleep 30", pty: true, title: "Detached", async: true });
 			assert.ok(Date.now() - started < 1000, `async waited ${Date.now() - started}ms`);
-			assert.equal(typeof r.details.session_id, "number", JSON.stringify(r.details));
+			assert.equal(typeof r.details.job_id, "string", JSON.stringify(r.details));
 			assert.equal(r.details.status, "running");
 		} finally {
 			await h.emit("session_shutdown");
@@ -1130,11 +1130,11 @@ describe("bash pty fields", { skip: IS_WINDOWS }, () => {
 		await h.emit("session_start");
 		try {
 			const r = await h.call("bash", { command: "sleep 30", pty: true, title: "Notify", notify: "ready-line", yield_time_ms: 250 });
-			assert.equal(typeof r.details.session_id, "number", JSON.stringify(r.details));
+			assert.equal(typeof r.details.job_id, "string", JSON.stringify(r.details));
 			assert.match(String(r.details.monitor), /^started /, JSON.stringify(r.details));
 			assert.match(r.content[0].text, /monitor: started /);
 			const listed = await h.call("list_sessions", {});
-			const entry = listed.details.sessions.find((s: { session_id: number }) => s.session_id === r.details.session_id);
+			const entry = listed.details.sessions.find((s: { job_id: string }) => s.job_id === r.details.job_id);
 			assert.ok(entry?.monitor, JSON.stringify(listed.details));
 		} finally {
 			await h.emit("session_shutdown");

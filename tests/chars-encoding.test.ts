@@ -61,14 +61,14 @@ function makeHarness() {
 }
 
 type ExecCaller = {
-	call(toolName: string, params: Record<string, unknown>): Promise<{ details: { session_id?: unknown; log_path?: unknown } }>;
+	call(toolName: string, params: Record<string, unknown>): Promise<{ details: { job_id?: unknown; log_path?: unknown } }>;
 };
 
-async function startRawCat(h: ExecCaller, out: string): Promise<number> {
+async function startRawCat(h: ExecCaller, out: string): Promise<string> {
 	const r1 = await h.call("bash", { pty: true, title: "Test command", command: `stty raw -echo; printf raw-ready; exec cat > '${out}'`,
 		yield_time_ms: 300, });
-	const { session_id: sid, log_path: logPath } = r1.details;
-	assert.ok(typeof sid === "number", `expected session_id; got ${JSON.stringify(r1.details)}`);
+	const { job_id: sid, log_path: logPath } = r1.details;
+	assert.ok(typeof sid === "string", `expected job_id; got ${JSON.stringify(r1.details)}`);
 	assert.ok(typeof logPath === "string");
 	const deadline = Date.now() + 8000;
 	while (!readFileSync(logPath, "utf8").includes("raw-ready")) {
@@ -90,10 +90,10 @@ async function spawnCapture() {
 		dir,
 		harness: h,
 		async send(chars: string) {
-			await h.call("write_stdin", { session_id: sid, chars, yield_time_ms: 250 });
+			await h.call("write_stdin", { job_id: sid, chars, yield_time_ms: 250 });
 		},
 		async finish(): Promise<Buffer> {
-			await h.call("kill_session", { session_id: sid });
+			await h.call("kill_session", { job_id: sid });
 			await new Promise((r) => setTimeout(r, 50));
 			const buf = readFileSync(out);
 			await h.emit("session_shutdown");
@@ -181,8 +181,8 @@ describe("write_stdin chars encoding", () => {
 		await h.emit("session_start");
 		const sid = await startRawCat(h, out);
 		const b64 = Buffer.from([0x1b, 0x03, 0x41, 0x0a, 0xc3, 0xa9]).toString("base64");
-		await h.call("write_stdin", { session_id: sid, chars_b64: b64, yield_time_ms: 250 });
-		await h.call("kill_session", { session_id: sid });
+		await h.call("write_stdin", { job_id: sid, chars_b64: b64, yield_time_ms: 250 });
+		await h.call("kill_session", { job_id: sid });
 		await new Promise((r) => setTimeout(r, 50));
 		const buf = readFileSync(out);
 		assert.deepEqual([...buf], [0x1b, 0x03, 0x41, 0x0a, 0xc3, 0xa9]);
@@ -194,12 +194,12 @@ describe("write_stdin chars encoding", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "cat > /dev/null", yield_time_ms: 200 });
-		const sid = r1.details.session_id as number;
+		const sid = r1.details.job_id as string;
 		await assert.rejects(
-			() => h.call("write_stdin", { session_id: sid, chars: "hi", chars_b64: "aGk=" }),
+			() => h.call("write_stdin", { job_id: sid, chars: "hi", chars_b64: "aGk=" }),
 			/either `chars` or `chars_b64`/,
 		);
-		await h.call("kill_session", { session_id: sid });
+		await h.call("kill_session", { job_id: sid });
 		await h.emit("session_shutdown");
 	});
 
@@ -207,12 +207,12 @@ describe("write_stdin chars encoding", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "cat > /dev/null", yield_time_ms: 200 });
-		const sid = r1.details.session_id as number;
+		const sid = r1.details.job_id as string;
 		await assert.rejects(
-			() => h.call("write_stdin", { session_id: sid, chars_b64: "not@valid!" }),
+			() => h.call("write_stdin", { job_id: sid, chars_b64: "not@valid!" }),
 			/not valid base64/,
 		);
-		await h.call("kill_session", { session_id: sid });
+		await h.call("kill_session", { job_id: sid });
 		await h.emit("session_shutdown");
 	});
 });

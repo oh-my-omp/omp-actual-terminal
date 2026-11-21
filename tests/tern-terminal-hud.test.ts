@@ -50,7 +50,7 @@ function onlyNode<K extends NativeNode["k"]>(node: NativeNode, kind: K): Extract
 
 function entry(id: number, state: TerminalState): TerminalEntry {
 	return {
-		id,
+		id: `bg_${id}`,
 		title: `Terminal ${id}`,
 		command: `command-${id}`,
 		script: `command-${id}\n  --flag ${id}`,
@@ -244,11 +244,11 @@ describe("terminal HUD view description", () => {
 		const view = describeTerminalsSheet(entries, entries[0], now);
 		const split = onlyRole(view, "omp.jobs.split");
 		assert.deepEqual(childNodes(split).map((child) => child.p?.role), ["omp.jobs.master", "omp.jobs.detail"]);
-		assert.equal(selectedOf(view), "s3", "the first session is selected by default");
+		assert.equal(selectedOf(view), "sbg_3", "the first session is selected by default");
 		assert.deepEqual(listItems(view), [
-			{ key: "s3", tone: "pending", value: [{ t: "4s", s: "mono" }] },
-			{ key: "s11", tone: "success", value: [{ t: "2s", s: "mono" }] },
-			{ key: "s19", tone: "error", value: [{ t: "1m05s", s: "mono" }] },
+			{ key: "sbg_3", tone: "pending", value: [{ t: "4s", s: "mono" }] },
+			{ key: "sbg_11", tone: "success", value: [{ t: "2s", s: "mono" }] },
+			{ key: "sbg_19", tone: "error", value: [{ t: "1m05s", s: "mono" }] },
 		]);
 		assert.deepEqual(onlyNode(view, "list").p?.actions, { click: "select", dblclick: "activate" });
 		const footer = childNodes(view).at(-1);
@@ -282,7 +282,7 @@ describe("terminal HUD view description", () => {
 				assert.equal(age.p?.age, 2500);
 				assert.equal(age.p?.stopped, 2500, "an exited age is frozen at its exit");
 			}
-			assert.deepEqual(onlyRoleOf(status, "omp.jobs.id", "text").p?.spans, [{ t: "exec · #7", s: "mono" }]);
+			assert.deepEqual(onlyRoleOf(status, "omp.jobs.id", "text").p?.spans, [{ t: "exec · bg_7", s: "mono" }]);
 			assert.deepEqual(buttonActs(status), [
 				...(state.kind === "running" ? [{ click: KILL_ACTION }] : []),
 				{ click: OPEN_TERMINAL_ACTION },
@@ -357,7 +357,7 @@ describe("terminal HUD page description", () => {
 				size: "full",
 				head: [
 					{ t: "Terminals · ", s: "muted" },
-					{ t: "#7 " },
+					{ t: "bg_7 " },
 					{ t: value.title },
 					{ t: "  " },
 					{ t: state.kind === "running" ? "running" : "exit 0", s: state.kind === "running" ? "accent" : "success" },
@@ -371,7 +371,7 @@ describe("terminal HUD page description", () => {
 			const value = { ...styledEntry(7, 100, 100), state };
 			const view = describeTerminalPage(value);
 			const screen = onlyNode(view, "ansi");
-			assert.equal(screen.key, "page-s7");
+			assert.equal(screen.key, "page-sbg_7");
 			assert.equal(screen.p?.follow, true);
 			assert.equal(screen.p?.cols, 100);
 			assert.deepEqual(view.p?.min, { h: 1 });
@@ -457,8 +457,9 @@ function makeHarness(t: TestContext, initiallyNative = false, ModeClass: new () 
 	const handlers = new Map<string, Handler[]>();
 	const customCalls: CustomCall[] = [];
 	const customListeners = new Set<() => void>();
-	const killCalls: number[] = [];
+	const killCalls: string[] = [];
 	const sessions: ExecSession[] = [];
+	let nextSpawnId = 1;
 	const nativeListeners = new Set<(on: boolean) => void>();
 	const mode = new ModeClass();
 	let nativeOn = initiallyNative;
@@ -567,7 +568,7 @@ function makeHarness(t: TestContext, initiallyNative = false, ModeClass: new () 
 			for (const listener of nativeListeners) listener(on);
 		},
 		spawn(command = [process.execPath, "-e", "process.stdin.resume()"], cols = 80, insert = true) {
-			const session = ExecSession.spawn(store.allocateId(), { title: "Test terminal", shell: "test", command, cwd: process.cwd(), env: process.env, cols, rows: 24, });
+			const session = ExecSession.spawn(`bg_${nextSpawnId++}`, { title: "Test terminal", shell: "test", command, cwd: process.cwd(), env: process.env, cols, rows: 24, });
 			sessions.push(session);
 			assert.equal(session.failureMessage, null, "child spawn succeeds");
 			if (insert) store.insert(session);
@@ -922,7 +923,7 @@ describe("terminal HUD lifecycle with real sessions", () => {
 				assert.ok(typeof span === "object" && span !== null && "t" in span && typeof span.t === "string");
 				return span.t;
 			}).join("");
-			assert.ok(headText.includes(`#${selected.id}`));
+			assert.ok(headText.includes(`${selected.id} `));
 			assert.ok(headText.includes(selected.title));
 			assert.ok(headText.includes("running"));
 			const view = page.describe();

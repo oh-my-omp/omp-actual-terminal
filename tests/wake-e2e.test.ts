@@ -127,8 +127,8 @@ describe("bash pty on_exit", () => {
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 0.3", yield_time_ms: 250 });
 		const r2 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 0.3", yield_time_ms: 250, on_exit: "none" });
-		assert.ok(typeof r1.details.session_id === "number");
-		assert.ok(typeof r2.details.session_id === "number");
+		assert.ok(typeof r1.details.job_id === "string");
+		assert.ok(typeof r2.details.job_id === "string");
 		assert.equal(r2.details.completion_notification, undefined);
 		await new Promise((r) => setTimeout(r, 1200)); // both exit + debounce window
 		assert.equal(h.sentMessages.length, 0);
@@ -141,7 +141,7 @@ describe("bash pty on_exit", () => {
 		await h.emit("session_start");
 		const r = await h.call("bash", { pty: true, title: "Test command", command: "echo quick", yield_time_ms: 5000, on_exit: "wake" });
 		assert.equal(r.details.exit_code, 0);
-		assert.equal(r.details.session_id, undefined);
+		assert.equal(r.details.job_id, undefined);
 		await new Promise((res) => setTimeout(res, 600));
 		assert.equal(h.sentMessages.length, 0);
 		await h.emit("session_shutdown");
@@ -153,8 +153,8 @@ describe("bash pty on_exit", () => {
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 0.4 && echo bye | tr a-z A-Z",
 			yield_time_ms: 250,
 			on_exit: "wake", });
-		const sid = r1.details.session_id;
-		assert.ok(typeof sid === "number", JSON.stringify(r1.details));
+		const sid = r1.details.job_id;
+		assert.ok(typeof sid === "string", JSON.stringify(r1.details));
 		assert.equal(r1.details.completion_notification, "armed");
 		assert.equal(r1.details.on_exit, "wake");
 		assert.ok(r1.content[0].text.includes("completion_notification: armed"), r1.content[0].text);
@@ -162,12 +162,12 @@ describe("bash pty on_exit", () => {
 		assert.ok(await waitFor(() => h.sentMessages.length === 1), "expected one wake");
 		const { message, options } = h.sentMessages[0];
 		assert.equal(message.customType, "omp-actual-terminal-notice");
-		assert.deepEqual((message as NoticeMessage).details.notices.map((notice) => ({ session_id: notice.session_id, title: notice.title, kind: notice.kind })), [
-			{ session_id: sid, title: "Test command", kind: "exit_wake" },
+		assert.deepEqual((message as NoticeMessage).details.notices.map((notice) => ({ job_id: notice.job_id, title: notice.title, kind: notice.kind })), [
+			{ job_id: sid, title: "Test command", kind: "exit_wake" },
 		]);
 		assert.equal(message.display, true);
 		assert.deepEqual(options, { deliverAs: "aside" });
-		assert.match(message.content, new RegExp(`session_id=${sid}`));
+		assert.match(message.content, new RegExp(`job_id=${sid}`));
 		assert.match(message.content, /exit_code=0/);
 		assert.ok(!message.content.includes("BYE"), "wake must not contain raw stdout");
 		assert.ok(message.content.includes(`read ${r1.details.terminal_url}`));
@@ -184,8 +184,8 @@ describe("bash pty on_exit", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 0.5", yield_time_ms: 250, on_exit: "wake" });
-		const sid = r1.details.session_id;
-		const r2 = await h.call("write_stdin", { session_id: sid, chars: "x", yield_time_ms: 5000 });
+		const sid = r1.details.job_id;
+		const r2 = await h.call("write_stdin", { job_id: sid, chars: "x", yield_time_ms: 5000 });
 		assert.equal(r2.details.exit_code, 0);
 		assert.equal(r2.details.completion_delivery, "direct");
 		assert.equal(r2.details.on_exit_wake, "consumed");
@@ -200,16 +200,16 @@ describe("bash pty on_exit", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 1.2", yield_time_ms: 250, on_exit: "wake" });
-		const sid = r1.details.session_id;
-		const r2 = await h.call("write_stdin", { session_id: sid, chars: "x", yield_time_ms: 250 });
-		assert.equal(r2.details.session_id, sid);
+		const sid = r1.details.job_id;
+		const r2 = await h.call("write_stdin", { job_id: sid, chars: "x", yield_time_ms: 250 });
+		assert.equal(r2.details.job_id, sid);
 		assert.equal(r2.details.completion_notification, "armed");
 		await h.finalizeTool(r2.toolCallId, false);
 		assert.ok(await waitFor(() => h.sentMessages.length === 1), "wake after later exit");
 		await new Promise((res) => setTimeout(res, 600));
 		assert.equal(h.sentMessages.length, 1, "exactly one");
 		const r3 = await h.call("list_sessions", {});
-		assert.equal(r3.details.sessions.find((s: { session_id: number }) => s.session_id === sid)?.exit_code, 0);
+		assert.equal(r3.details.sessions.find((s: { job_id: string }) => s.job_id === sid)?.exit_code, 0);
 		await h.emit("session_shutdown");
 	});
 
@@ -217,8 +217,8 @@ describe("bash pty on_exit", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 1.2", yield_time_ms: 250, on_exit: "wake" });
-		const sid = r1.details.session_id;
-		await assert.rejects(h.call("write_stdin", { session_id: sid }), EmptyPollRemovedError);
+		const sid = r1.details.job_id;
+		await assert.rejects(h.call("write_stdin", { job_id: sid }), EmptyPollRemovedError);
 		assert.ok(await waitFor(() => h.sentMessages.length === 1), "wake after later exit");
 		await new Promise((res) => setTimeout(res, 600));
 		assert.equal(h.sentMessages.length, 1);
@@ -230,8 +230,8 @@ describe("bash pty on_exit", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 0.4", yield_time_ms: 250, on_exit: "wake" });
-		const sid = r1.details.session_id;
-		const r2 = await h.call("write_stdin", { session_id: sid, chars: "x", yield_time_ms: 10_000 });
+		const sid = r1.details.job_id;
+		const r2 = await h.call("write_stdin", { job_id: sid, chars: "x", yield_time_ms: 10_000 });
 		assert.equal(r2.details.exit_code, 0);
 		await h.finalizeTool(r2.toolCallId, true);
 		assert.ok(await waitFor(() => h.sentMessages.length === 1), "wake despite constructed result");
@@ -244,9 +244,9 @@ describe("bash pty on_exit", () => {
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 0.8; exit 1",
 			yield_time_ms: 250,
 			on_exit: "wake", });
-		const sid = r1.details.session_id;
-		assert.ok(typeof sid === "number");
-		const r2 = await h.call("set_on_exit", { session_id: sid, on_exit: "none" });
+		const sid = r1.details.job_id;
+		assert.ok(typeof sid === "string");
+		const r2 = await h.call("set_on_exit", { job_id: sid, on_exit: "none" });
 		assert.equal(r2.details.status, "disarmed");
 		assert.equal(r2.details.wake_armed, false);
 		assert.ok(
@@ -266,19 +266,19 @@ describe("bash pty on_exit", () => {
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 0.5; exit 0",
 			yield_time_ms: 250,
 			on_exit: "none", });
-		const sid = r1.details.session_id;
-		assert.ok(typeof sid === "number");
-		const r2 = await h.call("set_on_exit", { session_id: sid, on_exit: "wake" });
+		const sid = r1.details.job_id;
+		assert.ok(typeof sid === "string");
+		const r2 = await h.call("set_on_exit", { job_id: sid, on_exit: "wake" });
 		assert.equal(r2.details.status, "armed");
 		assert.equal(r2.details.wake_armed, true);
 		assert.ok(await waitFor(() => h.sentMessages.length === 1), "armed session should wake");
 		await h.call("list_sessions", {});
 	});
 
-	it("set_on_exit unknown session_id returns found: false", async () => {
+	it("set_on_exit unknown job_id returns found: false", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
-		const r = await h.call("set_on_exit", { session_id: 99999, on_exit: "none" });
+		const r = await h.call("set_on_exit", { job_id: "bg_99999", on_exit: "none" });
 		assert.equal(r.details.found, false);
 	});
 
@@ -286,21 +286,21 @@ describe("bash pty on_exit", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 30", yield_time_ms: 250, on_exit: "wake" });
-		const sid = r1.details.session_id;
+		const sid = r1.details.job_id;
 		const l = await h.call("list_sessions", {});
-		const entry = l.details.sessions.find((s: any) => s.session_id === sid);
+		const entry = l.details.sessions.find((s: any) => s.job_id === sid);
 		assert.ok(entry);
 		assert.equal(entry.wake_armed, true);
 		assert.match(l.content[0].text, /wake/);
-		await h.call("kill_session", { session_id: sid });
+		await h.call("kill_session", { job_id: sid });
 	});
 
 	it("explicit model kill suppresses the wake", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 30", yield_time_ms: 250, on_exit: "wake" });
-		const sid = r1.details.session_id;
-		await h.call("kill_session", { session_id: sid });
+		const sid = r1.details.job_id;
+		await h.call("kill_session", { job_id: sid });
 		assert.ok(!(await waitFor(() => h.sentMessages.length > 0, 600)));
 		assert.equal(h.sentMessages.length, 0);
 	});
@@ -309,8 +309,8 @@ describe("bash pty on_exit", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 30", yield_time_ms: 250, on_exit: "wake" });
-		const sid = r1.details.session_id;
-		h.uiEvents.selectResponses.push((options) => options.find((o) => o.startsWith(`#${sid} `)));
+		const sid = r1.details.job_id;
+		h.uiEvents.selectResponses.push((options) => options.find((o) => o.startsWith(`${sid} `)));
 		await h.invokeCommand("omp-actual-terminal-sessions");
 		assert.ok(!(await waitFor(() => h.sentMessages.length > 0, 600)));
 		assert.equal(h.sentMessages.length, 0);
@@ -320,13 +320,13 @@ describe("bash pty on_exit", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 0.3", yield_time_ms: 250, on_exit: "wake" });
-		const sid = r1.details.session_id;
-		assert.ok(typeof sid === "number");
+		const sid = r1.details.job_id;
+		assert.ok(typeof sid === "string");
 		let entry: any;
 		assert.ok(
 			await waitFor(async () => {
 				const l = await h.call("list_sessions", {});
-				entry = l.details.sessions.find((s: any) => s.session_id === sid);
+				entry = l.details.sessions.find((s: any) => s.job_id === sid);
 				return entry && entry.running === false;
 			}),
 			"expected list_sessions to observe exit",
@@ -339,7 +339,7 @@ describe("bash pty on_exit", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 0.3", yield_time_ms: 250, on_exit: "wake" });
-		assert.ok(typeof r1.details.session_id === "number");
+		assert.ok(typeof r1.details.job_id === "string");
 		await h.emit("session_shutdown");
 		assert.ok(!(await waitFor(() => h.sentMessages.length > 0, 800)));
 		assert.equal(h.sentMessages.length, 0);
@@ -354,14 +354,14 @@ describe("bash pty on_exit", () => {
 		const b = await h.call("bash", { pty: true, title: "Test command", command: waitCmd, yield_time_ms: 250, on_exit: "wake" });
 		const release = await h.call("bash", { pty: true, title: "Test command", command: `touch "${marker}"`, yield_time_ms: 5000 });
 		assert.equal(release.details.exit_code, 0);
-		assert.ok(typeof a.details.session_id === "number");
-		assert.ok(typeof b.details.session_id === "number");
+		assert.ok(typeof a.details.job_id === "string");
+		assert.ok(typeof b.details.job_id === "string");
 		assert.ok(await waitFor(() => h.sentMessages.length >= 1), "batch wake expected");
 		await new Promise((res) => setTimeout(res, 800));
 		assert.equal(h.sentMessages.length, 1, "one prompt for both completions");
 		const content = h.sentMessages[0].message.content;
-		assert.match(content, new RegExp(`session_id=${a.details.session_id}`));
-		assert.match(content, new RegExp(`session_id=${b.details.session_id}`));
+		assert.match(content, new RegExp(`job_id=${a.details.job_id}`));
+		assert.match(content, new RegExp(`job_id=${b.details.job_id}`));
 		await h.call("list_sessions", {});
 		await h.emit("session_shutdown");
 	});
@@ -379,7 +379,7 @@ describe("bash pty on_exit", () => {
 			return originalPush(...args);
 		};
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 0.3", yield_time_ms: 250, on_exit: "wake" });
-		assert.ok(typeof r1.details.session_id === "number");
+		assert.ok(typeof r1.details.job_id === "string");
 		assert.ok(await waitFor(() => failures === 0), "first send attempt never happened");
 		assert.equal(h.sentMessages.length, 0);
 		await h.emit("agent_start", { type: "agent_start" });

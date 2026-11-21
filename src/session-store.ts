@@ -7,8 +7,7 @@ export interface SessionStoreOptions {
 }
 
 export class SessionStore {
-	private readonly sessions = new Map<number, ExecSession>();
-	private nextId = 1;
+	private readonly sessions = new Map<string, ExecSession>();
 	readonly maxSessions: number;
 	readonly lruProtectedCount: number;
 	private readonly onEvict: SessionStoreOptions["onEvict"];
@@ -20,11 +19,7 @@ export class SessionStore {
 		this.onEvict = opts.onEvict;
 	}
 
-	allocateId(): number {
-		return this.nextId++;
-	}
-
-	get(id: number): ExecSession | undefined {
+	get(id: string): ExecSession | undefined {
 		return this.sessions.get(id);
 	}
 
@@ -60,7 +55,7 @@ export class SessionStore {
 		return { pruned, count: this.sessions.size };
 	}
 
-	remove(id: number): ExecSession | undefined {
+	remove(id: string): ExecSession | undefined {
 		const entry = this.sessions.get(id);
 		if (!entry) return undefined;
 		this.sessions.delete(id);
@@ -89,7 +84,7 @@ export class SessionStore {
 		if (entries.length === 0) return null;
 
 		const byRecencyAsc = [...entries].sort((a, b) => a.lastUsed - b.lastUsed);
-		const protectedIds = new Set<number>(
+		const protectedIds = new Set<string>(
 			this.lruProtectedCount > 0 ? byRecencyAsc.slice(-this.lruProtectedCount).map((e) => e.id) : [],
 		);
 

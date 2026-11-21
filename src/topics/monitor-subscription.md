@@ -1,10 +1,10 @@
 # Monitoring future output
 
-- Each batch matching `condition` wakes you; with `judge`, each new screen the judge finds meets your intent wakes you; with neither, the session's end wakes you once. A monitor observes without consuming output, and only output after the call counts.
+- Each batch matching `condition` wakes you; with `judge`, each new screen the judge finds meets your intent wakes you; with neither, the terminal's end wakes you once. A monitor observes without consuming output, and only output after the call counts.
 - Matches coalesce for about 250 ms. `kill_session` or a session reset also ends a monitor silently; delivered follow-ups cannot be recalled.
 - Starting establishes or replaces the subscription; cancelling removes it silently. Reaching `max_returns` ends the monitor, not the process. End does not count toward the limit.
 - A no-return reminder quotes the current screen. Read the terminal, then answer a prompt with `write_stdin`, call `monitor` again, or cancel. A return restarts the reminder clock; a reminder neither counts toward `max_returns` nor ends the monitor.
-- A session settling on an unseen input prompt raises an input-wait alert with or without a monitor.
+- A terminal settling on an unseen input prompt raises an input-wait alert with or without a monitor.
 - A wake needs an unfinished task: once your final response shows the task finished, a monitor ends at its next return without waking you. To wait on it, say so in your response instead of reporting the task done; see `xd://bash/lifecycle`.
 
 ## Judge monitors

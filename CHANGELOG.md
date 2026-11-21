@@ -12,20 +12,26 @@ All notable changes to this project. **Newest entries go on top.**
 - Renamed the plugin to `omp-actual-terminal`: install it from `https://github.com/oh-my-omp/omp-actual-terminal#release` and uninstall `omp-unified-exec`
 - Renamed the omomp section `omp-unified-exec` to `omp-actual-terminal`
 - Renamed `PI_UNIFIED_EXEC_BASH` to `OMP_ACTUAL_TERMINAL_BASH`
-- Renamed the notice message type to `omp-actual-terminal-notice`, the `/unified-exec-sessions` command to `/omp-actual-terminal-sessions`, and session logs to `omp-actual-terminal-<pid>-<sid>-<hex>.log`
+- Renamed the notice message type to `omp-actual-terminal-notice`, the `/unified-exec-sessions` command to `/omp-actual-terminal-sessions`, and session logs to `omp-actual-terminal-<pid>-<job_id>-<hex>.log`
 
 ### Added
 
+- Registered each terminal as an omp background job under its title in the root agent's job manager, counting toward `async.maxJobs` so a call at the limit fails
+- Surfaced terminals on omp's jobs page, where cancelling a job ends the terminal and marks its job cancelled
 - Let terminals without `shell` read a bound session's attached images through their `attachment://` paths
 - Rejected `ready` on `pty: true` calls without `name` before anything runs, since it only applies to a named service
 - Added `timeout` to terminal calls: it ends the terminal and reports an abnormal `timeout=<n>s` return
-- Added `async: true` to terminal calls, returning the terminal's `session_id` at once
+- Added `async: true` to terminal calls, returning the terminal's `job_id` at once
 - Added `notify` to terminal calls, starting a monitor whose start the result's `monitor` line reports
 - Offered terminals in subagents and `omp -p`, whose `bash` schema now carries `pty` and the terminal fields
 - Rejected terminal-only fields on `bash` calls without `pty: true` before anything runs
 
 ### Changed
 
+- Ended the main agent's terminals, its subagents' included, when `/new` or a session switch cancels its jobs
+- Reported the terminal's job as completed on exit 0, failed on failure or timeout, and cancelled when killed
+- Identified terminals by a string `job_id` (`bg_N`) in results, notices and session listings, and took `job_id` in `write_stdin`, `kill_session`, `set_on_exit` and monitor calls
+- Ordered the HUD's terminal list by start time and dropped the `#` prefix from terminal ids
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@dcbf622.
 - Mounted the bound session's skills in terminals without `shell`, so `skill://` paths follow the session rather than the process
 - Switched host integration to the `@oh-my-pi/pi-*` packages and dropped the `@earendil-works` path aliases

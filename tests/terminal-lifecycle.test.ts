@@ -8,14 +8,14 @@ import { STUB_SESSION, stubShellHost, stubTerminalHost } from "./stub-shell.ts";
 const MINUTE = 60_000;
 
 interface ListedSession {
-	session_id: number;
+	job_id: string;
 	title: string;
 	running: boolean;
 	lifecycle?: { returned: string; read: boolean; phase: string };
 }
 
 interface ToolDetails {
-	session_id?: number;
+	job_id?: string;
 	terminal_url?: string;
 	output?: string;
 	killed?: boolean;
@@ -30,7 +30,7 @@ interface ToolDef {
 	execute: (toolCallId: string, params: object, signal: AbortSignal | undefined, onUpdate: undefined, ctx: object) => Promise<ToolResult>;
 }
 
-interface Notice { session_id: number; title: string; kind: string; reason: string }
+interface Notice { job_id: string; title: string; kind: string; reason: string }
 
 interface Sent {
 	message: { customType: string; content: string; details: { notices: Notice[] } };
@@ -46,7 +46,7 @@ interface Harness {
 	call(name: string, params: object): Promise<ToolResult>;
 	advance(ms: number): void;
 	notices(kind: string): Notice[];
-	listed(id: number): Promise<ListedSession | undefined>;
+	listed(id: string): Promise<ListedSession | undefined>;
 }
 
 const live = new Set<Harness>();
@@ -97,7 +97,7 @@ function makeHarness(pluginSettings?: PluginSettingsReader): Harness {
 		},
 		async listed(id) {
 			const list = await harness.call("list_sessions", {});
-			return list.details.sessions?.find((s) => s.session_id === id);
+			return list.details.sessions?.find((s) => s.job_id === id);
 		},
 	};
 	live.add(harness);
@@ -131,14 +131,14 @@ function alive(pid: number): boolean {
 	try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-async function startBackground(h: Harness, cmd: string, title: string, yieldMs = 250): Promise<{ sid: number; url: string; output: string }> {
+async function startBackground(h: Harness, cmd: string, title: string, yieldMs = 250): Promise<{ sid: string; url: string; output: string }> {
 	const started = await h.call("bash", { pty: true, command: cmd, title, shell: "/bin/sh", yield_time_ms: yieldMs });
-	const { session_id: sid, terminal_url: url, output } = started.details;
+	const { job_id: sid, terminal_url: url, output } = started.details;
 	assert.ok(sid !== undefined && url !== undefined, JSON.stringify(started.details));
 	return { sid, url, output: output ?? "" };
 }
 
-async function startHeld(h: Harness, title: string): Promise<{ sid: number; url: string; bg: number }> {
+async function startHeld(h: Harness, title: string): Promise<{ sid: string; url: string; bg: number }> {
 	const { sid, url } = await startBackground(h, "(trap '' HUP; exec sleep 300) & echo bg=$!; sleep 0.5", title);
 	assert.ok(await waitFor(async () => (await h.listed(sid))?.lifecycle !== undefined), "the shell returned");
 	const lines = await readTerm(url);
@@ -177,9 +177,9 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		h.advance(1);
 		assert.ok(await waitFor(() => h.notices("reclaim_due").length === 1));
 		const [due] = h.notices("reclaim_due");
-		assert.equal(due!.session_id, sid);
+		assert.equal(due!.job_id, sid);
 		assert.equal(due!.title, "held job");
-		assert.match(h.sent.at(-1)!.message.content, new RegExp(`session_id=${sid} title="held job"`));
+		assert.match(h.sent.at(-1)!.message.content, new RegExp(`job_id=${sid} title="held job"`));
 		assert.deepEqual(h.sent.at(-1)!.options, { deliverAs: "aside" });
 		assert.equal((await h.listed(sid))?.lifecycle?.phase, "grace");
 
@@ -228,11 +228,11 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		assert.deepEqual(h.sent, [], "no unread, reclaim-due or reclaimed notice");
 		assert.ok((await readTerminal(url.slice(7))).retainedLines.includes("finished-line"), "the terminal stays readable");
 		await assert.rejects(
-			h.call("write_stdin", { session_id: sid, chars: "x" }),
-			(error: Error) => error.message.includes(`unknown session_id: ${sid}; it returned normally and was reclaimed: read ${url} or log_path `),
+			h.call("write_stdin", { job_id: sid, chars: "x" }),
+			(error: Error) => error.message.includes(`unknown job_id: ${sid}; it returned normally and was reclaimed: read ${url} or log_path `),
 		);
-		const killed = await h.call("kill_session", { session_id: sid });
-		assert.ok(killed.content[0]!.text.startsWith(`No such session: ${sid}; it returned normally and was reclaimed: read ${url}`), killed.content[0]!.text);
+		const killed = await h.call("kill_session", { job_id: sid });
+		assert.ok(killed.content[0]!.text.startsWith(`No such terminal: ${sid}; it returned normally and was reclaimed: read ${url}`), killed.content[0]!.text);
 	});
 
 	it("a normal return lingers from the sweep that finds its last process gone", async () => {
@@ -283,7 +283,7 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		const { sid, url } = await startBackground(h, "sleep 0.5; exit 3", "failing build");
 		assert.ok(await waitFor(() => h.notices("abnormal_return").length === 1), "no sweep needed");
 		const [notice] = h.notices("abnormal_return");
-		assert.equal(notice!.session_id, sid);
+		assert.equal(notice!.job_id, sid);
 		assert.equal(notice!.title, "failing build");
 		assert.match(notice!.reason, /exit_code=3/);
 		await readTerm(url);
@@ -296,7 +296,7 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const { sid } = await startBackground(h, "sleep 300", "killed");
-		const killed = await h.call("kill_session", { session_id: sid });
+		const killed = await h.call("kill_session", { job_id: sid });
 		assert.equal(killed.details.killed, true);
 		await settle();
 		assert.equal(h.notices("abnormal_return").length, 0);
@@ -313,7 +313,7 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const { sid } = await startBackground(h, "sleep 300", "interrupted");
-		await h.call("write_stdin", { session_id: sid, chars: "\u0003", yield_time_ms: 250 });
+		await h.call("write_stdin", { job_id: sid, chars: "\u0003", yield_time_ms: 250 });
 		assert.ok(await waitFor(async () => (await h.listed(sid))?.running === false), "Ctrl-C ended the command");
 		await settle();
 		assert.equal(h.notices("abnormal_return").length, 0);
@@ -324,9 +324,9 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const { sid } = await startBackground(h, "trap '' INT; read line; exit 3", "survives interrupt");
-		await h.call("write_stdin", { session_id: sid, chars: "\u0003", yield_time_ms: 250 });
+		await h.call("write_stdin", { job_id: sid, chars: "\u0003", yield_time_ms: 250 });
 		assert.equal((await h.listed(sid))?.running, true, "the program ignored the interrupt");
-		await h.call("write_stdin", { session_id: sid, chars: "go\r", yield_time_ms: 250 });
+		await h.call("write_stdin", { job_id: sid, chars: "go\r", yield_time_ms: 250 });
 		assert.ok(await waitFor(() => h.notices("abnormal_return").length === 1));
 		assert.match(h.notices("abnormal_return")[0]!.reason, /exit_code=3/);
 	});
@@ -397,12 +397,12 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const { sid } = await startBackground(h, "sleep 0.5; echo needle-line; sleep 30", "watched");
-		const monitor = await h.call("monitor", { session_id: sid, condition: "needle" });
+		const monitor = await h.call("monitor", { job_id: sid, condition: "needle" });
 		assert.equal(monitor.details.status, "started");
 		assert.ok(await waitFor(() => h.notices("monitor_match").length === 1));
 		const message = h.sent.find((s) => s.message.details.notices.some((n) => n.kind === "monitor_match"))!;
 		assert.equal(message.message.customType, "omp-actual-terminal-notice");
-		assert.match(message.message.content, new RegExp(`session_id=${sid} title="watched"`));
+		assert.match(message.message.content, new RegExp(`job_id=${sid} title="watched"`));
 		assert.match(message.message.content, /needle-line/);
 	});
 
@@ -410,8 +410,8 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const { sid } = await startBackground(h, "read line; echo got=$line", "answered");
-		const answered = await h.call("write_stdin", { session_id: sid, chars: "yes\r", yield_time_ms: 2000 });
-		assert.equal(answered.details.session_id, undefined, "the result reports the exit");
+		const answered = await h.call("write_stdin", { job_id: sid, chars: "yes\r", yield_time_ms: 2000 });
+		assert.equal(answered.details.job_id, undefined, "the result reports the exit");
 		assert.deepEqual((await h.listed(sid))?.lifecycle, { returned: "normally", read: true, phase: "linger" });
 	});
 
