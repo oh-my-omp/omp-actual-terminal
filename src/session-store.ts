@@ -65,18 +65,22 @@ export class SessionStore {
 	}
 
 	terminateAll(): ExecSession[] {
-		const drained = Array.from(this.sessions.values());
+		const all = Array.from(this.sessions.values());
+		const live: ExecSession[] = [];
 		this.sessions.clear();
-		for (const s of drained) {
-			try {
-				s.terminate();
-			} catch {
+		for (const s of all) {
+			if (!s.hasExited) {
+				live.push(s);
+				try {
+					s.terminate();
+				} catch {
+				}
 			}
 			void s.releaseForShutdown();
 			this.onEvict?.(s, "shutdown");
 		}
-		if (drained.length > 0) this.notifyMembership();
-		return drained;
+		if (all.length > 0) this.notifyMembership();
+		return live;
 	}
 
 	private pruneLru(): ExecSession | null {

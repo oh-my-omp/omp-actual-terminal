@@ -44,6 +44,7 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Fixed
 
+- Counted only live terminals in the shutdown notice, and stopped announcing a termination when every remaining terminal had already exited
 - Clamped `yield_time_ms: 0` on `bash` with `pty: true` to the 250 ms lower bound instead of falling back to the 10 s default
 - Started terminals from the session's shell while the Spotlight experiment is on; they had started from a fresh shell without the session's exports, functions and aliases
 - Described `notify`'s regex syntax by `name`: a `pty: true` call with `name` is omp's own service and takes its Rust syntax, while a terminal takes JavaScript regex source
