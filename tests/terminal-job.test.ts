@@ -86,11 +86,14 @@ describe("terminals as omp jobs", () => {
 		assert.equal(await statusOf(h.jobs, bad, "failed"), "failed");
 	});
 
-	it("shows cancelled after kill_session", async () => {
+	it("shows cancelled after kill_session, with a normal return rather than a failure", async () => {
 		const h = await makeHarness();
 		const id = await start(h, "sleep 30");
 		await h.call("kill_session", { job_id: id });
 		assert.equal(await statusOf(h.jobs, id, "cancelled"), "cancelled");
+		await h.jobs.getJob(id)?.promise;
+		assert.equal(h.jobs.getJob(id)?.errorText, undefined);
+		assert.equal(h.jobs.getJob(id)?.resultText, "returned normally");
 	});
 
 	it("ends the terminal when omp cancels its job", async () => {
@@ -106,6 +109,8 @@ describe("terminals as omp jobs", () => {
 		}
 		assert.equal(entry?.running, false, "the terminal ended and stays listed");
 		assert.equal(h.jobs.getJob(id)?.status, "cancelled");
+		await h.jobs.getJob(id)?.promise;
+		assert.equal(h.jobs.getJob(id)?.errorText, undefined, "a cancelled terminal is not reported as failing");
 	});
 
 	it("keeps the job running while a terminal survives the plugin's end, and cancels it once it returns", async () => {

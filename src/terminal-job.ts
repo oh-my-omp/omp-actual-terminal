@@ -46,7 +46,9 @@ export class TerminalJob {
 		const id = host.manager.register("bash", spec.label, async ({ signal }) => {
 			const onAbort = (): void => {
 				// The plugin's own cancel already ends the terminal its own way.
-				if (job?.state.kind === "running") spec.cancelled();
+				if (job?.state.kind !== "running") return;
+				job.cancel();
+				spec.cancelled();
 			};
 			if (signal.aborted) onAbort();
 			else signal.addEventListener("abort", onAbort, { once: true });
@@ -80,8 +82,8 @@ export class TerminalJob {
 	}
 
 	/**
-	 * The terminal returned: one the plugin ended shows cancelled; otherwise exit 0 completes the job and
-	 * anything else fails it. A job omp already cancelled keeps that status.
+	 * The terminal returned: one that was ended on request shows cancelled and returned normally, as the
+	 * plugin's own lifecycle counts it; otherwise exit 0 completes the job and anything else fails it.
 	 */
 	returned(exit: ShellExit, failureMessage: string | null): void {
 		if (this.state.kind === "settled") return;
@@ -89,7 +91,7 @@ export class TerminalJob {
 		const settle = this.state.settle;
 		this.state = { kind: "settled" };
 		if (endedByPlugin) this.manager.cancel(this.id);
-		const outcome = classifyReturn(exit, failureMessage, NATURAL_ENDING);
+		const outcome = classifyReturn(exit, failureMessage, endedByPlugin ? { ...NATURAL_ENDING, killed: true } : NATURAL_ENDING);
 		switch (outcome.kind) {
 			case "normal": settle({ kind: "completed" }); return;
 			case "abnormal": settle({ kind: "failed", reason: outcome.reason }); return;
