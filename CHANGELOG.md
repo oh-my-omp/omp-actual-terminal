@@ -28,6 +28,7 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Changed
 
+- Updated the shared copy of `tern-plugin.ts` to oh-my-omp/shared@a88403a.
 - Sent SIGKILL to an LRU-evicted running terminal that had not exited 2s after its SIGTERM, and marked its job cancelled only once it ended, keeping the job running when it outlived the SIGKILL
 - Ended the main agent's terminals, its subagents' included, when `/new` or a session switch cancels its jobs
 - Reported the terminal's job as completed on exit 0, failed on failure or timeout, and cancelled with a normal return, not a failure, once a terminal ended by `kill_session`, a person or a job cancel actually returned, keeping it running when the kill failed
