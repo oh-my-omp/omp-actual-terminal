@@ -4,7 +4,7 @@ import {
 	DEFAULT_MAX_LINES,
 	truncateTail,
 	type TruncationResult,
-} from "@oh-my-pi/pi-coding-agent";
+} from "@oh-my-pi/pi-tui/tools/streaming-output";
 import { formatBytes } from "@oh-my-pi/pi-utils";
 
 import type { CollectResult } from "./collect.ts";

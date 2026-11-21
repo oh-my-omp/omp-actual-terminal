@@ -10,7 +10,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
-import { DEFAULT_MAX_LINES, type ExtensionAPI, type ToolDefinition } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@oh-my-pi/pi-coding-agent";
+import { DEFAULT_MAX_LINES } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import { Type } from "@oh-my-pi/omptype/typebox";
 
 import {
@@ -467,11 +468,11 @@ describe("host presentation activation", () => {
 		// --packages=external leaves the bundle's package imports verbatim.
 		// Stage a node_modules that links every imported package to the
 		// repository's real copy. @oh-my-pi/pi-tui is staged as a package
-		// whose root re-exports the real one but which has no ./tools
-		// subpath, so the bundle's static root imports load and only the
-		// wrapper's own import("@oh-my-pi/pi-tui/tools") fails. Linked host
-		// packages resolve their own dependencies from their real
-		// locations, so the staged dir only needs the packages the bundle
+		// whose root and ./tools/streaming-output re-export the real ones
+		// but which has no ./tools subpath, so the bundle's static imports
+		// load and only the wrapper's own import("@oh-my-pi/pi-tui/tools")
+		// fails. Linked host packages resolve their own dependencies from
+		// their real locations, so the staged dir only needs the packages the bundle
 		// itself imports. Bun's fallback/auto-install would otherwise
 		// satisfy the missing subpath from its global cache; the child runs
 		// with --no-install to keep it genuinely unresolved.
@@ -492,10 +493,11 @@ describe("host presentation activation", () => {
 					writeFileSync(join(stub, "package.json"), JSON.stringify({
 						name: base,
 						type: "module",
-						exports: { ".": "./index.mjs" },
+						exports: { ".": "./index.mjs", "./tools/streaming-output": "./streaming-output.mjs" },
 					}));
-					const real = pathToFileURL(join(root, "node_modules", base, "src", "index.ts")).href;
-					writeFileSync(join(stub, "index.mjs"), `export * from ${JSON.stringify(real)};\n`);
+					const real = (path: string): string => JSON.stringify(pathToFileURL(join(root, "node_modules", base, "src", path)).href);
+					writeFileSync(join(stub, "index.mjs"), `export * from ${real("index.ts")};\n`);
+					writeFileSync(join(stub, "streaming-output.mjs"), `export * from ${real("tools/streaming-output.ts")};\n`);
 					continue;
 				}
 				const source = join(root, "node_modules", base);

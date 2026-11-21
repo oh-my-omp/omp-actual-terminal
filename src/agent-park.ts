@@ -47,15 +47,15 @@ function parseRegistry(Class: AgentHostModules["AgentRegistry"]): AgentRegistryH
 }
 
 export async function loadAgentHost(): Promise<AgentHost> {
-	const [root, lifecycleModule] = await Promise.all([
-		import("@oh-my-pi/pi-coding-agent"),
+	const [registryModule, lifecycleModule] = await Promise.all([
+		import("@oh-my-pi/pi-coding-agent/registry/agent-registry"),
 		import("@oh-my-pi/pi-coding-agent/registry/agent-lifecycle"),
 	]);
-	return parseAgentHost(root, lifecycleModule);
+	return parseAgentHost(registryModule, lifecycleModule);
 }
 
-export function parseAgentHost(root: AgentHostModules, lifecycleModule: AgentLifecycleModules): AgentHost {
-	const registry = parseRegistry(root.AgentRegistry);
+export function parseAgentHost(registryModule: AgentHostModules, lifecycleModule: AgentLifecycleModules): AgentHost {
+	const registry = parseRegistry(registryModule.AgentRegistry);
 	const lifecycle = (): AgentLifecycleHost => {
 		const Manager = lifecycleModule.AgentLifecycleManager;
 		if (Manager === undefined || typeof Manager.global !== "function") {

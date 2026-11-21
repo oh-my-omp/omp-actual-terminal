@@ -5,6 +5,7 @@ import type { ModelFailure } from "./stop-reasons.ts";
 import type { BoundSession } from "./session-binding.ts";
 
 import type * as AgentRoot from "@oh-my-pi/pi-coding-agent";
+import type * as PiUtils from "@oh-my-pi/pi-utils";
 import type * as Judgment from "@oh-my-pi/pi-coding-agent/judgment";
 import type * as ModelResolver from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import type * as ModelRoles from "@oh-my-pi/pi-coding-agent/config/model-roles";
@@ -27,7 +28,7 @@ const LLM_SYSTEM_PROMPT = [
 ].join("\n");
 
 export interface StopHost {
-	readonly getAgentDir: typeof AgentRoot.getAgentDir;
+	readonly getAgentDir: typeof PiUtils.getAgentDir;
 	readonly resolveJudge: typeof Judgment.resolveJudge;
 	readonly journalJudgmentUsage: typeof Judgment.journalJudgmentUsage;
 	readonly sharedJudgmentCache: typeof Judgment.sharedJudgmentCache;
@@ -45,8 +46,8 @@ function hostFunction<T>(value: T | undefined, name: string, from: string): T {
 }
 
 export async function loadStopHost(): Promise<StopHost> {
-	const [agent, judgment, resolver, roles, ai] = await Promise.all([
-		import("@oh-my-pi/pi-coding-agent"),
+	const [utils, judgment, resolver, roles, ai] = await Promise.all([
+		import("@oh-my-pi/pi-utils"),
 		import("@oh-my-pi/pi-coding-agent/judgment"),
 		import("@oh-my-pi/pi-coding-agent/config/model-resolver"),
 		import("@oh-my-pi/pi-coding-agent/config/model-roles"),
@@ -57,7 +58,7 @@ export async function loadStopHost(): Promise<StopHost> {
 		throw new Error("omp-actual-terminal: @oh-my-pi/pi-ai lacks THINKING_EFFORTS");
 	}
 	return {
-		getAgentDir: hostFunction(agent.getAgentDir, "getAgentDir", "@oh-my-pi/pi-coding-agent"),
+		getAgentDir: hostFunction(utils.getAgentDir, "getAgentDir", "@oh-my-pi/pi-utils"),
 		resolveJudge: hostFunction(judgment.resolveJudge, "resolveJudge", "judgment"),
 		journalJudgmentUsage: hostFunction(judgment.journalJudgmentUsage, "journalJudgmentUsage", "judgment"),
 		sharedJudgmentCache: hostFunction(judgment.sharedJudgmentCache, "sharedJudgmentCache", "judgment"),
