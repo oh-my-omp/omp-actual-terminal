@@ -42,13 +42,14 @@ omp plugin install https://github.com/oh-my-omp/omp-actual-terminal#release --fo
 
 ## 功能
 
-- **会话，而不是调用。** 带 `pty: true` 的 `bash` 在 PTY 中启动进程，在等待窗口内返回已有输出和一个 `session_id`；之后的轮次里，`write_stdin` 把字节原样写给它（文本、`\x03` Ctrl-C、方向键）。状态与内容用 `read terminal_url` 读取，事件与完成用 `monitor` 等待。取消调用永远不会杀掉进程。调用不设 `timeout` 时终端没有截止时间，退出的进程也不会被重启。
+- **会话，而不是调用。** 带 `pty: true` 的 `bash` 在 PTY 中启动进程，在等待窗口内返回已有输出和一个 `job_id`；之后的轮次里，`write_stdin` 把字节原样写给它（文本、`\x03` Ctrl-C、方向键）。状态与内容用 `read terminal_url` 读取，事件与完成用 `monitor` 等待。取消调用永远不会杀掉进程。调用不设 `timeout` 时终端没有截止时间，退出的进程也不会被重启。
+- **终端就是 omp 的 job。** 每个终端在其进程启动之前登记为一个 omp 后台 job，job id（`bg_N`）是它唯一的 id，所有工具、结果、通知、日志文件名和 `term://` 地址都用它。omp 的 jobs 页面列出它，子 agent 的终端列在其主 agent 名下；在那里取消这个 job，结束终端的方式与 HUD 的 Kill 相同。终端返回时 job 结束：退出码 0 记为完成，非零退出、信号、`timeout` 或失败记为失败，`kill_session` 或人工结束记为取消。它从不向模型投递 job 结果（终端由终端通知报告），运行中的终端也不会让一次运行停在等待后台工作上；但主 agent 显式调用 `wait` 时，会像等它的其他 job 一样等这个终端。`/new` 或切换会话会取消主 agent 的 job，它和它的子 agent 的终端随之结束。终端计入 omp 的运行中 job 上限（`async.maxJobs`）；达到上限时调用以 omp 自己的消息失败，什么都不启动。omp 的 agent 注册表解析不到的会话没有 job 管理器，因此打不开终端。
 - **本会话的 shell。** 调用没有指定 `shell` 时，终端运行 omp 自己的 shell（bash 5.3 语法），从本会话之前的 `bash` 调用留下的状态启动：export 的变量、函数、别名以及本会话的 URL 路径（`local://`、`skill://` 等）都在。指定的 `shell` 只保留 export 的环境。`cmd` 会被拒绝，不会被启动。每个结果都写明启动所用的 shell，模型据此按该 shell 的语法写命令。
 - **omp 自己的审批。** 终端调用由 omp 的 bash 审批判定，`bash.patterns`、环境变量白名单和审批模式与其他 `bash` 调用相同。
 - **输出就是终端上看到的内容。** 每个会话都经过无头终端模拟器。运行中的结果返回当前屏幕、自上次调用以来滚出的未见历史与光标位置，而不是叠加每次重绘；退出结果只返回最终活动屏，其余保留行通过 `terminal_url` 读取。模拟器会像真实终端一样回应光标位置、设备属性与默认颜色查询，因此等待回应或选择配色的程序表现与真实终端一致。
 - **输出有上限，完整内容可找回。** 模型看到的每个结果都从尾部截取，最多 50 KiB / 3000 行，并去掉终端控制序列；每个会话的完整原始输出都写入 `log_path`。
 - **终端生命周期。** 后台终端的命令返回后，终端仍保留在列表里，直到被回收。正常返回且已没有任何进程的终端，保留 5 分钟后静默回收，读没读过都一样；其 `term://` 和日志仍可读。异常返回立即提醒；对异常返回的终端、或正常返回但仍有进程的终端，返回或最近一次读取 30 分钟后，从未读过的收到一条读取提醒，读过的收到一条即将回收提醒，并有 5 分钟反悔期，期满仍未再读就结束其剩余进程并回收；除非打开插件设置 `notice.graceReclaim`，回收不另发通知。见[终端生命周期](#terminal-lifecycle)。
-- **统一的通知通道。** 完成唤醒、monitor 的返回与提醒、等待输入提醒和生命周期通知都是终端通知：每条用 `session_id` 和传给其 `bash` 调用的标题指明终端，并附一句简短原因。运行中的 agent 在下一个步骤边界读到通知，与 omp-todo-more 投递提醒的方式相同；空闲的 agent 被唤醒、开始一轮，而不是等到用户下一次发言才看到。
+- **统一的通知通道。** 完成唤醒、monitor 的返回与提醒、等待输入提醒和生命周期通知都是终端通知：每条用 `job_id` 和传给其 `bash` 调用的标题指明终端，并附一句简短原因。运行中的 agent 在下一个步骤边界读到通知，与 omp-todo-more 投递提醒的方式相同；空闲的 agent 被唤醒、开始一轮，而不是等到用户下一次发言才看到。
 - **工作完成后保持安静。** 主 agent 停下时，任何通知发出之前先判定它的最终回复（OMP 的 judge，否则 `@smol`，否则 Todo 列表）；工作已完成时，已返回的终端被回收，并且直到下一次运行开始，只有终端出问题（`abnormal_return`）才触发新的轮次。已完成的子 agent 遵循同一规则。见[完成的工作](#finished-work)。
 - **可选的完成唤醒。** `on_exit: "wake"` 让后台进程在无人观察时退出后唤醒一次 agent；`set_on_exit` 可以取消。
 - **等待匹配输出。** `monitor` 不消费输出地观察已有会话，在匹配批次、judge 模型判定满足所述意图的新屏幕或结束时唤醒模型；默认最多成功返回十次。monitor 20 分钟没有返回时，会提醒 agent 一次去检查会话。
@@ -63,7 +64,7 @@ omp plugin install https://github.com/oh-my-omp/omp-actual-terminal#release --fo
 当 omp 在 Tern 里原生渲染、并且存在会话时：
 
 - **终端分段。** 一个终端图标加存储中的会话数，作为 omp 自己运行中计数药丸的分段，排在 agents 和 jobs 分段之后，同在一个胶囊里；悬停标签还给出仍在运行的数量。药丸、分隔线以及各 chat style 和配色主题都由 Tern 绘制。最后一个会话被移除后分段消失；若 agents 和 jobs 也都没有，药丸整个消失。
-- **Terminals 视图。** 点击终端分段打开一个仿照 omp Background jobs 视图的视图，在每个主题和 chat style 下都由 Tern 为该视图准备的自带样式绘制：居中卡片，左侧列出会话（终端图标、标题、已运行时间，按状态着色），右侧是选中会话的详情：状态行（Running / Exit N、已运行时间、`exec · #id`、运行中才有的 Kill、Open）、完整命令、目录、PID、尺寸、启动时间、可点击的日志路径，以及跟随最新行的彩色输出。页脚显示运行中和存储中的数量以及 Close。↑/↓ 或点击选择会话，`x` / Kill 按 `kill_session` 的方式结束它，Esc / Close 关闭视图。卡片标题的图标是 Tern 为 jobs 视图绘制的图标。
+- **Terminals 视图。** 点击终端分段打开一个仿照 omp Background jobs 视图的视图，在每个主题和 chat style 下都由 Tern 为该视图准备的自带样式绘制：居中卡片，左侧列出会话（终端图标、标题、已运行时间，按状态着色），右侧是选中会话的详情：状态行（Running / Exit N、已运行时间、`exec · bg_N`、运行中才有的 Kill、Open）、完整命令、目录、PID、尺寸、启动时间、可点击的日志路径，以及跟随最新行的彩色输出。页脚显示运行中和存储中的数量以及 Close。↑/↓ 或点击选择会话，`x` / Kill 按 `kill_session` 的方式结束它，Esc / Close 关闭视图。卡片标题的图标是 Tern 为 jobs 视图绘制的图标。
 - **终端页。** Enter / Open（或双击）把会话打开成一个按 omp Console 框架显示、以其标题为题头的全屏页：显示保留的历史和当前屏幕，带颜色、按会话自身宽度显示，跟随新输出，并可向上回滚。键入的按键会发给会话（与 `write_stdin` 的写法相同，模型能看到效果）；Esc / Back 返回视图；Kill 结束会话。
 
 HUD 直接读取会话。终端视图只读取选中会话的屏幕，且只在有新输出解析后才重新读取；终端页只读取它那一个会话的屏幕。它只在 omp 原生渲染时存在，因此 omp 的 ANSI TUI 不会多出一行。工具结果仍是纯文本；显式 `read term://…/screen.png` 请求返回图像。
@@ -104,7 +105,7 @@ Markdown 文件随包放在 `src/topics/`；读取 topic 不依赖外部配置�
 | `cwd` | string | 会话 cwd | 工作目录：宿主路径（相对路径按会话 cwd 解析），或 `local://…` 这类 URL 目录，后者只有本会话的 shell 能进入。默认值在每次调用时读取；会话里的 `cd` 不会改变它。路径不存在或不是目录时，以 `Working directory does not exist: <路径>` / `Working directory is not a directory: <路径>`（与 omp bash 相同的文案）失败，不启动任何进程。 |
 | `shell` | string | 本会话的 shell | 代替本会话 shell 的 shell 可执行文件，见 [Shell 选择](#shell-selection)。`cmd` 会被拒绝；`powershell` / `pwsh` 带 `-Command`；其他 shell 一律使用 `-c`。 |
 | `timeout` | number | 无 | 秒。不传或 `0`：终端没有截止时间。正值让终端在到时结束（SIGTERM，2 秒后 SIGKILL），并算作异常返回（`timeout=Ns`）。omp 的 300 秒默认值只适用于不带 `pty` 的调用。 |
-| `async` | boolean | `false` | `true`：立即返回终端的 `session_id`，不等待输出。 |
+| `async` | boolean | `false` | `true`：立即返回终端的 `job_id`，不等待输出。 |
 | `notify` | string | 不传 | JavaScript 正则源码（不带 `/` 分隔符）：在终端上启动一个以它为 `condition` 的 [`monitor`](#monitor)。结果的 `monitor` 行写明 `started …` 或 monitor 没有启动的原因。 |
 | `cols` | number | `120` | PTY 宽度。限制在 [20, 500]。 |
 | `rows` | number | `80` | PTY 高度。限制在 [5, 300]。 |
@@ -117,11 +118,11 @@ Markdown 文件随包放在 `src/topics/`；读取 topic 不依赖外部配置�
 
 ```
 [still running]                     (or [exited])
-session_id: 1                       (mutually exclusive with exit_code)
-exit_code: 0                        (mutually exclusive with session_id)
+job_id: bg_1                        (mutually exclusive with exit_code)
+exit_code: 0                        (mutually exclusive with job_id)
 signal: SIGTERM                     (optional, if killed)
-log_path: /tmp/omp-actual-terminal-41237-1-5cc5e104.log  (omp pid, session id, random)
-terminal_url: term://1-9f2c1a7e-…
+log_path: /tmp/omp-actual-terminal-41237-bg_1-5cc5e104.log  (omp pid, job id, random)
+terminal_url: term://bg_1-9f2c1a7e-…
 cwd: /home/you/project
 shell: pi-shell (session)          (the session's shell, or the absolute path of a named shell)
 wall_time_seconds: 0.502
@@ -140,7 +141,7 @@ history_lines: 2                   (running, optional: lines scrolled off above 
 ```
 ...tail of output...
 
-[Showing lines 3900-4120 of 4500 (50.0KB limit). Full output: /tmp/omp-actual-terminal-41237-1-5cc5e104.log]
+[Showing lines 3900-4120 of 4500 (50.0KB limit). Full output: /tmp/omp-actual-terminal-41237-bg_1-5cc5e104.log]
 ```
 
 #### 命令审批
@@ -210,7 +211,7 @@ alias omp='omp --hide-thinking'
 #### 在 omp 中读取保留终端
 
 结果与 `list_sessions` 带有进程内唯一的 `terminal_url`，例如
-`term://3-9f2c1a7e-…`。人在终端里看到的内容可以独立于结果消费来读取：
+`term://bg_3-9f2c1a7e-…`。人在终端里看到的内容可以独立于结果消费来读取：
 
 | 读取路径 | 内容 |
 |---|---|
@@ -245,7 +246,7 @@ Live 读取使用宿主当前外观并画出描边光标；Frozen 读取保留�
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `session_id` | number | — | 必填。 |
+| `job_id` | string | — | 必填：带 `pty: true` 的 `bash` 调用返回的 `bg_N`。 |
 | `chars` | string | 不传 | 经 C 风格转义解码后原样写入，不追加任何内容。与 `chars_b64` 互斥；解码后的输入必须非空。 |
 | `chars_b64` | string | 不传 | Base64 编码的输入字节，二进制安全；解码后的输入必须非空。与 `chars` 互斥。 |
 | `yield_time_ms` | number | `250` | 写入后的连接等待窗口，不是进程超时。限制在 [250, 30_000]；毫秒小数部分向下取整。 |
@@ -254,7 +255,7 @@ Live 读取使用宿主当前外观并画出描边光标；Frozen 读取保留�
 
 1. 用 `read terminal_url` 或其 `/screen` 读取状态与内容，不消费普通观察。
 2. 用带条件的 `monitor` 等待后续输出事件；不带条件则等待输出关闭与进程完成。只有发送输入才用 `write_stdin`。
-3. `on_exit` 默认 `"none"`。只有人明确希望自动恢复时才用 `"wake"`；`set_on_exit(session_id, on_exit: "none")` 可在不杀进程的情况下取消。
+3. `on_exit` 默认 `"none"`。只有人明确希望自动恢复时才用 `"wake"`；`set_on_exit(job_id, on_exit: "none")` 可在不杀进程的情况下取消。
 4. 被带输入工具结果直接观察到的退出会消耗掉唤醒；连接窗口到期或取消则保留唤醒。Monitor End 会把已启用的普通唤醒合并进同一条通知。
 
 连接等待窗口到期永远不会杀掉进程。等待期间的缓存预热由宿主负责，与本包无关。原始日志不设大小上限；七天后的压缩见[语义](#语义)中的**日志**。
@@ -293,7 +294,7 @@ write_stdin chars_b64="G3s6wgo="  → exact 5 decoded bytes
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `session_id` | number | — | 必填。 |
+| `job_id` | string | — | 必填。 |
 | `on_exit` | `"none"` \| `"wake"` | — | `"none"` 取消待发的唤醒（会话被淘汰后留下的协调器墓碑记录同样适用）。`"wake"` 在会话仍在存储中运行时启用唤醒。 |
 
 状态标记：`disarmed`、`already_none`、`armed`、`already_armed`、`too_late`；未知 id 返回 `found: false`。取消无法撤回已经排队交给宿主的后续提示。
@@ -304,7 +305,7 @@ write_stdin chars_b64="G3s6wgo="  → exact 5 decoded bytes
 
 - 在 `write_stdin` 观察期间发生的退出由该调用返回，结果定稿时消耗唤醒。结果以错误或取消定稿时，唤醒仍然有效。
 - 到期或被取消的调用保留唤醒；进程之后退出时，恰好发送一条通知（`deliverAs: "aside"`）：运行中的 agent 在下一个步骤边界读到它，不被打断；空闲的 agent 被唤醒，开始一轮。同时发生的多个完成会合并成一条通知。
-- 唤醒是一条 `exit_wake` [终端通知](#terminal-notices)，只包含有限的元数据（会话 id、标题、退出码/信号、命令、cwd、耗时、终端读取地址、日志路径、失败信息）——绝不包含原始输出。
+- 唤醒是一条 `exit_wake` [终端通知](#terminal-notices)，只包含有限的元数据（job id、标题、退出码/信号、命令、cwd、耗时、终端读取地址、日志路径、失败信息）——绝不包含原始输出。
 - `kill_session`、`/omp-actual-terminal-sessions` 命令、对存活进程的 LRU 淘汰以及 `session_shutdown` 都会取消唤醒；kill 失败则恢复唤醒。自然退出、尚未通知就被淘汰的唤醒会话会保留一条有上限的墓碑记录，唤醒仍会送达。
 
 ### `monitor`
@@ -313,7 +314,7 @@ write_stdin chars_b64="G3s6wgo="  → exact 5 decoded bytes
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `session_id` | number | — | 已有的运行中会话。 |
+| `job_id` | string | — | 已有的运行中终端。 |
 | `action` | `"start"` \| `"cancel"` | `"start"` | 建立/替换该会话唯一的订阅，或静默取消。 |
 | `condition` | string | 不传 | JavaScript 正则源码（不带 `/` 分隔符）；它和 `judge` 都不传则只在输出关闭时返回。 |
 | `judge` | string | 不传 | judge 模型用来检查每个新屏幕的意图；与 `condition` 互斥。 |
@@ -378,10 +379,10 @@ whiptail/dialog 前端到了 PTY 上只是普通的绘制（备用屏、隐藏�
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `session_id` | number | — | 必填。 |
+| `job_id` | string | — | 必填。 |
 | `signal` | string | `"SIGTERM"` | 2 秒后升级为 SIGKILL。`"SIGKILL"` 跳过等待。Windows 上任何信号都会强制结束进程树。 |
 
-信号名会被规范化（`term`、`INT`、`sigkill` 都可以）；未知名称会被拒绝。结果使用与其他工具相同的有上限包装，带 `killed`、`escalated`、请求的/实际的信号和 `running`。kill 失败的会话保留在存储中，并报告 `running: true`。确认的 kill 是正常结束：终端仍留在列表里（`running: false`），由其[生命周期](#terminal-lifecycle)回收，进程全部结束后先保留 5 分钟；kill 结果展示了最终屏幕，算作读过。Tern HUD 的 Kill 走同一条路径，同样算作读过。
+信号名会被规范化（`term`、`INT`、`sigkill` 都可以）；未知名称会被拒绝。结果使用与其他工具相同的有上限包装，带 `killed`、`escalated`、请求的/实际的信号和 `running`。kill 失败的会话保留在存储中，并报告 `running: true`。确认的 kill 是正常结束：终端仍留在列表里（`running: false`），由其[生命周期](#terminal-lifecycle)回收，进程全部结束后先保留 5 分钟；kill 结果展示了最终屏幕，算作读过，它的 job 显示为已取消。Tern HUD 的 Kill 和在 omp jobs 页面取消该 job 走同一条路径，同样算作读过。
 
 ### `list_sessions`
 
@@ -391,9 +392,9 @@ whiptail/dialog 前端到了 PTY 上只是普通的绘制（备用屏、隐藏�
 
 ### 终端生命周期
 
-从交出 `session_id` 的那次结果起，到回收为止，终端归终端生命周期管理。命令**返回**指 shell 退出（后台进程可能仍持有终端），或终端关闭。
+从交出 `job_id` 的那次结果起，到回收为止，终端归终端生命周期管理。命令**返回**指 shell 退出（后台进程可能仍持有终端），或终端关闭。
 
-- **正常返回且已没有任何进程**（终端已关闭，进程组也已清空）：终端**保留 5 分钟**后静默回收，读没读过都一样，不发 `unread`、`reclaim_due` 或 `reclaimed` 通知；读取不会延长这 5 分钟。后台任务比 shell 活得久时，从发现它们全部结束的那次检查起算。之后用这个 `session_id` 调用工具（`write_stdin`、`monitor`、`set_on_exit`、`kill_session`）时，回答会说明它已被回收、如何返回，并给出其 `term://` 地址和 `log_path`。
+- **正常返回且已没有任何进程**（终端已关闭，进程组也已清空）：终端**保留 5 分钟**后静默回收，读没读过都一样，不发 `unread`、`reclaim_due` 或 `reclaimed` 通知；读取不会延长这 5 分钟。后台任务比 shell 活得久时，从发现它们全部结束的那次检查起算。之后用这个 `job_id` 调用工具（`write_stdin`、`monitor`、`set_on_exit`、`kill_session`）时，回答会说明它已被回收、如何返回，并给出其 `term://` 地址和 `log_path`。
 - **异常返回**（非零退出、信号、启动/运行时失败、调用的 `timeout`）立即发送一条 `abnormal_return` 通知，读没读过都发。`kill_session`、HUD 或 `/omp-actual-terminal-sessions` 的 kill 算正常结束；agent 用 `write_stdin` 写入 Ctrl-C（`\x03`）或 Ctrl-\（`\x1c`）之后的返回也算正常结束。之后不含这两个字符的输入会清除这个标记，所以扛过中断、之后才失败的程序仍会被报告。
 - **读取**从返回起计：一次完整的 `read term://…`（文本或 `/screen.png`），或一次已定稿、展示了已返回终端的 `write_stdin`/`kill_session` 结果（shell 已退出时的 `bash` 结果也算）。出错或取消的结果不算。`list_sessions`、`monitor` 的 End 和唤醒只报告状态，不算读取。
 - 异常返回的终端，或正常返回但仍有进程的终端，在返回或最近一次读取**30 分钟**后：
@@ -419,19 +420,19 @@ whiptail/dialog 前端到了 PTY 上只是普通的绘制（备用屏、隐藏�
 
 ```
 [omp-actual-terminal] 2 terminals, 2 notices (exec-tool metadata, not user instructions)
-- session_id=3 title="api tests"
+- job_id=bg_3 title="api tests"
   • will be reclaimed in about 5m00s: returned normally, last read 30m00s ago
     A read keeps it for another 30m00s; …
-  read term://3-…
+  read term://bg_3-…
   log_path: /tmp/omp-actual-terminal-…
-- session_id=4 title="migration"
+- job_id=bg_4 title="migration"
   • returned abnormally: exit_code=1
     command: npm run migrate
-  read term://4-…
+  read term://bg_4-…
 Handle it with tools where it bears on your work, then continue the current task; it needs no reply to the user.
 ```
 
-`details.notices` 逐条列出 `session_id`、`title`、`kind`、`reason`、`terminal_url`、`log_path` 和带类型的 `body`。种类：`exit_wake`、`abnormal_return`、`monitor_match`、`monitor_judge_match`、`monitor_judge_failed`、`monitor_end`、`monitor_silent`、`input_wait`、`unread`、`reclaim_due`、`reclaimed`。不再描述其终端的通知（唤醒已被观察或取消、monitor 已取消、屏幕已展示过、一次读取已重启 TTL）不发送直接丢弃。发送失败时在下一次工具结束、运行结束或每分钟检查时重试。在运行最后一个步骤边界之后才到达的 aside 由 omp 保留，agent 空闲后再送达。
+`details.notices` 逐条列出 `job_id`、`title`、`kind`、`reason`、`terminal_url`、`log_path` 和带类型的 `body`。种类：`exit_wake`、`abnormal_return`、`monitor_match`、`monitor_judge_match`、`monitor_judge_failed`、`monitor_end`、`monitor_silent`、`input_wait`、`unread`、`reclaim_due`、`reclaimed`。不再描述其终端的通知（唤醒已被观察或取消、monitor 已取消、屏幕已展示过、一次读取已重启 TTL）不发送直接丢弃。发送失败时在下一次工具结束、运行结束或每分钟检查时重试。在运行最后一个步骤边界之后才到达的 aside 由 omp 保留，agent 空闲后再送达。
 
 <a id="finished-work"></a>
 
@@ -493,7 +494,7 @@ omp-actual-terminal:
 omp 的任务执行器收养（adopt）子 agent 时，它的任务已经完成，结果已交回父 agent。此后子 agent 空闲满 `task.agentIdleTtlMs`（默认七分钟），omp 就停放（park）它：释放它的会话，等有消息送达时再以新会话唤醒（revive）它。插件为此不设自己的计时器，只读取 omp 的 agent 注册表和生命周期。
 
 - **只有终端问题会为已完成的子 agent 启动轮次**，无论它空闲还是已停放：适用[完成的工作](#finished-work)中的规则。`abnormal_return` 通知会请 omp 唤醒已停放的子 agent（`ensureLive`），再连同其他待发通知送达唤醒后的会话。其余通知一律扣下并静默收尾，子 agent 因此保持空闲，按时被 omp 停放。
-- **停放保留终端。** 停放引发的 `session_shutdown` 只结束这次激活，不结束终端：运行中的命令、monitor、`on_exit` 唤醒、等待输入提醒和 30 分钟生命周期都照常继续。无论因何被唤醒（父 agent 发来消息、`abnormal_return`），它都接回原来的终端：`session_id`、`term://` 地址和日志都不变。
+- **停放保留终端。** 停放引发的 `session_shutdown` 只结束这次激活，不结束终端：运行中的命令、monitor、`on_exit` 唤醒、等待输入提醒和 30 分钟生命周期都照常继续。无论因何被唤醒（父 agent 发来消息、`abnormal_return`），它都接回原来的终端：`job_id`、`term://` 地址和日志都不变。
 - **终端随 agent 结束：** omp 释放或结束已停放的子 agent 时（包括主会话结束时），它的终端按关闭处理（SIGTERM，1 秒后 SIGKILL），主会话的关闭会等这一步完成。
 
 ## 命令
@@ -502,7 +503,7 @@ omp 的任务执行器收养（adopt）子 agent 时，它的任务已经完成�
 
 ## 呈现
 
-**在 omp 上，**`bash`、`write_stdin` 和 `kill_session` 通过 omp 导出的 bash 渲染器渲染，ANSI TUI 和 Tern 都一样。不打开终端的 `bash` 调用就是 omp 自己的调用和结果，按 omp 的方式渲染；终端调用显示 `$ command`，可用 omp 的展开快捷键展开的折叠输出，失败时的退出码标签和错误配色，运行中会话显示 `Backgrounded: session N`，最后一行是带日志路径的截断标记。`write_stdin` 和 `kill_session` 以 bash 注释的形式显示所做的动作（`# stdin → session N: "…"`、`# kill session N (SIGTERM)`）。`monitor`、`set_on_exit` 和 `list_sessions` 使用 omp 的默认卡片。如果 omp 的 bash 渲染器缺失或接口变了，插件会直接加载失败，而不是显示原始的结果包装。
+**在 omp 上，**`bash`、`write_stdin` 和 `kill_session` 通过 omp 导出的 bash 渲染器渲染，ANSI TUI 和 Tern 都一样。不打开终端的 `bash` 调用就是 omp 自己的调用和结果，按 omp 的方式渲染；终端调用显示 `$ command`，可用 omp 的展开快捷键展开的折叠输出，失败时的退出码标签和错误配色，运行中终端显示 `Backgrounded: bg_N`，最后一行是带日志路径的截断标记。`write_stdin` 和 `kill_session` 以 bash 注释的形式显示所做的动作（`# stdin → bg_N: "…"`、`# kill bg_N (SIGTERM)`）。`monitor`、`set_on_exit` 和 `list_sessions` 使用 omp 的默认卡片。如果 omp 的 bash 渲染器缺失或接口变了，插件会直接加载失败，而不是显示原始的结果包装。
 
 ## 常量
 
@@ -529,7 +530,7 @@ LIFECYCLE_SWEEP_MS           = 60_000 (lifecycle check interval)
 
 ## 语义
 
-- **提前退出：**150 毫秒内结束的命令不会进入会话存储；结果带 `exit_code`，没有 `session_id`。
+- **提前退出：**150 毫秒内结束的命令不会进入会话存储；结果带 `exit_code`，没有 `job_id`；进程启动前登记的 job 已经记为完成或失败。
 - **已返回的终端**留在存储、HUD 和 `list_sessions` 里，直到其[生命周期](#terminal-lifecycle)回收；工具调用观察到退出时不会移除它。
 - **启动失败**（shell 或 `cwd` 不存在）在 PTY 启动前检查，以 `failure_message` 报告（`spawn <file> ENOENT: …`）。选中的 shell 不存在时，绝不会换用另一个 shell。
 - **必须有 Bun PTY：**宿主缺少 `Bun.spawn` 或 `Bun.Terminal` 时，在扩展 factory 阶段、工具注册之前被拒绝。
@@ -537,10 +538,10 @@ LIFECYCLE_SWEEP_MS           = 60_000 (lifecycle check interval)
 - **shell 退出与终端关闭：**会话一直运行到其终端关闭。在 shell 退出后仍存活并持有 PTY 的后代进程（例如 `nohup` 或忽略 SIGHUP 的任务）会让终端保持打开；这类结果会带一条 `note`，说明如何把它分离出去（`setsid cmd >log 2>&1 </dev/null &`；Windows 上没有能执行这条配方的会话 shell，`note` 只给出 `kill_session`），运行中会话小部件会把该会话标为 `terminal held`。此时 `kill_session`、回收和关闭仍向 shell 的进程组发信号，仍在组内的后代会被结束；已离开该组的（`setsid`）不会。
 - **终端已关闭**不会让宿主崩溃；写入时报告 `failure_message`。
 - **Esc** 中断当前等待，但会话继续运行。
-- **关闭**时向每个会话发送 SIGTERM，1 秒后对仍存活的发送 SIGKILL。omp 停放空闲子 agent 不算关闭；它的终端一直保留到 omp 释放该 agent（见[已完成的子 agent](#finished-subagents-and-omps-idle-park)）。仍处于 150 ms 启动宽限期内的 `bash` 调用不会拿到 `session_id`：它等关闭结束进程后报告这次退出（进程撑过 SIGKILL 等待时报告 `running: true` 与 `exit not confirmed`），因此下一次 `session_start` 之后不会再看到该会话。其余终端已被关闭释放的进行中调用返回空输出，进程状态按实际报告：已退出，或在 SIGKILL 生效前仍在运行。
-- **LRU 淘汰**在达到 64 个会话时进行，淘汰最旧的非保护会话，优先选已退出的；最近使用的 8 个永不淘汰。被这样淘汰的受管终端会收到一条注明上限的 `reclaimed` 通知。
+- **关闭**时向每个会话发送 SIGTERM，1 秒后对仍存活的发送 SIGKILL。omp 停放空闲子 agent 不算关闭；它的终端一直保留到 omp 释放该 agent（见[已完成的子 agent](#finished-subagents-and-omps-idle-park)）。仍处于 150 ms 启动宽限期内的 `bash` 调用不会拿到 `job_id`：它等关闭结束进程后报告这次退出（进程撑过 SIGKILL 等待时报告 `running: true` 与 `exit not confirmed`），因此下一次 `session_start` 之后不会再看到该会话。其余终端已被关闭释放的进行中调用返回空输出，进程状态按实际报告：已退出，或在 SIGKILL 生效前仍在运行。
+- **LRU 淘汰**在达到 64 个会话时进行，淘汰最旧的非保护会话，优先选已退出的；最近使用的 8 个永不淘汰。被这样淘汰的受管终端会收到一条注明上限的 `reclaimed` 通知。仍在运行的终端先收到 SIGTERM，2 秒后仍未退出则收到 SIGKILL，结束后它的 job 显示为已取消。
 - **观察**按会话串行执行；流式更新、`read term://`、monitor 与 Tern HUD 不消费普通观察。流式更新每 250 ms 检查一次，只在已解析屏幕、退出状态或字节计数自上一次更新后有变化时才发送。冻结终端资源的生命周期不受会话存储成员关系限制。
-- **日志**放在临时目录（`/tmp` 或 `%TEMP%`），文件名为 `omp-actual-terminal-<omp pid>-<会话 id>-<随机>.log`。本包从不删除日志内容。最后写入超过七天的日志，在确认写入方已不存在后，会被替换为标准 gzip 文件 `<log_path>.gz`，修改时间保持不变；写入方不存在指：本进程已关闭它，文件名中的 omp pid 已不存在，或它最后写入于本次开机之前。omp 在扩展加载时检查一次，之后每天检查一次。在 Linux 上用 `zcat <文件>` 查看归档；在 macOS 上用 `gzcat <文件>` 或 `zcat < <文件>`，因为 macOS 的 `zcat` 接收路径参数时会去找 `<文件>.Z`。请用不会执行控制序列的查看器查看原始 PTY 日志，不要用 `cat`。
+- **日志**放在临时目录（`/tmp` 或 `%TEMP%`），文件名为 `omp-actual-terminal-<omp pid>-<job id>-<随机>.log`。本包从不删除日志内容。最后写入超过七天的日志，在确认写入方已不存在后，会被替换为标准 gzip 文件 `<log_path>.gz`，修改时间保持不变；写入方不存在指：本进程已关闭它，文件名中的 omp pid 已不存在，或它最后写入于本次开机之前。omp 在扩展加载时检查一次，之后每天检查一次。在 Linux 上用 `zcat <文件>` 查看归档；在 macOS 上用 `gzcat <文件>` 或 `zcat < <文件>`，因为 macOS 的 `zcat` 接收路径参数时会去找 `<文件>.Z`。请用不会执行控制序列的查看器查看原始 PTY 日志，不要用 `cat`。
 
 ## 示例
 
@@ -549,19 +550,19 @@ LIFECYCLE_SWEEP_MS           = 60_000 (lifecycle check interval)
 ```
 > bash(command="npm run dev", pty=true, title="dev server", yield_time_ms=5000)
 [still running]
-session_id: 1
-terminal_url: term://1-9f2c1a7e-…
+job_id: bg_1
+terminal_url: term://bg_1-9f2c1a7e-…
 ---
 > Server listening on :3000
 
-> monitor(session_id=1, condition="GET /health")
-{"session_id":1,"status":"started",…}
+> monitor(job_id="bg_1", condition="GET /health")
+{"job_id":"bg_1","status":"started",…}
 # 后续匹配的请求会唤醒模型。
-> read term://1-9f2c1a7e-…/screen
+> read term://bg_1-9f2c1a7e-…/screen
 Server listening on :3000
   GET /health 200 in 3ms
 
-> kill_session(session_id=1)   # stays listed until its lifecycle reclaims it
+> kill_session(job_id="bg_1")   # stays listed until its lifecycle reclaims it
 ```
 
 ### 没有固定文本的状态
@@ -569,10 +570,10 @@ Server listening on :3000
 ```
 > bash(command="./deploy.sh staging", pty=true, title="staging deploy", yield_time_ms=5000)
 [still running]
-session_id: 2
+job_id: bg_2
 …
-> monitor(session_id=2, judge="the deploy finished and every service reports healthy", judge_interval_ms=30000, max_returns=1)
-{"session_id":2,"status":"started","monitor":{"watch":{"kind":"judge","intent":"the deploy finished and every service reports healthy","interval_ms":30000},"returns":0,"max_returns":1,…}}
+> monitor(job_id="bg_2", judge="the deploy finished and every service reports healthy", judge_interval_ms=30000, max_returns=1)
+{"job_id":"bg_2","status":"started","monitor":{"watch":{"kind":"judge","intent":"the deploy finished and every service reports healthy","interval_ms":30000},"returns":0,"max_returns":1,…}}
 # 每 30 秒判定一次变化了的屏幕；第一个被判定满足的屏幕以引用该屏幕的
 # monitor_judge_match 通知唤醒模型，随后 monitor 结束。
 ```
@@ -582,12 +583,12 @@ session_id: 2
 ```
 > bash(command="python3 -q", pty=true, title="python repl", yield_time_ms=1500)
 [still running]
-session_id: 1
+job_id: bg_1
 terminal: normal screen 120x80, cursor row 1 col 5
 ---
 >>>
 
-> write_stdin(session_id=1, chars="print(7*6)\r", yield_time_ms=1000)
+> write_stdin(job_id="bg_1", chars="print(7*6)\r", yield_time_ms=1000)
 [still running]
 terminal: normal screen 120x80, cursor row 3 col 5
 ---
@@ -601,11 +602,11 @@ terminal: normal screen 120x80, cursor row 3 col 5
 ```
 > bash(command="npm test", pty=true, title="npm test", yield_time_ms=1000, on_exit="wake")
 [still running]
-session_id: 2
+job_id: bg_2
 completion_notification: armed
 ---
 # …the agent ends its turn; when npm test exits, one follow-up prompt resumes it.
-> set_on_exit(session_id=2, on_exit="none")   # if the job is abandoned
+> set_on_exit(job_id="bg_2", on_exit="none")   # if the job is abandoned
 ```
 
 ## Windows
@@ -625,6 +626,7 @@ src/
 ├── index.ts              # tool registration, event handlers
 ├── session.ts            # ExecSession: spawn, read, write, kill, log file, state
 ├── session-store.ts      # SessionStore + LRU eviction
+├── terminal-job.ts       # a terminal as an omp job: registration, its status at the return, cancels from omp
 ├── collect.ts            # CollectResult: screen, final screen or none
 ├── long-wait.ts          # event-driven waits (collection, shutdown, kill)
 ├── format-time.ts        # elapsed labels and host UTC time
@@ -642,7 +644,7 @@ src/
 ├── omp-presentation.ts   # omp host detection, bash-renderer delegation, theme appearance
 ├── shell-host.ts         # omp's cmd.exe test, loaded at factory time
 ├── agent-park.ts         # omp's agent registry/lifecycle reader; parked subagents' terminal runtimes
-├── session-binding.ts    # activation-local AgentSession identity for bash settings and stop detectors
+├── session-binding.ts    # activation-local AgentSession identity for bash settings, stop detectors and the terminals' job owner
 ├── tern-terminal-hud.ts  # terminals segment in omp's pill, Terminals view, terminal page
 ├── terminal-resource.ts  # process-global terminal keys, live/frozen projections
 ├── terminal-url.ts       # omp `term://` read handler; reports reads to the terminal's owner

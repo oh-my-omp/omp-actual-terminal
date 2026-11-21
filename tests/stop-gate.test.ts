@@ -13,23 +13,23 @@ import {
 	type TerminalNotice,
 } from "../src/terminal-notice.ts";
 
-function notice(sessionId: number, body: TerminalNotice["body"]): TerminalNotice {
-	return { identity: { sessionId, title: `t${sessionId}`, terminalUrl: undefined, logPath: undefined }, body };
+function notice(n: number, body: TerminalNotice["body"]): TerminalNotice {
+	return { identity: { jobId: `bg_${n}`, title: `t${n}`, terminalUrl: undefined, logPath: undefined }, body };
 }
-const unread = (sessionId: number) => notice(sessionId, { kind: "unread", outcome: { kind: "normal" }, returnedAgoMs: 1_800_000 });
-const match = (sessionId: number) => notice(sessionId, {
+const unread = (n: number) => notice(n, { kind: "unread", outcome: { kind: "normal" }, returnedAgoMs: 1_800_000 });
+const match = (n: number) => notice(n, {
 	kind: "monitor_match", monitor: { watch: { kind: "regex", condition: "x" }, returns: 1, maxReturns: 10, remindAfterMs: 1_200_000 }, lines: ["x"], omitted: 0, recentMatches: 1,
 });
-const abnormal = (sessionId: number) => notice(sessionId, { kind: "abnormal_return", command: "sh -c 'exit 3'", reason: "exit code 3" });
-const exitWake = (sessionId: number) => notice(sessionId, { kind: "exit_wake", command: "sleep 1", cwd: "/tmp", elapsedMs: 1000, exitCode: 0, signal: null, failure: null });
+const abnormal = (n: number) => notice(n, { kind: "abnormal_return", command: "sh -c 'exit 3'", reason: "exit code 3" });
+const exitWake = (n: number) => notice(n, { kind: "exit_wake", command: "sleep 1", cwd: "/tmp", elapsedMs: 1000, exitCode: 0, signal: null, failure: null });
 
 interface Harness {
 	readonly notices: NoticeDispatcher;
 	readonly sent: NoticeMessage[];
 	readonly inputs: StopInput[];
 	collects: number;
-	readonly tracked: Set<number>;
-	readonly returned: Set<number>;
+	readonly tracked: Set<string>;
+	readonly returned: Set<string>;
 	resolveDetect(verdict: StopVerdict): void;
 }
 
@@ -97,8 +97,8 @@ describe("notice delivery around runs", () => {
 
 	it("a done verdict reclaims returned terminals, then only a terminal problem wakes the agent until its next run", async () => {
 		const h = harness();
-		h.tracked.add(1).add(2).add(3);
-		h.returned.add(1);
+		h.tracked.add("bg_1").add("bg_2").add("bg_3");
+		h.returned.add("bg_1");
 		h.notices.agentStarted();
 		h.notices.recordResponse("All done and pushed.");
 		const dropped = h.notices.submit(unread(1));
@@ -130,8 +130,8 @@ describe("notice delivery around runs", () => {
 
 	it("a done verdict keeps the terminal problem that prompted it, though its terminal was collected", async () => {
 		const h = harness();
-		h.tracked.add(1);
-		h.returned.add(1);
+		h.tracked.add("bg_1");
+		h.returned.add("bg_1");
 		h.notices.agentStarted();
 		h.notices.recordResponse("All done.");
 		h.notices.agentStopped("final");
@@ -146,8 +146,8 @@ describe("notice delivery around runs", () => {
 	it("not_done and undecided deliver everything without reclaiming", async () => {
 		for (const verdict of [{ kind: "not_done", detector: "llm" }, { kind: "undecided", cause: "failed", reason: { kind: "external_error", detail: "x" } }] as const) {
 			const h = harness();
-			h.tracked.add(1);
-			h.returned.add(1);
+			h.tracked.add("bg_1");
+			h.returned.add("bg_1");
 			h.notices.agentStarted();
 			h.notices.recordResponse("next I will run the tests");
 			const delivered = h.notices.submit(unread(1));
@@ -161,8 +161,8 @@ describe("notice delivery around runs", () => {
 
 	it("a run starting during the decision discards its verdict and takes the notices", async () => {
 		const h = harness();
-		h.tracked.add(1);
-		h.returned.add(1);
+		h.tracked.add("bg_1");
+		h.returned.add("bg_1");
 		h.notices.agentStarted();
 		h.notices.recordResponse("Done.");
 		const delivered = h.notices.submit(unread(1));

@@ -24,7 +24,7 @@ export interface OutputResultDetails {
 	wall_time_seconds: number;
 	output: string;
 	original_token_count?: number;
-	session_id?: number;
+	job_id?: string;
 	exit_code?: number;
 	signal?: string;
 	failure_message?: string;
@@ -77,7 +77,7 @@ export interface KillResultDetails extends OutputResultDetails {
 	operation: "kill_session";
 	status: KillStatus;
 	found: true;
-	session_id: number;
+	job_id: string;
 	pid?: number;
 	requested_signal: string;
 	killed: boolean;
@@ -93,7 +93,7 @@ interface OutputEnvelopeInput {
 
 export interface FinalizeProcessInput extends OutputEnvelopeInput {
 	operation: ProcessOperation;
-	sessionId: number | undefined;
+	jobId: string | undefined;
 	exitCode: number | null | undefined;
 	signal: NodeJS.Signals | null;
 	failure: string | null;
@@ -105,7 +105,7 @@ export interface FinalizeProcessInput extends OutputEnvelopeInput {
 }
 
 export interface FinalizeKillInput extends OutputEnvelopeInput {
-	sessionId: number;
+	jobId: string;
 	pid?: number;
 	requestedSignal: NodeJS.Signals;
 	exitCode: number | null | undefined;
@@ -234,14 +234,14 @@ function terminalLines(terminal: TerminalDetails | undefined): string[] {
 
 export function finalizeProcessResult(input: FinalizeProcessInput): ProcessResultDetails {
 	const envelope = createOutputEnvelope(input);
-	const running = input.sessionId !== undefined;
+	const running = input.jobId !== undefined;
 	const shape: ProcessResultDetails = {
 		...envelope,
 		operation: input.operation,
 		status: running ? "running" : "exited",
 		running,
 	};
-	if (input.sessionId !== undefined) shape.session_id = input.sessionId;
+	if (input.jobId !== undefined) shape.job_id = input.jobId;
 	if (input.exitCode !== undefined && input.exitCode !== null) shape.exit_code = input.exitCode;
 	if (input.signal) shape.signal = input.signal;
 	if (input.failure) shape.failure_message = input.failure;
@@ -265,7 +265,7 @@ export function finalizeKillResult(input: FinalizeKillInput): KillResultDetails 
 		status: input.killed ? "killed" : "kill_failed",
 		running: !input.killed,
 		found: true,
-		session_id: input.sessionId,
+		job_id: input.jobId,
 		requested_signal: input.requestedSignal,
 		killed: input.killed,
 		escalated: input.escalated,
@@ -304,7 +304,7 @@ function appendOutputSection(lines: string[], shape: OutputResultDetails): strin
 
 export function renderProcessResultText(shape: ProcessResultDetails): string {
 	const lines: string[] = [shape.running ? "[still running]" : "[exited]"];
-	if (shape.session_id !== undefined) lines.push(`session_id: ${shape.session_id}`);
+	if (shape.job_id !== undefined) lines.push(`job_id: ${shape.job_id}`);
 	if (shape.exit_code !== undefined) lines.push(`exit_code: ${shape.exit_code}`);
 	if (shape.signal) lines.push(`signal: ${safeMeta(shape.signal)}`);
 	if (shape.failure_message) lines.push(`failure: ${safeMeta(shape.failure_message)}`);
@@ -329,7 +329,7 @@ export function renderProcessResultText(shape: ProcessResultDetails): string {
 
 export function renderKillResultText(shape: KillResultDetails): string {
 	const lines: string[] = [shape.killed ? "[killed]" : "[kill failed]"];
-	lines.push(`session_id: ${shape.session_id}`);
+	lines.push(`job_id: ${shape.job_id}`);
 	if (shape.pid !== undefined) lines.push(`pid: ${shape.pid}`);
 	lines.push(`requested_signal: ${safeMeta(shape.requested_signal)}`);
 	lines.push(`killed: ${shape.killed}`);

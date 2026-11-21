@@ -4,12 +4,12 @@ import { SessionStore } from "../src/session-store.ts";
 import type { ExecSession } from "../src/session.ts";
 
 class StubSession {
-	readonly id: number;
+	readonly id: string;
 	private lastUsedAt: number;
 	private exited: boolean;
 	terminatedWith: NodeJS.Signals | null = null;
 	constructor(id: number, lastUsed: number, exited = false) {
-		this.id = id;
+		this.id = `bg_${id}`;
 		this.lastUsedAt = lastUsed;
 		this.exited = exited;
 	}
@@ -41,21 +41,14 @@ function stub(id: number, lastUsed: number, exited = false): ExecSession {
 }
 
 describe("SessionStore", () => {
-	it("allocates monotonic ids starting at 1", () => {
-		const store = new SessionStore({ maxSessions: 10, lruProtectedCount: 2 });
-		assert.equal(store.allocateId(), 1);
-		assert.equal(store.allocateId(), 2);
-		assert.equal(store.allocateId(), 3);
-	});
-
 	it("insert+get+remove roundtrip", () => {
 		const store = new SessionStore({ maxSessions: 10, lruProtectedCount: 2 });
 		const a = stub(1, 1000);
 		store.insert(a);
-		assert.equal(store.get(1), a);
+		assert.equal(store.get("bg_1"), a);
 		assert.equal(store.size, 1);
-		store.remove(1);
-		assert.equal(store.get(1), undefined);
+		store.remove("bg_1");
+		assert.equal(store.get("bg_1"), undefined);
 		assert.equal(store.size, 0);
 	});
 
@@ -79,7 +72,7 @@ describe("SessionStore", () => {
 		const d = stub(4, 4000);
 		const { pruned } = store.insert(d);
 		assert.ok(pruned, "expected a pruned entry");
-		assert.equal(pruned!.id, 1, `expected id=1 evicted, got id=${pruned!.id}`);
+		assert.equal(pruned?.id, "bg_1", `expected bg_1 evicted, got id=${pruned!.id}`);
 		assert.equal(store.size, 3);
 	});
 
@@ -90,7 +83,7 @@ describe("SessionStore", () => {
 		store.insert(stub(3, 3000)); // newest → protected
 		const d = stub(4, 4000);
 		const { pruned } = store.insert(d);
-		assert.equal(pruned!.id, 1);
+		assert.equal(pruned?.id, "bg_1");
 	});
 
 	it("protects the N most recent entries", () => {
@@ -102,7 +95,7 @@ describe("SessionStore", () => {
 		store.insert(stub(5, 5000)); // most recent (protected)
 		const newEntry = stub(6, 6000);
 		const { pruned } = store.insert(newEntry);
-		assert.equal(pruned!.id, 1);
+		assert.equal(pruned?.id, "bg_1");
 	});
 
 	it("terminates evicted session", () => {
@@ -128,7 +121,7 @@ describe("SessionStore", () => {
 	});
 
 	it("onEvict callback fires for LRU and shutdown", () => {
-		const events: Array<{ id: number; reason: string }> = [];
+		const events: Array<{ id: string; reason: string }> = [];
 		const store = new SessionStore({
 			maxSessions: 2,
 			lruProtectedCount: 1,
@@ -137,7 +130,7 @@ describe("SessionStore", () => {
 		store.insert(stub(1, 1000, /*exited*/ true));
 		store.insert(stub(2, 2000));
 		store.insert(stub(3, 3000)); // evicts 1
-		assert.deepEqual(events, [{ id: 1, reason: "lru" }]);
+		assert.deepEqual(events, [{ id: "bg_1", reason: "lru" }]);
 
 		store.terminateAll();
 		const reasons = events.slice(1).map((e) => e.reason).sort();
@@ -146,38 +139,38 @@ describe("SessionStore", () => {
 
 	it("notifies once for inserted and stored sessions, ignores unknown removals, and unsubscribes", () => {
 		const store = new SessionStore({ maxSessions: 10, lruProtectedCount: 2 });
-		const snapshots: number[][] = [];
+		const snapshots: string[][] = [];
 		const unsubscribe = store.subscribe(() => {
 			snapshots.push(store.values().map((session) => session.id));
 		});
 
 		const session = stub(1, 1000);
 		store.insert(session);
-		assert.deepEqual(snapshots, [[1]]);
+		assert.deepEqual(snapshots, [["bg_1"]]);
 
-		assert.equal(store.remove(999), undefined);
-		assert.deepEqual(snapshots, [[1]], "unknown removals must not notify");
+		assert.equal(store.remove("bg_999"), undefined);
+		assert.deepEqual(snapshots, [["bg_1"]], "unknown removals must not notify");
 
 		assert.equal(store.remove(session.id), session);
-		assert.deepEqual(snapshots, [[1], []]);
+		assert.deepEqual(snapshots, [["bg_1"], []]);
 
 		unsubscribe();
 		store.insert(stub(2, 2000));
-		assert.deepEqual(snapshots, [[1], []], "unsubscribed listeners must not be called");
+		assert.deepEqual(snapshots, [["bg_1"], []], "unsubscribed listeners must not be called");
 	});
 
 	it("notifies once when an insert prunes at the cap and sees the post-prune values", () => {
 		const store = new SessionStore({ maxSessions: 1, lruProtectedCount: 0 });
 		store.insert(stub(1, 1000));
 
-		const snapshots: number[][] = [];
+		const snapshots: string[][] = [];
 		store.subscribe(() => {
 			snapshots.push(store.values().map((session) => session.id));
 		});
 
 		const { pruned } = store.insert(stub(2, 2000));
-		assert.equal(pruned?.id, 1);
-		assert.deepEqual(snapshots, [[2]], "prune plus insert must emit one post-mutation notification");
+		assert.equal(pruned?.id, "bg_1");
+		assert.deepEqual(snapshots, [["bg_2"]], "prune plus insert must emit one post-mutation notification");
 	});
 
 	it("notifies once after terminateAll with sessions, but not when already empty", () => {
@@ -185,7 +178,7 @@ describe("SessionStore", () => {
 		store.insert(stub(1, 1000));
 		store.insert(stub(2, 2000));
 
-		const snapshots: number[][] = [];
+		const snapshots: string[][] = [];
 		store.subscribe(() => {
 			snapshots.push(store.values().map((session) => session.id));
 		});
@@ -195,12 +188,5 @@ describe("SessionStore", () => {
 
 		assert.deepEqual(store.terminateAll(), []);
 		assert.deepEqual(snapshots, [[]], "an empty terminateAll must not notify");
-	});
-
-	it("allocateId is monotonic (ids are never reused)", () => {
-		const store = new SessionStore({ maxSessions: 5, lruProtectedCount: 1 });
-		const id = store.allocateId();
-		const next = store.allocateId();
-		assert.ok(next > id);
 	});
 });

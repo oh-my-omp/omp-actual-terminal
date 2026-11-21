@@ -49,26 +49,26 @@ describe("log archive", () => {
 	it("replaces a dead owner's week-old log with a byte-identical gzip carrying its mtime", async () => {
 		const content = Buffer.concat([randomBytes(256 * 1024), Buffer.from("\x1b[31mtail\x1b[0m\r\n")]);
 		const mtime = NOW - LOG_ARCHIVE_AGE_MS - 1000;
-		const path = await writeLog(`omp-actual-terminal-${OTHER}-3-0a1b2c3d.log`, content, mtime);
+		const path = await writeLog(`omp-actual-terminal-${OTHER}-bg_3-0a1b2c3d.log`, content, mtime);
 
 		const results = await archiveLogs(dir, policy({ bootTime: mtime - DAY }));
 
-		assert.deepEqual(results, [{ name: `omp-actual-terminal-${OTHER}-3-0a1b2c3d.log`, kind: "archived" }]);
+		assert.deepEqual(results, [{ name: `omp-actual-terminal-${OTHER}-bg_3-0a1b2c3d.log`, kind: "archived" }]);
 		assert.equal(await exists(path), false);
 		assert.deepEqual(gunzipSync(await readFile(`${path}.gz`)), content);
 		assert.equal(Math.round((await stat(`${path}.gz`)).mtimeMs / 1000), Math.round(mtime / 1000));
-		assert.deepEqual(await readdir(dir), [`omp-actual-terminal-${OTHER}-3-0a1b2c3d.log.gz`]);
+		assert.deepEqual(await readdir(dir), [`omp-actual-terminal-${OTHER}-bg_3-0a1b2c3d.log.gz`]);
 	});
 
 	it("leaves logs written within seven days, or in the future, untouched", async () => {
-		const recent = await writeLog(`omp-actual-terminal-${OTHER}-1-00000001.log`, "recent", NOW - LOG_ARCHIVE_AGE_MS + DAY);
-		const future = await writeLog(`omp-actual-terminal-${OTHER}-2-00000002.log`, "future", NOW + DAY);
+		const recent = await writeLog(`omp-actual-terminal-${OTHER}-bg_1-00000001.log`, "recent", NOW - LOG_ARCHIVE_AGE_MS + DAY);
+		const future = await writeLog(`omp-actual-terminal-${OTHER}-bg_2-00000002.log`, "future", NOW + DAY);
 
 		const results = await archiveLogs(dir, policy({ bootTime: NOW + 2 * DAY }));
 
 		assert.deepEqual(outcomes(results), {
-			[`omp-actual-terminal-${OTHER}-1-00000001.log`]: "recent",
-			[`omp-actual-terminal-${OTHER}-2-00000002.log`]: "recent",
+			[`omp-actual-terminal-${OTHER}-bg_1-00000001.log`]: "recent",
+			[`omp-actual-terminal-${OTHER}-bg_2-00000002.log`]: "recent",
 		});
 		assert.equal(await readFile(recent, "utf8"), "recent");
 		assert.equal(await readFile(future, "utf8"), "future");
@@ -76,35 +76,35 @@ describe("log archive", () => {
 
 	it("keeps this process's open logs and archives its closed ones", async () => {
 		const old = NOW - 10 * DAY;
-		const open = await writeLog(`omp-actual-terminal-${SELF}-1-0000000a.log`, "open", old);
-		const closed = await writeLog(`omp-actual-terminal-${SELF}-2-0000000b.log`, "closed", old);
+		const open = await writeLog(`omp-actual-terminal-${SELF}-bg_1-0000000a.log`, "open", old);
+		const closed = await writeLog(`omp-actual-terminal-${SELF}-bg_2-0000000b.log`, "closed", old);
 
 		const results = await archiveLogs(dir, policy({ bootTime: old - DAY, openLogs: new Set([open]), pidExists: () => true }));
 
 		assert.deepEqual(outcomes(results), {
-			[`omp-actual-terminal-${SELF}-1-0000000a.log`]: "writer_alive",
-			[`omp-actual-terminal-${SELF}-2-0000000b.log`]: "archived",
+			[`omp-actual-terminal-${SELF}-bg_1-0000000a.log`]: "writer_alive",
+			[`omp-actual-terminal-${SELF}-bg_2-0000000b.log`]: "archived",
 		});
 		assert.equal(await readFile(open, "utf8"), "open");
 		assert.equal(gunzipSync(await readFile(`${closed}.gz`)).toString(), "closed");
 	});
 
 	it("keeps another live process's log unless it predates the last boot", async () => {
-		const sinceBoot = await writeLog(`omp-actual-terminal-${OTHER}-1-0000000c.log`, "live", NOW - 8 * DAY);
-		const beforeBoot = await writeLog(`omp-actual-terminal-${OTHER}-2-0000000d.log`, "stale", NOW - 9 * DAY);
+		const sinceBoot = await writeLog(`omp-actual-terminal-${OTHER}-bg_1-0000000c.log`, "live", NOW - 8 * DAY);
+		const beforeBoot = await writeLog(`omp-actual-terminal-${OTHER}-bg_2-0000000d.log`, "stale", NOW - 9 * DAY);
 
 		const results = await archiveLogs(dir, policy({ bootTime: NOW - 8.5 * DAY, pidExists: (pid) => pid === OTHER }));
 
 		assert.deepEqual(outcomes(results), {
-			[`omp-actual-terminal-${OTHER}-1-0000000c.log`]: "writer_alive",
-			[`omp-actual-terminal-${OTHER}-2-0000000d.log`]: "archived",
+			[`omp-actual-terminal-${OTHER}-bg_1-0000000c.log`]: "writer_alive",
+			[`omp-actual-terminal-${OTHER}-bg_2-0000000d.log`]: "archived",
 		});
 		assert.equal(await readFile(sinceBoot, "utf8"), "live");
 		assert.equal(gunzipSync(await readFile(`${beforeBoot}.gz`)).toString(), "stale");
 	});
 
 	it("never overwrites an existing archive and then keeps the source", async () => {
-		const path = await writeLog(`omp-actual-terminal-${OTHER}-1-00000010.log`, "source", NOW - 10 * DAY);
+		const path = await writeLog(`omp-actual-terminal-${OTHER}-bg_1-00000010.log`, "source", NOW - 10 * DAY);
 		await writeFile(`${path}.gz`, "earlier archive");
 
 		const [result] = await archiveLogs(dir, policy());
@@ -112,12 +112,12 @@ describe("log archive", () => {
 		assert.equal(result.kind === "skipped" && result.reason, "archive_exists");
 		assert.equal(await readFile(path, "utf8"), "source");
 		assert.equal(await readFile(`${path}.gz`, "utf8"), "earlier archive");
-		assert.deepEqual((await readdir(dir)).sort(), [`omp-actual-terminal-${OTHER}-1-00000010.log`, `omp-actual-terminal-${OTHER}-1-00000010.log.gz`]);
+		assert.deepEqual((await readdir(dir)).sort(), [`omp-actual-terminal-${OTHER}-bg_1-00000010.log`, `omp-actual-terminal-${OTHER}-bg_1-00000010.log.gz`]);
 	});
 
 	it("does not follow a symlink that carries a log name", { skip: process.platform === "win32" }, async () => {
 		const target = await writeLog("elsewhere.txt", "not a log", NOW - 10 * DAY);
-		const link = join(dir, `omp-actual-terminal-${OTHER}-1-00000011.log`);
+		const link = join(dir, `omp-actual-terminal-${OTHER}-bg_1-00000011.log`);
 		await symlink(target, link);
 
 		const [result] = await archiveLogs(dir, policy());
@@ -128,7 +128,7 @@ describe("log archive", () => {
 	});
 
 	it("tracks a session log as open until it ends, writing every chunk in order", async () => {
-		const path = join(dir, `omp-actual-terminal-${process.pid}-1-00000012.log`);
+		const path = join(dir, `omp-actual-terminal-${process.pid}-bg_1-00000012.log`);
 		const errors: Error[] = [];
 		const log = SessionLog.open(path, (error) => errors.push(error));
 		const encoder = new TextEncoder();
@@ -182,7 +182,7 @@ describe("log archive", () => {
 	});
 
 	it("treats a chunk with no bytes as written instead of stalled", async () => {
-		const path = join(dir, `omp-actual-terminal-${process.pid}-2-00000013.log`);
+		const path = join(dir, `omp-actual-terminal-${process.pid}-bg_2-00000013.log`);
 		const errors: Error[] = [];
 		const log = SessionLog.open(path, (error) => errors.push(error));
 		log.write(new Uint8Array(0));

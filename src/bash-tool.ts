@@ -22,7 +22,7 @@ const baseFields = {
 	cwd: Type.Optional(Type.String({ description: "Working directory: a host path, relative to the session cwd, or a URL directory such as `local://`. Defaults to the session cwd." })),
 	pty: Type.Optional(Type.Boolean({ description: "`true`: run `command` in a terminal of its own that outlives this call (`xd://bash/terminal`). Omitted or `false`: a finite command." })),
 	async: Type.Optional(Type.Boolean({
-		description: "Without `pty: true`: run as a background job whose result arrives as a follow-up (needs `async.enabled`). With `pty: true`: return the terminal's `session_id` at once, without waiting for output.",
+		description: "Without `pty: true`: run as a background job whose result arrives as a follow-up (needs `async.enabled`). With `pty: true`: return the terminal's `job_id` at once, without waiting for output.",
 	})),
 	notify: Type.Optional(Type.String({
 		description: "Regex. Without `pty: true`, or with `name` (Rust syntax): each matching output line arrives as a follow-up while the command or service runs; a command without `name` becomes a background job like `async`. With `pty: true` and no `name` (JavaScript regex source, no `/` delimiters): starts a `monitor` on the terminal with it as `condition`.",

@@ -29,7 +29,7 @@ async function renderedDelta(cols: number, rows: number, before: string, after: 
 	}
 }
 
-async function terminalSession(id: number): Promise<ExecSession> {
+async function terminalSession(id: string): Promise<ExecSession> {
 	const session = ExecSession.spawn(id, { title: "Test terminal", shell: "node", command: [process.execPath, "-e", "process.stdin.setRawMode(true); process.stdout.write('READY\\r\\n'); process.stdin.on('data', b => { if (b.toString().includes('EXIT')) process.stdout.write('LAST MATCH', () => process.exit(4)); else process.stdout.write(b.toString().replace(/\\n/g, '\\r\\n')); });"],
 		cwd: process.cwd(), env: { ...process.env }, });
 	const ready = await session.collect({ deadlineMs: Date.now() + 3000 });
@@ -38,7 +38,7 @@ async function terminalSession(id: number): Promise<ExecSession> {
 	return session;
 }
 
-async function readySession(id: number): Promise<ExecSession> {
+async function readySession(id: string): Promise<ExecSession> {
 	const session = ExecSession.spawn(id, { title: "Test terminal", shell: "node", command: [process.execPath, "-e", "process.stdin.setRawMode(true); process.stdout.write('READY\\r\\n'); process.stdin.on('data', b => process.stdout.write(b.toString().replace(/\\n/g, '\\r\\n')));"],
 		cwd: process.cwd(), env: { ...process.env }, });
 	for (let attempt = 0; attempt < 150 && !session.liveSnapshot()?.text.includes("READY"); attempt++) await delay(20);
@@ -103,7 +103,7 @@ describe("monitor source and delivery", () => {
 	});
 
 	it("counts successful returns only and retries a failed batch without losing process output", async (t) => {
-		const session = await terminalSession(9101);
+		const session = await terminalSession("bg_9101");
 		const failed = Promise.withResolvers<void>();
 		const delivered = Promise.withResolvers<NoticeMessage>();
 		let attempts = 0;
@@ -136,7 +136,7 @@ describe("monitor source and delivery", () => {
 	});
 
 	it("merges final partial terminal output with End and consumes exactly the matching ordinary wake", async (t) => {
-		const session = await terminalSession(9102);
+		const session = await terminalSession("bg_9102");
 		const delivered = Promise.withResolvers<NoticeMessage>();
 		const messages: NoticeMessage[] = [];
 		const coordinator = new CompletionCoordinator({ notices: new NoticeDispatcher({ send: (message) => {
@@ -163,7 +163,7 @@ describe("monitor source and delivery", () => {
 	});
 
 	it("reminds once per silent period with the current screen, and a delivered match starts a new period", async (t) => {
-		const session = await readySession(9103);
+		const session = await readySession("bg_9103");
 		const messages: NoticeMessage[] = [];
 		const coordinator = new CompletionCoordinator({ notices: new NoticeDispatcher({ send: (message) => { messages.push(message); }, debounceMs: 5 }) });
 		t.after(async () => { coordinator.shutdown(); await close(session); });
@@ -189,7 +189,7 @@ describe("monitor source and delivery", () => {
 	});
 
 	it("rejects an invalid remind_after_ms without replacing the existing monitor", async (t) => {
-		const session = await readySession(9104);
+		const session = await readySession("bg_9104");
 		const coordinator = new CompletionCoordinator({ notices: new NoticeDispatcher({ send: () => {} }) });
 		t.after(async () => { coordinator.shutdown(); await close(session); });
 		await coordinator.startMonitor(session, { condition: "KEEP" });
@@ -201,7 +201,7 @@ describe("monitor source and delivery", () => {
 
 	it("prefers pending matches over a due reminder and serializes End after an in-flight reminder", async () => {
 		const fake: MonitorSession = {
-			id: 1, title: "Pending monitor", hasExited: false, exitCode: null, signal: null, terminalUrl: "term://fake", logPath: "/tmp/fake.log",
+			id: "bg_1", title: "Pending monitor", hasExited: false, exitCode: null, signal: null, terminalUrl: "term://fake", logPath: "/tmp/fake.log",
 			lastOutputAt: Date.now(), liveSnapshot: () => undefined, subscribeMonitor: async () => "accepted",
 		};
 		const sent: string[] = [];
@@ -238,7 +238,7 @@ describe("monitor source and delivery", () => {
 
 	it("a withheld return ends the monitor and consumes its terminal's wake", async () => {
 		const fake: MonitorSession = {
-			id: 1, title: "Finished monitor", hasExited: false, exitCode: null, signal: null, terminalUrl: "term://fake", logPath: "/tmp/fake.log",
+			id: "bg_1", title: "Finished monitor", hasExited: false, exitCode: null, signal: null, terminalUrl: "term://fake", logPath: "/tmp/fake.log",
 			lastOutputAt: Date.now(), liveSnapshot: () => undefined, subscribeMonitor: async () => "accepted",
 		};
 		const sent: string[] = [];
@@ -271,7 +271,7 @@ describe("judge monitor", () => {
 	const kinds = (messages: readonly NoticeMessage[]) => messages.flatMap((m) => m.details.notices).map((n) => n.kind);
 
 	it("validates judge parameters and needs a judge model", async (t) => {
-		const session = await readySession(9201);
+		const session = await readySession("bg_9201");
 		const { judge } = stubJudge(() => ({ kind: "not_met" }));
 		const coordinator = new CompletionCoordinator({ notices: new NoticeDispatcher({ send: () => {} }), judge: () => judge });
 		const unavailable = new CompletionCoordinator({ notices: new NoticeDispatcher({ send: () => {} }), judge: () => stubJudge(() => ({ kind: "met" }), false).judge });
@@ -289,7 +289,7 @@ describe("judge monitor", () => {
 	});
 
 	it("judges only new screens, stays silent while not met and returns each met screen", async (t) => {
-		const session = await readySession(9202);
+		const session = await readySession("bg_9202");
 		const messages: NoticeMessage[] = [];
 		const { judge, judged } = stubJudge(({ screen }) => ({ kind: screen.includes("listening") ? "met" : "not_met" }));
 		const coordinator = new CompletionCoordinator({ notices: new NoticeDispatcher({ send: (message) => { messages.push(message); }, debounceMs: 5 }), judge: () => judge });
@@ -319,7 +319,7 @@ describe("judge monitor", () => {
 	});
 
 	it("ends the monitor with a failure notice when a judgment fails", async (t) => {
-		const session = await readySession(9203);
+		const session = await readySession("bg_9203");
 		const messages: NoticeMessage[] = [];
 		const { judge, judged } = stubJudge(() => ({ kind: "failed", detail: "quota exhausted" }));
 		const coordinator = new CompletionCoordinator({ notices: new NoticeDispatcher({ send: (message) => { messages.push(message); }, debounceMs: 5 }), judge: () => judge });
@@ -336,7 +336,7 @@ describe("judge monitor", () => {
 	});
 
 	it("aborts an in-flight judgment at End and delivers only End", async (t) => {
-		const session = await terminalSession(9204);
+		const session = await terminalSession("bg_9204");
 		const messages: NoticeMessage[] = [];
 		const answer = Promise.withResolvers<ScreenVerdict>();
 		const { judge, judged } = stubJudge(() => answer.promise);

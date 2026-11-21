@@ -83,8 +83,8 @@ describe("omp-actual-terminal PTY mode", () => {
 				yield_time_ms: 1500, });
 			assert.match(r.details.output, /^tty=\/dev\//m, `output=${r.details.output}`);
 			if (!IS_WINDOWS) assert.match(r.details.output, /^seen=xterm-256color$/m);
-			if (r.details.session_id !== undefined) {
-				await h.call("kill_session", { session_id: r.details.session_id });
+			if (r.details.job_id !== undefined) {
+				await h.call("kill_session", { job_id: r.details.job_id });
 			}
 		} finally {
 			if (hostTerm === undefined) delete process.env.TERM;
@@ -100,16 +100,16 @@ describe("omp-actual-terminal PTY mode", () => {
 			const r1 = await h.call("bash", { pty: true, title: "Test command", command: "python3 -q",
 
 				yield_time_ms: 800, });
-			const sid = r1.details.session_id;
-			assert.equal(typeof sid, "number", `REPL did not stay alive: ${JSON.stringify(r1.details)}`);
-			if (typeof sid !== "number") return; // for type narrowing
+			const sid = r1.details.job_id;
+			assert.equal(typeof sid, "string", `REPL did not stay alive: ${JSON.stringify(r1.details)}`);
+			if (typeof sid !== "string") return; // for type narrowing
 
 			// Submit with \r (the Enter key), not \n: POSIX ptys map CR→NL in
 			// canonical mode (ICRNL) so both work there, but legacy Windows
 			// console line input only executes on CR — with \n the REPL echoes
 			// the text without running it (observed on windows-latest CI).
 			const r2 = await h.call("write_stdin", {
-				session_id: sid,
+				job_id: sid,
 				chars: "print(2 + 40)\r",
 				yield_time_ms: 2000,
 			});
@@ -118,10 +118,10 @@ describe("omp-actual-terminal PTY mode", () => {
 				: await readUntil(r1.details.terminal_url, /^42$/m);
 			assert.ok(output.includes("42"), `got: ${output}`);
 
-			await h.call("write_stdin", { session_id: sid, chars: "exit()\r", yield_time_ms: 1500 });
+			await h.call("write_stdin", { job_id: sid, chars: "exit()\r", yield_time_ms: 1500 });
 			const list = await h.call("list_sessions", {});
-			if (list.details.sessions.some((s: any) => s.session_id === sid)) {
-				await h.call("kill_session", { session_id: sid });
+			if (list.details.sessions.some((s: any) => s.job_id === sid)) {
+				await h.call("kill_session", { job_id: sid });
 			}
 		} finally {
 			await h.emit("session_shutdown");
@@ -135,21 +135,21 @@ describe("omp-actual-terminal PTY mode", () => {
 		await h.emit("session_start");
 		try {
 			const r1 = await h.call("bash", { pty: true, title: "Test command", command: fixture, yield_time_ms: 1500 });
-			const sid = r1.details.session_id;
-			assert.equal(typeof sid, "number", `fixture did not stay alive: ${JSON.stringify(r1.details)}`);
+			const sid = r1.details.job_id;
+			assert.equal(typeof sid, "string", `fixture did not stay alive: ${JSON.stringify(r1.details)}`);
 
-			const r2 = await h.call("write_stdin", { session_id: sid, chars: "hello\r", yield_time_ms: 2000 });
+			const r2 = await h.call("write_stdin", { job_id: sid, chars: "hello\r", yield_time_ms: 2000 });
 			const output = r2.details.output.includes("GOT:hello|")
 				? r2.details.output
 				: await readUntil(r1.details.terminal_url, /GOT:hello\|/);
 			assert.ok(output.includes("GOT:hello|"), `PTY input did not round-trip: ${JSON.stringify(output)}`);
 
-			const r3 = await h.call("write_stdin", { session_id: sid, chars: "quit\r", yield_time_ms: 3000 });
+			const r3 = await h.call("write_stdin", { job_id: sid, chars: "quit\r", yield_time_ms: 3000 });
 			let exitCode = r3.details.exit_code;
 			const deadline = Date.now() + 8000;
 			while (exitCode === undefined && Date.now() < deadline) {
 				const listed = await h.call("list_sessions", {});
-				exitCode = listed.details.sessions.find((s: { session_id: number }) => s.session_id === sid)?.exit_code;
+				exitCode = listed.details.sessions.find((s: { job_id: string }) => s.job_id === sid)?.exit_code;
 				if (exitCode === undefined) await delay(25);
 			}
 			assert.equal(exitCode, 7, `fixture did not exit on quit: ${JSON.stringify(r3.details)}`);
@@ -164,7 +164,7 @@ describe("omp-actual-terminal PTY mode", () => {
 		try {
 			const r = await h.call("bash", { pty: true, title: "Test command", command: "echo tty-cmd", shell: "cmd",
 				yield_time_ms: 20000, });
-			assert.equal(r.details.session_id, undefined, JSON.stringify(r.details));
+			assert.equal(r.details.job_id, undefined, JSON.stringify(r.details));
 			assert.match(String(r.details.failure_message), /never launches cmd/, JSON.stringify(r.details));
 			assert.equal(r.details.terminal_url, undefined, JSON.stringify(r.details));
 		} finally {
@@ -179,16 +179,16 @@ describe("omp-actual-terminal PTY mode", () => {
 			const r1 = await h.call("bash", { pty: true, title: "Test command", command: "while true; do echo alive; sleep 0.2; done",
 
 				yield_time_ms: 400, });
-			const sid = r1.details.session_id;
-			assert.ok(typeof sid === "number");
+			const sid = r1.details.job_id;
+			assert.ok(typeof sid === "string");
 
 			const r2 = await h.call("write_stdin", {
-				session_id: sid,
+				job_id: sid,
 				chars: "\x03",
 				yield_time_ms: 1000,
 			});
-			if (r2.details.session_id !== undefined) {
-				await h.call("kill_session", { session_id: sid });
+			if (r2.details.job_id !== undefined) {
+				await h.call("kill_session", { job_id: sid });
 			}
 		} finally {
 			await h.emit("session_shutdown");

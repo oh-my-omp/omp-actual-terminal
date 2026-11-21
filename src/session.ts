@@ -39,7 +39,7 @@ export interface SessionState {
 }
 
 export class ExecSession {
-	readonly id: number;
+	readonly id: string;
 	readonly command: readonly string[];
 	readonly shell: string;
 	readonly displayCommand: string;
@@ -76,7 +76,7 @@ export class ExecSession {
 	private lastUsedAt: number;
 	private child!: SpawnedChild;
 
-	private constructor(id: number, opts: SessionSpawnOptions) {
+	private constructor(id: string, opts: SessionSpawnOptions) {
 		this.id = id;
 		this.command = opts.command;
 		this.shell = opts.shell;
@@ -90,7 +90,7 @@ export class ExecSession {
 		this.logPath = join(tmpdir(), sessionLogName(id));
 	}
 
-	static spawn(id: number, opts: SessionSpawnOptions): ExecSession {
+	static spawn(id: string, opts: SessionSpawnOptions): ExecSession {
 		const self = new ExecSession(id, opts);
 
 		try {
@@ -191,7 +191,7 @@ export class ExecSession {
 			alerted = fingerprint;
 			onAlert({
 				notice: inputWaitNotice({
-					sessionId: this.id, title: this.title, command: this.displayCommand, prompt, screen: probe.kind, quietMs,
+					jobId: this.id, title: this.title, command: this.displayCommand, prompt, screen: probe.kind, quietMs,
 					terminalUrl: this.terminalUrl, logPath: this.logPath,
 				}),
 				current: () => !this.hasExited && this.screen === screen && screen.unseen(probe.revision),

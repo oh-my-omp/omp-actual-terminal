@@ -46,12 +46,12 @@ export interface ArchivePolicy {
 	readonly pidExists: (pid: number) => boolean;
 }
 
-export function sessionLogName(sessionId: number): string {
-	return `${LOG_PREFIX}${process.pid}-${sessionId}-${randomBytes(4).toString("hex")}.log`;
+export function sessionLogName(jobId: string): string {
+	return `${LOG_PREFIX}${process.pid}-${jobId}-${randomBytes(4).toString("hex")}.log`;
 }
 
 export function parseLogName(name: string): LogName | undefined {
-	const owned = /^omp-actual-terminal-(\d+)-\d+-[0-9a-f]{8}\.log$/.exec(name);
+	const owned = /^omp-actual-terminal-(\d+)-.+-[0-9a-f]{8}\.log$/.exec(name);
 	return owned ? { pid: Number(owned[1]) } : undefined;
 }
 

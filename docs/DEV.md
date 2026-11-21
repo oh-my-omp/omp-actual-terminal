@@ -77,6 +77,7 @@ indexed by concern:
 | Tool-owned topics (`read xd://<tool>/<topic>`) and full-description pointers for all six PTY tools | `src/tool-docs.ts`, `src/topics/*.md`; typed definitions in `src/index.ts` |
 | Session lifecycle (spawn, write, kill, log-stream) | `src/session.ts` |
 | Session registry, LRU eviction, shutdown | `src/session-store.ts` |
+| Terminals as omp jobs: registration before spawn, the job's status at the return, cancels from omp's jobs page; the root agent as owner | `src/terminal-job.ts`; `runTerminal`, `terminateSessionById` and `endRuntime` in `src/index.ts`; `rootAgentOf` in `src/session-binding.ts` |
 | Per-call observation (`CollectResult`: screen, final screen or none) | `src/collect.ts`; produced by `ExecSession.collect` in `src/session.ts` |
 | Event-driven, monotonic waits: collection, shutdown and kill confirmation | `src/long-wait.ts` |
 | Human duration labels and host UTC time | `src/format-time.ts` |
@@ -275,7 +276,7 @@ Tern terminal HUD (pill segment, Terminals view, terminal page):
 
 ## Debugging aids
 
-- **Per-session log files** at `omp-actual-terminal-<pid>-<sid>-*.log` in the
+- **Per-session log files** at `omp-actual-terminal-<pid>-<job id>-*.log` in the
   system temporary directory (`/tmp` or `%TEMP%`) capture the complete raw
   byte stream the child wrote; after seven days with a provably gone writer
   they become `*.log.gz` (`gzcat` or `zcat <` on macOS). Inspect them with a
@@ -283,7 +284,7 @@ Tern terminal HUD (pill segment, Terminals view, terminal page):
 - **`details.output` vs `content[0].text`**: the LLM reads
   `content[0].text` (structured); the TUI renderer reads
   `details.output` (clean body). If the TUI shows a header like
-  `[still running]\nsession_id: …` verbatim, the renderer is failing
+  `[still running]\njob_id: …` verbatim, the renderer is failing
   and falling back to omp's default. Check `src/omp-presentation.ts`.
 - **`list_sessions` tool** (invokable from the LLM side) is the
   quickest way to audit what's stored, including each returned terminal's
@@ -424,7 +425,7 @@ spec and methods the router consults per request. The handler uses
 a path only for `/screen.png`, null for text. Read all retained rows,
 `/screen`, the bare read inside `tmux` (it must equal `/screen`),
 positive/negative pages, head/tail and unknown-key/page errors through real
-`read`; confirm child-agent same-number keys, post-exit/kill/LRU access and
+`read`; confirm distinct keys across child agents, post-exit/kill/LRU access and
 two reloads preserve URLs without consuming observations or re-registering.
 Requalify root `@oh-my-pi/pi-natives.rasterizeSvg`: PNG bytes, system-font
 CJK, palette/RGB and attributes, the 16,777,216-pixel limit, and real `read`
@@ -434,6 +435,24 @@ private PNG paths. Successful screenshots rely on OS temporary-file cleanup,
 like logs, because the path-only host API supplies no read-complete callback.
 Upgrading an already running text-only handler requires one omp restart;
 reloads of the same version do not.
+
+### Terminal jobs
+
+`@oh-my-pi/pi-coding-agent/async/job-manager` must still export
+`AsyncJobManagerApi` whose `register(type, label, run, {ownerId, process})`
+returns the `bg_N` id, calls `run` with an abort `signal`, and throws its own
+error at the running-job limit; `acknowledgeDeliveries(ids)` must keep a job's
+result out of delivery and out of the run's awaited work, and `cancel(id)`
+must abort `run` and keep the job `cancelled` whatever `run` returns, and
+change nothing for a job that is no longer running. The bound
+AgentSession must still expose `asyncJobManager`, a subagent's being its
+root's, and `AgentRegistry` entries `parentId`. Through real omp, in a main
+agent and a subagent: a terminal's `bash` result must carry `job_id: bg_N`
+that `write_stdin` and `kill_session` accept; the main session's jobs page and
+`/jobs` must list the terminal under its `title`; an exit 0 must show the job
+completed, a non-zero exit failed and `kill_session` cancelled; cancelling the
+job from the jobs page must end the terminal as the HUD's Kill does; and a
+running terminal alone must not keep the run awaiting background work.
 
 ### Notice delivery, monitors, input waits and lifecycle
 
@@ -498,7 +517,7 @@ stay mapped for plugins with `AgentLifecycleManager.global()`,
 `has(id, ref)` and `ensureLive(id)` (resolving after the revived activation's
 `session_start`). Through real omp with `task.agentIdleTtlMs` lowered: a
 parked subagent's running terminal must survive and be driven by the same
-`session_id` after a revive; a parked subagent's `on_exit: "wake"` exit must
+`job_id` after a revive; a parked subagent's `on_exit: "wake"` exit must
 not revive it; its non-zero exit must revive it and deliver one
 `abnormal_return`; quitting the main session must leave no process of a
 parked subagent's terminal.

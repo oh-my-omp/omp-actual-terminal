@@ -15,7 +15,7 @@ export const bashDocumentation: Documentation = {
 };
 
 /** What the plugin adds to omp's own `bash` description: the terminal `pty: true` opens. */
-export const bashTerminalSection = "\n\n`pty: true` opens a terminal for long-running, interactive (REPL, TUI, ssh, sudo), concurrent or daemon work: the command runs in this session's shell, the call returns its screen and `session_id` while it runs or its exit code once it ends, and the terminal outlives the call. Drive it with `write_stdin`, wait with `monitor`, end it with `kill_session`.";
+export const bashTerminalSection = "\n\n`pty: true` opens a terminal for long-running, interactive (REPL, TUI, ssh, sudo), concurrent or daemon work: the command runs in this session's shell, the call returns its screen and `job_id` (`bg_N`, the omp job the terminal is) while it runs or its exit code once it ends, and the terminal outlives the call. Drive it with `write_stdin`, wait with `monitor`, end it with `kill_session`.";
 
 export const bashTopicPointers = "\n\nTopics — read the one a call needs before making it:\n" +
 	"- `xd://bash/terminal` — before setting `pty: true`, sending input to a terminal, or using `monitor` with a `condition` or `judge`\n" +
@@ -44,7 +44,7 @@ export const killSessionDocumentation: Documentation = {
 	docTopics: () => ({ termination: topic("kill-session-termination.md") }),
 };
 export const killSessionTopicPointers = "\n\nTopics — read the one a call needs before making it:\n" +
-	"- `xd://kill_session/termination` — before terminating a session, or when termination fails or the terminal stays listed";
+	"- `xd://kill_session/termination` — before terminating a terminal, or when termination fails or the terminal stays listed";
 
 export const listSessionsDocumentation: Documentation = {
 	docTopics: () => ({ inventory: topic("list-sessions-inventory.md") }),

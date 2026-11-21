@@ -13,7 +13,7 @@ export type SessionManager = AgentSessionHandle["sessionManager"];
  * What the plugin binds to. Registry entries can be replaced by same-id helper sessions, so the
  * plugin reads these once and from then on only rechecks the session manager by identity.
  */
-export type BoundSession = Pick<AgentSession, "settings" | "skills" | "getImageAttachments"> & Pick<AgentSessionHandle, "sessionManager">;
+export type BoundSession = Pick<AgentSession, "settings" | "skills" | "getImageAttachments" | "asyncJobManager"> & Pick<AgentSessionHandle, "sessionManager">;
 
 /** Registry lookup the plugin needs: the ref of the agent's current generation. */
 export type SessionRegistry = Pick<AgentRegistryApi, "get">;
@@ -21,7 +21,13 @@ export type SessionRegistry = Pick<AgentRegistryApi, "get">;
 export type HostBindingState =
 	| { readonly kind: "pending" }
 	| { readonly kind: "unbound"; readonly reason: "no-registry-entry" | "identity-mismatch" }
-	| { readonly kind: "bound"; readonly session: BoundSession; readonly agentId: string };
+	| {
+		readonly kind: "bound";
+		readonly session: BoundSession;
+		readonly agentId: string;
+		/** The root agent of the session's agent tree: it owns the session's terminal jobs. */
+		readonly rootAgentId: string;
+	};
 
 /** The part of the extension context the binding reads. */
 export type BindingContext = {
@@ -36,7 +42,17 @@ export type BindingContext = {
  */
 function isBoundSession(session: AgentRef["session"]): session is AgentSessionHandle & BoundSession {
 	return typeof session === "object" && session !== null && "settings" in session && "sessionManager" in session
-		&& "skills" in session && "getImageAttachments" in session;
+		&& "skills" in session && "getImageAttachments" in session && "asyncJobManager" in session;
+}
+
+/**
+ * Terminals are jobs of the root agent: omp cancels a subagent's own jobs when its task ends, and a
+ * subagent's terminal outlives that task.
+ */
+function rootAgentOf(host: SessionRegistry, agentId: string): string {
+	let id = agentId;
+	for (let parent = host.get(id)?.parentId; parent !== undefined; parent = host.get(id)?.parentId) id = parent;
+	return id;
 }
 
 export function bindingContext(ctx: Pick<ExtensionContext, "agent"> & Pick<AgentSessionHandle, "sessionManager">): BindingContext {
@@ -52,7 +68,7 @@ export function bindSession(host: SessionRegistry, ctx: BindingContext): HostBin
 	const session = host.get(agentId)?.session ?? null;
 	if (!isBoundSession(session)) return { kind: "unbound", reason: "no-registry-entry" };
 	if (session.sessionManager !== ctx.sessionManager) return { kind: "unbound", reason: "identity-mismatch" };
-	return { kind: "bound", session, agentId };
+	return { kind: "bound", session, agentId, rootAgentId: rootAgentOf(host, agentId) };
 }
 
 export function recheckBinding(binding: HostBindingState, ctx: BindingContext): HostBindingState {

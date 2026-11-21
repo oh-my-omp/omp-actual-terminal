@@ -13,7 +13,7 @@ export interface MonitorListener {
 	end(): void;
 }
 export interface MonitorSession {
-	readonly id: number;
+	readonly id: string;
 	readonly title: string;
 	readonly hasExited: boolean;
 	readonly exitCode: number | null;
@@ -45,8 +45,8 @@ export interface MonitorStatus {
 export class MonitorError extends Error {
 	constructor(
 		readonly code:
-			| "unknown_session"
-			| "session_not_running"
+			| "unknown_job"
+			| "job_not_running"
 			| "invalid_condition"
 			| "invalid_judge"
 			| "invalid_judge_interval_ms"
@@ -307,7 +307,7 @@ export class MonitorSubscription implements MonitorListener {
 		} else {
 			return;
 		}
-		const identity = { sessionId: this.session.id, title: this.session.title, terminalUrl: this.session.terminalUrl, logPath: this.session.logPath };
+		const identity = { jobId: this.session.id, title: this.session.title, terminalUrl: this.session.terminalUrl, logPath: this.session.logPath };
 		this.sending = true;
 		void this.send({ identity, body }, () => this.active && this.isCurrent(this)).then((outcome) => {
 			this.sending = false;

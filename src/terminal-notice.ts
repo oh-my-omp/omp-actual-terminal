@@ -5,7 +5,7 @@ import { DEFAULT_NOTICE_TEMPLATE, DEFAULT_STOP_CONFIG, fillTemplate, type Notice
 import type { StopReason } from "./stop-reasons.ts";
 
 export interface TerminalIdentity {
-	readonly sessionId: number;
+	readonly jobId: string;
 	readonly title: string;
 	readonly terminalUrl: string | undefined;
 	readonly logPath: string | undefined;
@@ -103,7 +103,7 @@ export interface TerminalNotice {
 }
 
 export interface NoticeDetails {
-	readonly session_id: number;
+	readonly job_id: string;
 	readonly title: string;
 	readonly kind: NoticeKind;
 	readonly reason: string;
@@ -342,8 +342,8 @@ export function describeNotice(body: NoticeBody, localized = false): Described {
 						`已回收：${returned}反悔期内未再次读取`,
 					),
 					lines: [t(
-						`${body.cause.killed ? "Remaining processes killed. " : ""}session_id is gone; the terminal and log_path stay readable.`,
-						`${body.cause.killed ? "剩余进程已结束。 " : ""}session_id 已消失；终端和 log_path 仍可读取。`,
+						`${body.cause.killed ? "Remaining processes killed. " : ""}job_id is gone; the terminal and log_path stay readable.`,
+						`${body.cause.killed ? "剩余进程已结束。 " : ""}job_id 已消失；终端和 log_path 仍可读取。`,
 					)],
 					actionable: false,
 				};
@@ -353,8 +353,8 @@ export function describeNotice(body: NoticeBody, localized = false): Described {
 						`已回收：${returned}会话上限（${body.cause.cap}）按最近最少使用规则淘汰了它`,
 					),
 					lines: [t(
-						`${body.cause.signalled ? "Processes sent SIGTERM. " : ""}session_id is gone; the terminal and log_path stay readable.`,
-						`${body.cause.signalled ? "进程已收到 SIGTERM。 " : ""}session_id 已消失；终端和 log_path 仍可读取。`,
+						`${body.cause.signalled ? "Processes sent SIGTERM. " : ""}job_id is gone; the terminal and log_path stay readable.`,
+						`${body.cause.signalled ? "进程已收到 SIGTERM。 " : ""}job_id 已消失；终端和 log_path 仍可读取。`,
 					)],
 					actionable: false,
 				};
@@ -365,18 +365,18 @@ export function describeNotice(body: NoticeBody, localized = false): Described {
 
 function buildNoticeMessageForLocale(notices: readonly TerminalNotice[], localized: boolean, template: string): NoticeMessage {
 	const t = (en: string, zh: string): string => localized ? tr(en, zh) : en;
-	const groups = new Map<number, { identity: TerminalIdentity; described: Described[] }>();
+	const groups = new Map<string, { identity: TerminalIdentity; described: Described[] }>();
 	const details: NoticeDetails[] = [];
 	for (const { identity, body } of notices) {
 		const described = describeNotice(body, localized);
-		const group = groups.get(identity.sessionId);
+		const group = groups.get(identity.jobId);
 		if (group) {
 			group.identity = identity;
 			group.described.push(described);
-		} else groups.set(identity.sessionId, { identity, described: [described] });
+		} else groups.set(identity.jobId, { identity, described: [described] });
 		const title = oneLine(identity.title, MAX_TITLE_CHARS);
 		details.push({
-			session_id: identity.sessionId,
+			job_id: identity.jobId,
 			title,
 			kind: body.kind,
 			reason: described.reason,
@@ -394,7 +394,7 @@ function buildNoticeMessageForLocale(notices: readonly TerminalNotice[], localiz
 	const items: string[] = [];
 	let actionable = false;
 	for (const { identity, described } of groups.values()) {
-		items.push(`- session_id=${identity.sessionId} title=${JSON.stringify(oneLine(identity.title, MAX_TITLE_CHARS))}`);
+		items.push(`- job_id=${identity.jobId} title=${JSON.stringify(oneLine(identity.title, MAX_TITLE_CHARS))}`);
 		for (const notice of described) {
 			actionable ||= notice.actionable;
 			items.push(`  • ${notice.reason}`);
@@ -429,10 +429,10 @@ export function buildNoticeMessage(notices: readonly TerminalNotice[], template:
 function noticeFromDetails(value: unknown): TerminalNotice | undefined {
 	if (typeof value !== "object" || value === null) return undefined;
 	const record = value as Record<string, unknown>;
-	if (typeof record.session_id !== "number" || typeof record.title !== "string" || typeof record.body !== "object" || record.body === null) return undefined;
+	if (typeof record.job_id !== "string" || typeof record.title !== "string" || typeof record.body !== "object" || record.body === null) return undefined;
 	return {
 		identity: {
-			sessionId: record.session_id,
+			jobId: record.job_id,
 			title: record.title,
 			terminalUrl: typeof record.terminal_url === "string" ? record.terminal_url : undefined,
 			logPath: typeof record.log_path === "string" ? record.log_path : undefined,
@@ -505,7 +505,7 @@ export interface NoticeGate {
 	config(): StopConfig;
 	detect(config: StopConfig, input: StopInput, signal: AbortSignal): Promise<StopVerdict>;
 	collect(): Promise<void>;
-	tracked(sessionId: number): boolean;
+	tracked(jobId: string): boolean;
 	verdict(verdict: StopVerdict): void;
 }
 
@@ -556,7 +556,7 @@ export class NoticeDispatcher {
 	submit(notice: TerminalNotice, current: () => boolean = () => true): Promise<NoticeOutcome> {
 		if (this.stopped) return Promise.resolve("dropped");
 		return new Promise((resolve) => {
-			const key = notice.body.kind === "input_wait" ? `${notice.identity.sessionId}:input_wait` : `#${this.sequence++}`;
+			const key = notice.body.kind === "input_wait" ? `${notice.identity.jobId}:input_wait` : `#${this.sequence++}`;
 			const existing = this.pending.get(key);
 			if (existing) {
 				existing.notice = notice;
@@ -672,7 +672,7 @@ export class NoticeDispatcher {
 			if (verdict.kind === "done") {
 				try { await gate.collect(); } catch { /* a terminal that could not be reclaimed keeps its notices */ }
 				if (this.stopped) return;
-				this.dropWhere((entry) => !gate.tracked(entry.notice.identity.sessionId) && !isTerminalProblem(entry.notice.body.kind));
+				this.dropWhere((entry) => !gate.tracked(entry.notice.identity.jobId) && !isTerminalProblem(entry.notice.body.kind));
 			}
 			if (generation !== this.generation) return;
 			this.phase = { kind: "stopped", stop: verdict.kind === "done" ? { kind: "done" } : { kind: "settled" } };

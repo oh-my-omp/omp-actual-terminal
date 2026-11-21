@@ -23,7 +23,7 @@ export class TerminalResourceError extends Error {
 	}
 }
 
-export function registerTerminal(id: number, screen: TerminalScreen, onRead?: () => void): string {
+export function registerTerminal(id: string, screen: TerminalScreen, onRead?: () => void): string {
 	const key = `${id}-${randomUUID()}`;
 	terminalRegistry.resources.set(key, { kind: "live", screen, onRead });
 	return key;

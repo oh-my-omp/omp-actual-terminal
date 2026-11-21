@@ -1,6 +1,6 @@
 import type { MonitorStatus } from "./monitor-subscription.ts";
 
 export type MonitorScriptResult =
-	| { session_id: number; status: "started"; monitor: MonitorStatus }
-	| { session_id: number; status: "cancelled" | "not_monitored" }
-	| { session_id: number; status: "error"; code: string; message: string };
+	| { job_id: string; status: "started"; monitor: MonitorStatus }
+	| { job_id: string; status: "cancelled" | "not_monitored" }
+	| { job_id: string; status: "error"; code: string; message: string };

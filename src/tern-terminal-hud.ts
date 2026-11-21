@@ -71,7 +71,7 @@ export type TerminalState =
 	  };
 
 export interface TerminalSummary {
-	readonly id: number;
+	readonly id: string;
 	readonly title: string;
 	readonly command: string;
 	readonly script: string;
@@ -145,14 +145,12 @@ function elapsedMs(entry: TerminalSummary, now: number): number {
 	return Math.max(0, Math.round(end - entry.startedAt));
 }
 
-function itemId(id: number): string {
+function itemId(id: string): string {
 	return `s${id}`;
 }
 
-function parseItemId(item: unknown): number | undefined {
-	if (typeof item !== "string" || !/^s\d+$/.test(item)) return undefined;
-	const id = Number(item.slice(1));
-	return Number.isSafeInteger(id) ? id : undefined;
+function parseItemId(item: unknown): string | undefined {
+	return typeof item === "string" && item.length > 1 && item.startsWith("s") ? item.slice(1) : undefined;
 }
 
 export function describeTerminalSegment(count: number, running: number): NativeNode {
@@ -243,7 +241,7 @@ function describeListItem(entry: TerminalSummary, now: number): NativeNode {
 			value: [{ t: elapsed, s: "mono" }],
 			icon: "terminal",
 			tone: look.tone,
-			title: `${entry.title}\n${entry.command}\n${look.label} · exec · #${entry.id}`,
+			title: `${entry.title}\n${entry.command}\n${look.label} · exec · ${entry.id}`,
 			aria: tr(
 				`${entry.title}, ${look.label.toLowerCase()}, ${elapsed}`,
 				`${entry.title}，${look.label}，${elapsed}`,
@@ -276,7 +274,7 @@ function describeDetail(entry: TerminalEntry, now: number): NativeNode {
 				c: [
 					{ k: "text", key: "state", p: { spans: [look.glyph, { t: ` ${look.label}` }], role: "omp.jobs.state", tone: look.tone, wrap: "none" } },
 					{ k: "elapsed", key: "age", p: { age, ...(running ? {} : { stopped: age }), format: "short", role: "omp.jobs.age", title: running ? tr("Running for", "运行时长") : tr("Ran for", "运行时长") } },
-					{ k: "text", key: "id", p: { spans: [{ t: `exec · #${entry.id}`, s: "mono" }], role: "omp.jobs.id", wrap: "none", truncate: "end" } },
+					{ k: "text", key: "id", p: { spans: [{ t: `exec · ${entry.id}`, s: "mono" }], role: "omp.jobs.id", wrap: "none", truncate: "end" } },
 					SPACER,
 					...(running ? [actionButton(tr("Kill", "结束"), KILL_ACTION, "x", "error")] : []),
 					actionButton(tr("Open", "打开"), OPEN_TERMINAL_ACTION, "enter"),
@@ -355,13 +353,13 @@ export function describeTerminalsSheet(
 	};
 }
 
-export function terminalPageFrame(entry: TerminalSummary | undefined, id: number): Readonly<Record<string, unknown>> {
+export function terminalPageFrame(entry: TerminalSummary | undefined, id: string): Readonly<Record<string, unknown>> {
 	return {
 		role: "omp.overlay.console",
 		size: "full",
 		head: [
 			{ t: tr("Terminals · ", "终端 · "), s: "muted" },
-			{ t: `#${id} ` },
+			{ t: `${id} ` },
 			...(entry ? [{ t: entry.title }, { t: "  " }, { t: stateText(entry.state), s: stateTone(entry.state) }] : [{ t: tr("removed", "已移除"), s: "muted" }]),
 		],
 	};
@@ -410,7 +408,7 @@ export function describeTerminalPage(entry: TerminalEntry | undefined): NativeNo
 }
 
 function sortedSessions(store: SessionStore): ExecSession[] {
-	return store.values().sort((a, b) => a.id - b.id);
+	return store.values().sort((a, b) => a.startedAt - b.startedAt);
 }
 
 function summaryOf(session: ExecSession | undefined): TerminalSummary | undefined {
@@ -424,7 +422,7 @@ function entryOf(session: ExecSession | undefined): TerminalEntry | undefined {
 
 type HudEvent =
 	| { readonly kind: "action"; readonly act: string }
-	| { readonly kind: "select"; readonly id: number; readonly activate: boolean };
+	| { readonly kind: "select"; readonly id: string; readonly activate: boolean };
 
 function parseHudEvent(event: unknown): HudEvent | undefined {
 	if (typeof event !== "object" || event === null || !("type" in event)) return undefined;
@@ -436,9 +434,9 @@ function parseHudEvent(event: unknown): HudEvent | undefined {
 	return undefined;
 }
 
-export type KillSession = (id: number) => Promise<boolean>;
+export type KillSession = (id: string) => Promise<boolean>;
 
-export type SheetResult = { readonly kind: "closed" } | { readonly kind: "open"; readonly id: number };
+export type SheetResult = { readonly kind: "closed" } | { readonly kind: "open"; readonly id: string };
 
 interface RenderTarget {
 	requestRender(): void;
@@ -549,13 +547,13 @@ export function wrapHudPills(prototype: HudPillsPrototype): void {
 }
 
 class SessionWatch {
-	private readonly watches = new Map<number, { readonly exit: () => void; screen: (() => void) | undefined }>();
+	private readonly watches = new Map<string, { readonly exit: () => void; screen: (() => void) | undefined }>();
 	private readonly unsubscribeStore: () => void;
 
 	constructor(
 		private readonly store: SessionStore,
 		private readonly changed: () => void,
-		private readonly shown?: () => number | undefined,
+		private readonly shown?: () => string | undefined,
 	) {
 		this.unsubscribeStore = store.subscribe(() => {
 			this.sync();
@@ -567,7 +565,7 @@ class SessionWatch {
 	sync(): void {
 		const sessions = sortedSessions(this.store);
 		const shownId = this.shown ? (this.shown() ?? sessions[0]?.id) : undefined;
-		const live = new Set<number>();
+		const live = new Set<string>();
 		for (const session of sessions) {
 			live.add(session.id);
 			let watch = this.watches.get(session.id);
@@ -607,14 +605,14 @@ class TerminalsSheet implements Component {
 		return viewFrame();
 	}
 	private described: NativeNode | undefined;
-	private shown: { readonly id: number; readonly revision: number; readonly screen: StyledScreen } | undefined;
+	private shown: { readonly id: string; readonly revision: number; readonly screen: StyledScreen } | undefined;
 	private readonly watch: SessionWatch;
 	private readonly tick: NodeJS.Timeout;
 
 	constructor(
 		private readonly store: SessionStore,
 		private readonly requestRender: () => void,
-		private selectedId: number | undefined,
+		private selectedId: string | undefined,
 		private readonly done: (result: SheetResult) => void,
 		private readonly kill: KillSession,
 	) {
@@ -635,7 +633,7 @@ class TerminalsSheet implements Component {
 		return sessions.find((session) => session.id === this.selectedId) ?? sessions[0];
 	}
 
-	private select(id: number): void {
+	private select(id: string): void {
 		if (id === this.selectedId) return;
 		this.selectedId = id;
 		this.watch.sync();
@@ -721,7 +719,7 @@ class TerminalPage implements Component {
 
 	constructor(
 		private readonly store: SessionStore,
-		private readonly id: number,
+		private readonly id: string,
 		private readonly requestRender: () => void,
 		private readonly back: () => void,
 		private readonly kill: KillSession,
@@ -794,7 +792,7 @@ export function mountTerminalHud(pi: ExtensionAPI, store: () => SessionStore, ho
 		if (!host || sheetOpen) return;
 		sheetOpen = true;
 		try {
-			let selected: number | undefined;
+			let selected: string | undefined;
 			while (ui === host) {
 				const result = await host.custom<SheetResult>(
 					(tui, _theme, _keybindings, done) =>

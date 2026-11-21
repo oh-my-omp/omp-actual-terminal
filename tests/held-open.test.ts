@@ -31,7 +31,7 @@ function spawnShell(cmd: string, workdir: string): ExecSession {
 		cwd: workdir,
 		env: process.env,
 	};
-	const session = ExecSession.spawn(nextId++, opts);
+	const session = ExecSession.spawn(`bg_${nextId++}`, opts);
 	assert.equal(session.failureMessage, null, "spawn must succeed");
 	return session;
 }
@@ -65,7 +65,7 @@ describe("held-open session diagnostics", { skip: IS_WINDOWS }, () => {
 			operation: "bash",
 			wallTimeSec: 1,
 			collected: NO_OUTPUT,
-			sessionId: 7,
+			jobId: "bg_7",
 			exitCode: undefined,
 			signal: null,
 			failure: null,
@@ -79,7 +79,7 @@ describe("held-open session diagnostics", { skip: IS_WINDOWS }, () => {
 			operation: "bash",
 			wallTimeSec: 0.1,
 			collected: NO_OUTPUT,
-			sessionId: undefined,
+			jobId: undefined,
 			exitCode: 0,
 			signal: null,
 			failure: null,

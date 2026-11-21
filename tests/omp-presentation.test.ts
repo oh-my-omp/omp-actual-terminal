@@ -67,7 +67,7 @@ const processInput: FinalizeProcessInput = {
 	operation: "bash",
 	wallTimeSec: 0.25,
 	collected: finalScreen("last output\n"),
-	sessionId: undefined,
+	jobId: undefined,
 	exitCode: 0,
 	signal: null,
 	failure: null,
@@ -78,7 +78,7 @@ const killInput: FinalizeKillInput = {
 	wallTimeSec: 0.003,
 	collected: finalScreen("last output\n"),
 	totalBytes: 12,
-	sessionId: 1,
+	jobId: "bg_1",
 	pid: 45828,
 	requestedSignal: "SIGTERM",
 	exitCode: undefined,
@@ -135,7 +135,7 @@ describe("omp shell result presentation", () => {
 				operation,
 				status: "running",
 				running: true,
-				session_id: 1,
+				job_id: "bg_1",
 				cwd: "/repo",
 				command: "sleep 3; echo done",
 				tool_time_utc: "2026-10-10T11:34:59.455Z",
@@ -144,7 +144,7 @@ describe("omp shell result presentation", () => {
 			assert.equal(view.kind, "backgrounded");
 			assert.deepEqual(toShellResult(view), {
 				content: [{ type: "text", text: "" }],
-				details: { wallTimeMs: 501, async: { state: "running", jobId: "session 1", type: "bash" } },
+				details: { wallTimeMs: 501, async: { state: "running", jobId: "bg_1", type: "bash" } },
 				isError: false,
 			});
 		});
@@ -152,7 +152,7 @@ describe("omp shell result presentation", () => {
 
 	it("presents partial details as streaming without terminal or background metadata", () => {
 		const details = {
-			session_id: 1,
+			job_id: "bg_1",
 			pid: 45842,
 			running: true,
 			total_bytes: 18,
@@ -255,13 +255,13 @@ describe("omp shell result presentation", () => {
 	for (const isError of [false, undefined]) {
 		it(`marks no-such-session kill as an error with outer isError=${isError}`, () => {
 			const view = parseResultView({
-				details: { operation: "kill_session", status: "kill_failed", running: false, session_id: 9, found: false },
-				content: [{ type: "text", text: "No such session: 9" }],
+				details: { operation: "kill_session", status: "kill_failed", running: false, job_id: "bg_9", found: false },
+				content: [{ type: "text", text: "No such terminal: bg_9" }],
 				isError,
 			}, false);
-			assert.deepEqual(view, { kind: "message", text: "No such session: 9", isError: true });
+			assert.deepEqual(view, { kind: "message", text: "No such terminal: bg_9", isError: true });
 			assert.deepEqual(toShellResult(view), {
-				content: [{ type: "text", text: "No such session: 9" }],
+				content: [{ type: "text", text: "No such terminal: bg_9" }],
 				details: {},
 				isError: true,
 			});
@@ -271,12 +271,12 @@ describe("omp shell result presentation", () => {
 	it("preserves thrown-error text and error status without details", () => {
 		const view = parseResultView({
 			details: undefined,
-			content: [{ type: "text", text: "unknown session_id: 999999" }],
+			content: [{ type: "text", text: "unknown job_id: bg_999999" }],
 			isError: true,
 		}, false);
-		assert.deepEqual(view, { kind: "message", text: "unknown session_id: 999999", isError: true });
+		assert.deepEqual(view, { kind: "message", text: "unknown job_id: bg_999999", isError: true });
 		assert.deepEqual(toShellResult(view), {
-			content: [{ type: "text", text: "unknown session_id: 999999" }],
+			content: [{ type: "text", text: "unknown job_id: bg_999999" }],
 			details: {},
 			isError: true,
 		});
@@ -325,18 +325,18 @@ describe("omp shell result presentation", () => {
 
 describe("omp shell argument presentation", () => {
 	it("describes required input, escaped stdin, and base64 byte counts as shell comments", () => {
-		assert.deepEqual(writeStdinShellArgs({ session_id: 1 }), { command: "# stdin → session 1: (input required)" });
-		assert.deepEqual(writeStdinShellArgs({ session_id: 1, chars: "" }), { command: "# stdin → session 1: (input required)" });
-		assert.deepEqual(writeStdinShellArgs({ session_id: 1, chars: "q\n" }), { command: '# stdin → session 1: "q\\n"' });
-		assert.deepEqual(writeStdinShellArgs({ session_id: 1, chars_b64: "aGk=" }), { command: "# stdin → session 1: 2 bytes" });
-		assert.deepEqual(writeStdinShellArgs({}), { command: "# stdin → session ?: (input required)" });
-		assert.deepEqual(writeStdinShellArgs(undefined), { command: "# stdin → session ?: (input required)" });
+		assert.deepEqual(writeStdinShellArgs({ job_id: "bg_1" }), { command: "# stdin → bg_1: (input required)" });
+		assert.deepEqual(writeStdinShellArgs({ job_id: "bg_1", chars: "" }), { command: "# stdin → bg_1: (input required)" });
+		assert.deepEqual(writeStdinShellArgs({ job_id: "bg_1", chars: "q\n" }), { command: '# stdin → bg_1: "q\\n"' });
+		assert.deepEqual(writeStdinShellArgs({ job_id: "bg_1", chars_b64: "aGk=" }), { command: "# stdin → bg_1: 2 bytes" });
+		assert.deepEqual(writeStdinShellArgs({}), { command: "# stdin → ?: (input required)" });
+		assert.deepEqual(writeStdinShellArgs(undefined), { command: "# stdin → ?: (input required)" });
 	});
 
 	it("describes default and custom kill signals, including streamed missing args", () => {
-		assert.deepEqual(killShellArgs({ session_id: 1 }), { command: "# kill session 1 (SIGTERM)" });
-		assert.deepEqual(killShellArgs({ session_id: 1, signal: "SIGINT" }), { command: "# kill session 1 (SIGINT)" });
-		assert.deepEqual(killShellArgs(undefined), { command: "# kill session ? (SIGTERM)" });
+		assert.deepEqual(killShellArgs({ job_id: "bg_1" }), { command: "# kill bg_1 (SIGTERM)" });
+		assert.deepEqual(killShellArgs({ job_id: "bg_1", signal: "SIGINT" }), { command: "# kill bg_1 (SIGINT)" });
+		assert.deepEqual(killShellArgs(undefined), { command: "# kill ? (SIGTERM)" });
 	});
 });
 

@@ -11,7 +11,7 @@ import { STUB_SESSION, stubShellHost, stubTerminalHost } from "./stub-shell.ts";
 
 interface ExecDetails {
 	exit_code?: number | null;
-	session_id?: number;
+	job_id?: string;
 	output: string;
 	command: string;
 	failure_message?: string;
@@ -42,8 +42,13 @@ function makeHarness(cwd: string, settings: PluginSettingsReader): Harness {
 		getFlag: () => false, getActiveTools: () => ["bash"], setActiveTools() {}, sendMessage() {},
 	};
 	activate(pi as unknown as Parameters<typeof activate>[0], undefined, stubTerminalHost(), undefined, {}, undefined, settings, undefined, stubShellHost);
+	let started = false;
 	const harness: Harness = {
 		async exec(params) {
+			if (!started) {
+				started = true;
+				for (const h of handlers.session_start ?? []) await h({}, ctx);
+			}
 			const result = await tools.bash!.execute("call", { pty: true, title: "init test", yield_time_ms: 10_000, ...params }, undefined, undefined, ctx);
 			return result.details;
 		},
@@ -128,7 +133,7 @@ describe("exec.initFile", () => {
 			const h = makeHarness(root, settings);
 			const r = await h.exec({ command: "touch ran", shell: "bash" });
 			assert.equal(r.failure_message, message, JSON.stringify(r));
-			assert.equal(r.session_id, undefined);
+			assert.equal(r.job_id, undefined);
 			assert.equal(existsSync(join(root, "ran")), false, "nothing may run");
 		}
 	});

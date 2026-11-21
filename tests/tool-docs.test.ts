@@ -71,7 +71,7 @@ test("all six registrations own packaged providers and end with full topic point
 	const bash = tools.get("bash")!;
 	assert.doesNotMatch(bash.description, /30 minutes|screen_changed|Notices name/);
 	assert.match(bashDocumentation.docTopics().terminal, /screen_changed:false/);
-	assert.match(bashDocumentation.docTopics().lifecycle, /Notices name.*session_id.*title/);
+	assert.match(bashDocumentation.docTopics().lifecycle, /notices name a terminal by `job_id` and `title`/);
 });
 
 test("no tool description, field or topic names a tool the plugin no longer registers", () => {
