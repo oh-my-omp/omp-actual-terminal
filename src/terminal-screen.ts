@@ -370,6 +370,17 @@ export class TerminalScreen {
 		return { view: this.view(), text: toLines(rows).lines.join("\n") };
 	}
 
+	/** The visible screen once every write so far is parsed; undefined after release. */
+	settledSnapshot(): Promise<TerminalSnapshot | undefined> {
+		const run = this.observeChain.then(async () => {
+			if (this.disposed) return undefined;
+			await this.flushed();
+			return this.snapshot();
+		});
+		this.observeChain = run.catch(() => undefined);
+		return run;
+	}
+
 	inputProbe(): (InputScreen & { readonly revision: number; readonly presented: boolean }) | undefined {
 		if (this.disposed || this.pendingWrites > 0) return undefined;
 		const buffer = this.term.buffer.active;

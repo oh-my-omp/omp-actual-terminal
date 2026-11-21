@@ -270,6 +270,11 @@ export class ExecSession {
 		return this.screen?.snapshot();
 	}
 
+	/** The visible screen once the output read so far is parsed; undefined once the screen is released. */
+	settledSnapshot(): Promise<TerminalSnapshot | undefined> {
+		return this.screen?.settledSnapshot() ?? Promise.resolve(undefined);
+	}
+
 	styledScreen(): StyledScreen | undefined {
 		return this.screen?.styledScreen();
 	}

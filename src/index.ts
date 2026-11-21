@@ -387,6 +387,8 @@ async function runTerminal(
 				}
 				void terminateSessionById(ctx, target.id, "SIGTERM", { kind: "human" }).then(() => updateRunningSessionsUi(ctx));
 			},
+			screen: () => spawned?.liveSnapshot(),
+			settledScreen: () => spawned?.settledSnapshot() ?? Promise.resolve(undefined),
 		});
 	} catch (error) {
 		if (source !== undefined) await rm(source, { force: true });
@@ -406,6 +408,7 @@ async function runTerminal(
 		inputWait: { quietMs: INPUT_WAIT_QUIET_MS, onAlert: (alert) => ctx.coordinator.alertInputWait(alert) },
 	});
 	spawned = session;
+	session.onScreenChange(() => job.screenChanged());
 	// The job ends when the terminal returns: its shell exits, or its terminal closes first.
 	const settleJob = (exit: ShellExit): void => {
 		if (ctx.jobs.get(job.id) === job) ctx.jobs.delete(job.id);

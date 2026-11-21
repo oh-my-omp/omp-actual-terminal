@@ -77,7 +77,7 @@ indexed by concern:
 | Tool-owned topics (`read xd://<tool>/<topic>`) and full-description pointers for all six PTY tools | `src/tool-docs.ts`, `src/topics/*.md`; typed definitions in `src/index.ts` |
 | Session lifecycle (spawn, write, kill, log-stream) | `src/session.ts` |
 | Session registry, LRU eviction, shutdown | `src/session-store.ts` |
-| Terminals as omp jobs: registration before spawn, the job's status at the return, cancels from omp's jobs page; the root agent as owner | `src/terminal-job.ts`; `runTerminal`, `terminateSessionById` and `endRuntime` in `src/index.ts`; `rootAgentOf` in `src/session-binding.ts` |
+| Terminals as omp jobs: registration before spawn, the screen as the job's progress, the job's status and last screen at the return, cancels from omp's jobs page; the root agent as owner | `src/terminal-job.ts`; `runTerminal`, `terminateSessionById` and `endRuntime` in `src/index.ts`; `rootAgentOf` in `src/session-binding.ts` |
 | Per-call observation (`CollectResult`: screen, final screen or none) | `src/collect.ts`; produced by `ExecSession.collect` in `src/session.ts` |
 | Event-driven, monotonic waits: collection, shutdown and kill confirmation | `src/long-wait.ts` |
 | Human duration labels and host UTC time | `src/format-time.ts` |
@@ -440,19 +440,23 @@ reloads of the same version do not.
 
 `@oh-my-pi/pi-coding-agent/async/job-manager` must still export
 `AsyncJobManagerApi` whose `register(type, label, run, {ownerId, process})`
-returns the `bg_N` id, calls `run` with an abort `signal`, and throws its own
-error at the running-job limit; `acknowledgeDeliveries(ids)` must keep a job's
-result out of delivery and out of the run's awaited work, and `cancel(id)`
-must abort `run` and keep the job `cancelled` whatever `run` returns, and
+returns the `bg_N` id, calls `run` with an abort `signal` and a
+`reportProgress(text)` that sets the job's `progressText`, and throws its own
+error at the running-job limit; `run`'s returned text must become the job's
+`resultText` and its thrown message its `errorText`;
+`acknowledgeDeliveries(ids)` must keep a job's result out of delivery and out
+of the run's awaited work, and `cancel(id)` must abort `run` and keep the job
+`cancelled` whatever `run` returns, and
 change nothing for a job that is no longer running. The bound
 AgentSession must still expose `asyncJobManager`, a subagent's being its
 root's, and `AgentRegistry` entries `parentId`. Through real omp, in a main
 agent and a subagent: a terminal's `bash` result must carry `job_id: bg_N`
 that `write_stdin` and `kill_session` accept; the main session's jobs page and
 `/jobs` must list the terminal under its `title`; an exit 0 must show the job
-completed, a non-zero exit failed and `kill_session` cancelled; cancelling the
-job from the jobs page must end the terminal as the Console's End does; and a
-running terminal alone must not keep the run awaiting background work.
+completed, a non-zero exit failed and `kill_session` cancelled, each with the
+last screen above how it returned; cancelling the job from the jobs page must
+end the terminal as the Console's End does; and a running terminal alone must
+not keep the run awaiting background work.
 
 ### Notice delivery, monitors, input waits and lifecycle
 
@@ -547,8 +551,13 @@ compare it on every upgrade. A custom overlay's `nativeOverlay` role and head
 must still reach Tern's overlay frame with `action` events and `handleInput`
 keys reaching the component, and the action ids
 `omp-actual-terminal.terminal.open`, `kill` and `leave` must not be one of
-Tern's own actions (0.9.5 consumes `open`, `copy` and `zoom` itself). Tern
-must still draw `omp.overlay.console` as a full-pane overlay whose `ansi`
+Tern's own actions (0.9.5 consumes `open`, `copy` and `zoom` itself). omp's
+tray (`@oh-my-pi/pi-coding-agent/modes/tray`) must still draw a job card's
+output from the job's `progressText` and open the jobs page on the card's job
+from its Open, and the jobs page's output pane must still read `progressText`
+while the job runs and `resultText`/`errorText` once it settles
+(`inspectAsyncJob` in `session/async-job-views`). Tern must still draw
+`omp.overlay.console` as a full-pane overlay whose `ansi`
 fills the height its action bar leaves under `grow` and a fractional `max.h`
 and scrolls inside itself. Tern's `plugin list --json` (`plugins[].id`),
 `remove ID --json`, its exact `is linked; use unlink` answer and
@@ -562,7 +571,10 @@ windows, not in `tern serve`) with the owner's settings, isolated
 and a background bash job, at 1100×850 and 700px width, with a light and a
 dark appearance (`palette "Dark appearance"`; `theme dark NAME` only picks the
 dark theme), both with no Tern plugin and with omp-todo-more's extension and
-Tern plugin. omp's jobs page must offer Open (`o` and a button before Cancel
+Tern plugin. A terminal's tray card, its closer look and the jobs page's output
+pane must show its current screen and follow a change within a second; the
+card's Open must show the jobs page with the terminal selected. omp's jobs page
+must offer Open (`o` and a button before Cancel
 job) on a selected terminal job, a subagent's included, and on no other job.
 Open must close the page and show the full-pane Console with the terminal's
 history, typed keys reaching a running `cat`, and the terminal's grid

@@ -55,6 +55,7 @@ Console 都遵循 `OMOMP_LANG`（不区分大小写的 `en` 或 `zh`）。未设
 
 当 omp 在 Tern 里原生渲染时：
 
+- **tray 与 jobs 页面上的屏幕。** 每个终端的 job 都带着它的当前屏幕，屏幕变化后半秒内更新：tray 卡片显示最后几行，卡片的展开预览显示更多行，jobs 页面的输出区显示整屏。终端返回后，jobs 页面显示它的最后一屏，后接它的返回方式。tray 卡片的 Open 进入 jobs 页面并选中这个终端。
 - **从 jobs 页面打开。** omp 的 jobs 页面把每个终端列为一个 job。选中一个终端（包括子 agent 的终端）时，它的状态行在 Cancel job 之前提供「打开」（按键 `o`）；其他 job 只有 omp 自己的动作。
 - **Console。** 「打开」会关闭 jobs 页面，把终端显示为全屏页，框架与 omp 自己的 Console 相同，题头是 job id、标题和状态：显示保留的历史和当前屏幕，带颜色，跟随新输出，并可向上回滚。键入的按键按 omp 的 Console 的方式发给终端，模型能看到效果；模型用 `write_stdin` 写入的内容也立即显示在这里。Esc /「离开」关闭 Console，终端继续运行；「结束」按人工结束处理这个终端，它的 job 显示为已取消。
 - **尺寸。** Console 打开期间，终端采用 Console 的网格，模型此时读到的也是这个网格；离开后，终端恢复为其调用启动它时的 `cols`/`rows`。
@@ -614,7 +615,7 @@ src/
 ├── index.ts              # tool registration, event handlers
 ├── session.ts            # ExecSession: spawn, read, write, kill, log file, state
 ├── session-store.ts      # SessionStore + LRU eviction
-├── terminal-job.ts       # a terminal as an omp job: registration, its status at the return, cancels from omp
+├── terminal-job.ts       # a terminal as an omp job: registration, its screen as progress, its status and last screen at the return, cancels from omp
 ├── collect.ts            # CollectResult: screen, final screen or none
 ├── long-wait.ts          # event-driven waits (collection, shutdown, kill)
 ├── format-time.ts        # elapsed labels and host UTC time

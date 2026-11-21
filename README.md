@@ -137,6 +137,12 @@ results remain in English.
 
 When omp renders natively in Tern:
 
+- **The screen in the tray and on the jobs page.** Each terminal's job
+  carries its current screen, updated within half a second of a change: the
+  tray card shows its last lines, the card's closer look more of them, and
+  the jobs page's output pane the whole screen. Once the terminal returns,
+  the jobs page shows its last screen followed by how it returned. The tray
+  card's Open goes to the jobs page with that terminal selected.
 - **Open from the jobs page.** omp's jobs page lists every terminal as a job.
   With a terminal selected, a subagent's included, its status row offers Open
   (key `o`) before Cancel job; every other job keeps only omp's own actions.
@@ -1065,7 +1071,7 @@ src/
 ├── index.ts              # tool registration, event handlers
 ├── session.ts            # ExecSession: spawn, read, write, kill, log file, state
 ├── session-store.ts      # SessionStore + LRU eviction
-├── terminal-job.ts       # a terminal as an omp job: registration, its status at the return, cancels from omp
+├── terminal-job.ts       # a terminal as an omp job: registration, its screen as progress, its status and last screen at the return, cancels from omp
 ├── collect.ts            # CollectResult: screen, final screen or none
 ├── long-wait.ts          # event-driven waits (collection, shutdown, kill)
 ├── format-time.ts        # elapsed labels and host UTC time
