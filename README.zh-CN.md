@@ -74,18 +74,18 @@ omp 的 ANSI TUI 没有 jobs 页面，因此不提供 Console。工具结果仍�
 
 schema 是 omp 自己的 `bash` schema 加上下表的终端字段，在每个会话里都一样：主 agent、子 agent 和 `omp -p`，有没有界面都是如此。说明文字是 omp 自己的 `bash` 说明，后接终端的说明。
 
-六个工具都是 omp 的顶层工具（`loadMode: "essential"`），不是 `xd://` 设备。
-用 `read xd://<tool>` 查看六个工具各自的精简说明与 topic 指针。
+六个工具都是 omp 的顶层工具（`loadMode: "essential"`），不挂成工具命令。
+每个工具的说明末尾都列出了各自的 topic 指针，`read help://<tool>` 可以列出该工具的全部 topic 地址。
 每个工具通过自己的 `docTopics()` 提供正文：
 
-- `xd://bash/terminal`：终端的 shell、调用的返回、输入字节、输出监控与远程脚本引用。
-- `xd://bash/lifecycle`：终端回收与退出唤醒。
-- `xd://bash/waiting`：终端生命期、仅等待完成的 monitor 与不消费输出的读取。
-- `xd://write_stdin/input`：原样输入、空输入拒绝、取消与观察到退出。
-- `xd://set_on_exit/wake`：启用、解除与已排队的退出唤醒。
-- `xd://monitor/subscription`：后续输出匹配、judge monitor、取消、提醒与等待输入通知。
-- `xd://kill_session/termination`：信号、唤醒/monitor 取消与终端保留。
-- `xd://list_sessions/inventory`：列表状态、输出读取与退出唤醒的影响。
+- `help://bash/terminal`：终端的 shell、调用的返回、输入字节、输出监控与远程脚本引用。
+- `help://bash/lifecycle`：终端回收与退出唤醒。
+- `help://bash/waiting`：终端生命期、仅等待完成的 monitor 与不消费输出的读取。
+- `help://write_stdin/input`：原样输入、空输入拒绝、取消与观察到退出。
+- `help://set_on_exit/wake`：启用、解除与已排队的退出唤醒。
+- `help://monitor/subscription`：后续输出匹配、judge monitor、取消、提醒与等待输入通知。
+- `help://kill_session/termination`：信号、唤醒/monitor 取消与终端保留。
+- `help://list_sessions/inventory`：列表状态、输出读取与退出唤醒的影响。
 
 Markdown 文件随包放在 `src/topics/`；读取 topic 不依赖外部配置扩展。
 不存在的 topic 返回缺失 topic 错误。

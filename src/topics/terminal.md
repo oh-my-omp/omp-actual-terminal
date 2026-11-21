@@ -12,7 +12,7 @@
 - An empty payload is rejected (`empty_poll_removed`): to read without writing, read `terminal_url`; to wait, use `monitor`.
 - `chars` takes C-style escapes (`\xHH`, `\uHHHH`, `\u{H…}`, `\n`, `\r`, `\t`, `\0`, `\a`, `\e`, `\b`, `\f`, `\v`, `\\`, `\"`; an unknown `\X` stays literal). `chars_b64` sends raw bytes. They are mutually exclusive.
 - `yield_time_ms` on `write_stdin` is an attachment window, not a process timeout.
-- `monitor` with a `condition` (JavaScript regex source, no `/` delimiters) wakes you for each batch matching it, up to `max_returns` (default 10); `notify` on the `bash` call starts the same monitor. With `judge` instead, a judge model checks each new screen against your stated intent every `judge_interval_ms` (default 60 s) and each met screen wakes you; see `xd://monitor/subscription`. With neither it wakes once when the terminal ends.
+- `monitor` with a `condition` (JavaScript regex source, no `/` delimiters) wakes you for each batch matching it, up to `max_returns` (default 10); `notify` on the `bash` call starts the same monitor. With `judge` instead, a judge model checks each new screen against your stated intent every `judge_interval_ms` (default 60 s) and each met screen wakes you; see `help://monitor/subscription`. With neither it wakes once when the terminal ends.
 - It observes without consuming: only output produced after the call counts, and matches coalesce for about 250 ms. `kill_session` or a session reset ends it silently, and delivered follow-ups cannot be recalled.
 - `remind_after_ms` (default 20 minutes) sends one reminder quoting the current screen; it neither counts toward `max_returns` nor ends the monitor, and a return restarts it. On that reminder, read the terminal, answer the prompt with `write_stdin`, call `monitor` again, or `action: "cancel"`.
 - A terminal that settles on an unseen input prompt raises an input-wait alert with or without a monitor.
@@ -22,4 +22,4 @@
 
 For a remote or container script, write `ssh host bash -s <<'EOF'` in `command` with the script as the quoted here-document body: moving the same quoted string into `command` keeps the extra quote layer. `command` is passed unchanged to the terminal's shell; use that shell's syntax.
 
-See `xd://bash/lifecycle` for terminal lifetime and exit wakes, and `xd://bash/waiting` for completion-only waits.
+See `help://bash/lifecycle` for terminal lifetime and exit wakes, and `help://bash/waiting` for completion-only waits.
