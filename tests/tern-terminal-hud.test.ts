@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it, type TestContext } from "node:test";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui";
+import { getKeybindings, KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
 import { JobsSheet, type JobsPanelJob, type JobsSheetSource } from "@oh-my-pi/pi-tui/overlays/jobs-panel";
 import {
 	decorateJobsPage,
@@ -325,6 +326,20 @@ describe("Open on omp's jobs page", () => {
 		await h.customCalls[1]!.promise;
 		assert.equal(terminal.hasExited, false, "leaving does not end the terminal");
 		assert.deepEqual(h.killCalls, []);
+	});
+
+	it("closes the jobs page through its own Close action when the person rebound its close key", async (t) => {
+		const previous = getKeybindings();
+		setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, { "tui.select.cancel": "q" }));
+		t.after(() => setKeybindings(previous));
+		const h = await makeHarness(t);
+		const terminal = h.spawn();
+		const rebound = h.sheet([job(terminal.id)], terminal.id);
+		rebound.sheet.handleInput("o");
+		assert.equal(h.customCalls.length, 1, "the Console opens");
+		assert.equal(rebound.calls.closed, 1, "the jobs page closes although Esc no longer closes it");
+		h.page.handleNativeEvent(action(LEAVE_ACTION));
+		await h.customCalls[0]!.promise;
 	});
 
 	it("opens a subagent's terminal in the session that has a UI and ends it through its own activation", async (t) => {

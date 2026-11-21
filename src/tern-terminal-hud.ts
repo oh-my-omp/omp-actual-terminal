@@ -450,8 +450,8 @@ export function wrapJobsSheet(prototype: JobsSheetPrototype): void {
 		const id = registry.selected.get(sheet);
 		if (id === undefined) return false;
 		const opened = openTerminalPage(id);
-		// Esc is the page's own close; the Console takes the focus the page had.
-		if (opened) handleInput.call(sheet, "\x1b");
+		// The page's own Close action, whatever key closes it; the Console takes the focus the page had.
+		if (opened) handleNativeEvent.call(sheet, { type: "action", key: "", act: "close", mods: [] });
 		return opened;
 	};
 	prototype.describe = function (this: JobsSheetPrototype, cx: DescribeContext): NativeNode {

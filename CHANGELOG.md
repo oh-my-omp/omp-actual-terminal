@@ -18,7 +18,7 @@ All notable changes to this project. **Newest entries go on top.**
 ### Added
 
 - Showed each terminal's current screen as its job's progress in omp's tray and jobs page, updated within half a second of a change, and its last screen followed by how it returned once the terminal settled
-- Added an Open action on omp's jobs page that opens a terminal in a full Console view
+- Added an Open action on omp's jobs page that opens a terminal in a full Console view and closes the page through its own Close action, whatever key closes it
 - Registered each terminal as an omp background job under its title in the root agent's job manager, counting toward `async.maxJobs` so a call at the limit fails
 - Surfaced terminals on omp's jobs page, where cancelling a job ends the terminal and marks its job cancelled
 - Let terminals without `shell` read a bound session's attached images through their `attachment://` paths

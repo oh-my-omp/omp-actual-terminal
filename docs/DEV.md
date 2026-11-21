@@ -542,8 +542,9 @@ propagate its rejection.
 prototype holds `describe`, `handleInput` and `handleNativeEvent`; its
 `describe` must still key the selected job's detail (role `omp.jobs.detail`)
 by `stableKey(job id)` and put a spacer before Cancel job in its status row
-(role `omp.jobs.status`), and its Esc must still close the page through its
-source. `@oh-my-pi/pi-tui/native/overlay` must still export
+(role `omp.jobs.status`), and its `close` action must still close the page
+through its source whatever key `tui.select.cancel` is bound to.
+`@oh-my-pi/pi-tui/native/overlay` must still export
 `actionButton`/`actionBar`, and `@oh-my-pi/pi-tui/tools/bash-interactive`
 `normalizeInputForPty(data, applicationCursorKeys)`. The Console insets the
 terminal's grid 8 columns from the sheet as omp's own Console does
