@@ -12,7 +12,7 @@ import { type AgentHost, type AgentIdentity, type ParkedRuntime, parkedRuntimes 
 import { type ActivatedExtension, withHostPresentation } from "./omp-presentation.ts";
 import {
 	bashParameters, type BashSchema, DEFAULT_TERMINAL_YIELD_MS, MAX_PTY_COLS, MAX_PTY_ROWS, MAX_YIELD_TIME_MS, MIN_PTY_COLS, MIN_PTY_ROWS, MIN_YIELD_TIME_MS,
-	parseBashCall, StringEnum, type TerminalRequest,
+	parseBashCall, type TerminalRequest,
 } from "./bash-tool.ts";
 import type { NativeBash, SessionSeed, TerminalHost } from "./terminal-host.ts";
 import {
@@ -1350,10 +1350,9 @@ export function activate(
 
 	const setOnExitParameters = Type.Object({
 		session_id: Type.Number({ description: "Session id from a bash pty call." }),
-		on_exit: StringEnum(
-			["none", "wake"] as const,
-			'"none": disarm (also after eviction) as soon as auto-resume is unwanted. "wake": arm auto-resume while running, only when the human explicitly asked.',
-		),
+		on_exit: Type.Enum(["none", "wake"], {
+			description: '"none": disarm (also after eviction) as soon as auto-resume is unwanted. "wake": arm auto-resume while running, only when the human explicitly asked.',
+		}),
 	});
 	pi.registerTool({
 		name: "set_on_exit",
@@ -1404,7 +1403,7 @@ export function activate(
 
 	const monitorParameters = Type.Object({
 		session_id: Type.Number({ description: "Existing running session id." }),
-		action: Type.Optional(StringEnum(["start", "cancel"] as const, "start (default) establishes or replaces; cancel removes silently.")),
+		action: Type.Optional(Type.Enum(["start", "cancel"], { description: "start (default) establishes or replaces; cancel removes silently." })),
 		condition: Type.Optional(Type.String({ description: "JavaScript regex source without / delimiters. Omit both condition and judge to await completion only." })),
 		judge: Type.Optional(Type.String({ description: "Intent the judge checks each new screen against, e.g. \"the server is ready to accept requests\"; each screen judged met wakes you. Excludes condition." })),
 		judge_interval_ms: Type.Optional(Type.Number({ description: "With judge: time between judgments; default 60000, integer 1–2147483647. An unchanged screen is not judged again." })),

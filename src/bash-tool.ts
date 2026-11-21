@@ -1,4 +1,4 @@
-import { Type, type Static, type TSchema, type TUnsafe } from "@oh-my-pi/omptype/typebox";
+import { Type, type Static, type TSchema } from "@oh-my-pi/omptype/typebox";
 
 import type { OnExitPolicy } from "./completion.ts";
 import { DEFAULT_PTY_COLS, DEFAULT_PTY_ROWS } from "./pty.ts";
@@ -11,11 +11,6 @@ export const MIN_PTY_COLS = 20;
 export const MAX_PTY_COLS = 500;
 export const MIN_PTY_ROWS = 5;
 export const MAX_PTY_ROWS = 300;
-
-/** A TypeBox literal union (anyOf/const) breaks Google models. */
-export function StringEnum<T extends readonly string[]>(values: T, description: string): TUnsafe<T[number]> {
-	return Type.Unsafe<T[number]>({ type: "string", enum: values as unknown as string[], description });
-}
 
 const PTY_ONLY = "Only with `pty: true`";
 
@@ -43,10 +38,9 @@ const baseFields = {
 	yield_time_ms: Type.Optional(Type.Number({
 		description: `${PTY_ONLY}: how long (ms) this call waits for output before returning. Default ${DEFAULT_TERMINAL_YIELD_MS}, clamped to [${MIN_YIELD_TIME_MS}, ${MAX_YIELD_TIME_MS}].`,
 	})),
-	on_exit: Type.Optional(StringEnum(
-		["none", "wake"] as const,
-		`${PTY_ONLY}: "none" (default). "wake": resume you once when the process exits unobserved; only when the human explicitly asks, never for servers or watchers. A tool result observing the exit consumes it; set_on_exit changes it.`,
-	)),
+	on_exit: Type.Optional(Type.Enum(["none", "wake"], {
+		description: `${PTY_ONLY}: "none" (default). "wake": resume you once when the process exits unobserved; only when the human explicitly asks, never for servers or watchers. A tool result observing the exit consumes it; set_on_exit changes it.`,
+	})),
 };
 
 const serviceFields = {
@@ -114,9 +108,10 @@ export function parseBashCall(input: unknown): BashCall {
 		const stray = TERMINAL_FIELDS.filter((field) => params[field] !== undefined);
 		if (stray.length > 0) {
 			const fields = stray.map((field) => `\`${field}\``).join(", ");
+			const [applies, them] = stray.length === 1 ? ["applies", "it"] : ["apply", "them"];
 			throw new Error(service === undefined
-				? `bash: ${fields} only apply with \`pty: true\`; drop them, or set \`pty: true\` to open a terminal.`
-				: `bash: ${fields} only apply to a terminal (\`pty: true\` without \`name\`); a named service takes none of them.`);
+				? `bash: ${fields} only ${applies} with \`pty: true\`; drop ${them}, or set \`pty: true\` to open a terminal.`
+				: `bash: ${fields} only ${applies} to a terminal (\`pty: true\` without \`name\`); a named service takes none of these fields.`);
 		}
 		return { kind: "native", params };
 	}

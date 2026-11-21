@@ -1061,8 +1061,10 @@ describe("bash without a terminal", () => {
 		await h.emit("session_start");
 		try {
 			await assert.rejects(h.call("bash", { command: "echo x", title: "t", yield_time_ms: 10 }), /`title`, `yield_time_ms` only apply with `pty: true`/);
-			await assert.rejects(h.call("bash", { command: "x", pty: true, name: "svc", shell: "/bin/sh" }), /`shell` only apply to a terminal/);
+			await assert.rejects(h.call("bash", { command: "echo x", title: "t" }), /`title` only applies with `pty: true`; drop it,/);
+			await assert.rejects(h.call("bash", { command: "x", pty: true, name: "svc", shell: "/bin/sh" }), /`shell` only applies to a terminal/);
 			await assert.rejects(h.call("bash", { command: "echo x", workdir: "/" }), /bash: /);
+			await assert.rejects(h.call("bash", { command: "echo x", pty: true, title: "t", on_exit: "always" }), /on_exit/);
 		} finally {
 			await h.emit("session_shutdown");
 		}

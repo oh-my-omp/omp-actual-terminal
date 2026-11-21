@@ -26,6 +26,10 @@ All notable changes to this project. **Newest entries go on top.**
 
 - Switched host integration to the `@oh-my-pi/pi-*` packages and dropped the `@earendil-works` path aliases
 
+### Fixed
+
+- Sent `on_exit` of `bash` and `set_on_exit`, and `action` of `monitor`, to the model with their allowed values and descriptions, and rejected other values; their schemas had reached omp as an unconstrained field
+
 ### Removed
 
 - Detached from `iamwrm/pi-unified-exec`: upstream sync, npm publishing and the fork records are gone
