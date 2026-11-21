@@ -96,7 +96,7 @@ indexed by concern:
 | Shell selection & argv construction; omp's cmd.exe test loaded at factory time | `src/shell.ts`; `src/shell-host.ts` |
 | `exec.initFile` plugin setting: parse, path resolution, the source-then-`eval` script for POSIX shells | `src/exec-init.ts`; omp's POSIX-shell test in `src/shell.ts` (`isPosixShell`); read per call in `runTerminal` (`src/index.ts`); `tests/exec-init.test.ts` |
 | omp-only host admission, top-level `loadMode`, bash delegation, argument/result display adapters | `src/omp-presentation.ts` |
-| Console from omp's jobs page: Open on a terminal job, the full-pane Console, the terminal's size while it is open | `src/console.ts`; `resize` in `src/session.ts`, `src/terminal-screen.ts` and `src/pty.ts` (`SpawnedChild`) |
+| Console from omp's jobs page: Open on a terminal job, the full-pane Console, the terminal's size while it is open | `src/tern-terminal-hud.ts`; `resize` in `src/session.ts`, `src/terminal-screen.ts` and `src/pty.ts` (`SpawnedChild`) |
 | Removal of the `omp-unified-exec` Tern plugin that versions up to 0.14.7 installed | `src/tern-plugin-removal.ts` |
 | `term://` resources, read handler and screenshots | `src/terminal-resource.ts`, `src/terminal-url.ts`, `src/terminal-image.ts` |
 | Monitors: conditions, judge monitors, batching, End/match/judgment/reminder notices | `src/monitor-subscription.ts`; screen judgment through omp's judge chain in `src/screen-judge.ts`, reached per judgment through `RuntimeHost.judge` in `src/index.ts`; subscriptions owned by `src/completion.ts` (`startMonitor`) |
@@ -177,7 +177,7 @@ bun test ./tests/long-wait.test.ts ./tests/wake-e2e.test.ts ./tests/terminal-lif
 bun test ./tests/omp-presentation.test.ts
 
 # Console from omp's real jobs page over real Bun PTY sessions
-bun test ./tests/console.test.ts ./tests/omp-presentation.test.ts
+bun test ./tests/tern-terminal-hud.test.ts ./tests/omp-presentation.test.ts
 ```
 
 ## Writing new tests
@@ -269,8 +269,8 @@ actual omp ANSI TUI and Tern path. A missing or reshaped required omp module
 must fail factory loading before tools register, not fall back to another
 rendering.
 
-The Console and the jobs page's Open: `src/console.ts`, covered by
-`tests/console.test.ts` on omp's real `JobsSheet` and real PTY sessions;
+The Console and the jobs page's Open: `src/tern-terminal-hud.ts`, covered by
+`tests/tern-terminal-hud.test.ts` on omp's real `JobsSheet` and real PTY sessions;
 requalify in a real Tern window as [Tern Console](#tern-console) describes.
 
 ## Debugging aids
@@ -546,7 +546,7 @@ terminal's grid 8 columns from the sheet as omp's own Console does
 compare it on every upgrade. A custom overlay's `nativeOverlay` role and head
 must still reach Tern's overlay frame with `action` events and `handleInput`
 keys reaching the component, and the action ids
-`omp-actual-terminal.console.open`, `end` and `leave` must not be one of
+`omp-actual-terminal.terminal.open`, `kill` and `leave` must not be one of
 Tern's own actions (0.9.5 consumes `open`, `copy` and `zoom` itself). Tern
 must still draw `omp.overlay.console` as a full-pane overlay whose `ansi`
 fills the height its action bar leaves under `grow` and a fractional `max.h`

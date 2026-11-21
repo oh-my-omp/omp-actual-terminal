@@ -1084,7 +1084,7 @@ src/
 ├── shell-host.ts         # omp's cmd.exe test, loaded at factory time
 ├── agent-park.ts         # omp's agent registry/lifecycle reader; parked subagents' terminal runtimes
 ├── session-binding.ts    # activation-local AgentSession identity for bash settings, stop detectors and the terminals' job owner
-├── console.ts            # Open on omp's jobs page for a terminal job; the full-pane Console
+├── tern-terminal-hud.ts  # Open on omp's jobs page for a terminal job; the full-pane Console
 ├── terminal-resource.ts  # process-global terminal keys, live/frozen projections
 ├── terminal-url.ts       # omp `term://` read handler; reports reads to the terminal's owner
 ├── terminal-image.ts     # terminal screenshots (SVG → PNG)
@@ -1113,7 +1113,7 @@ docs/
 bun install
 bun run check                              # strict typecheck
 OMOMP_LANG=en bun run test                 # Bun unit/integration suites (they assert English UI text)
-bun test ./tests/console.test.ts ./tests/omp-presentation.test.ts
+bun test ./tests/tern-terminal-hud.test.ts ./tests/omp-presentation.test.ts
 ```
 
 The full suite runs with Bun's native `bun test` runner, including real PTY

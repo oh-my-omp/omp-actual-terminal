@@ -6,7 +6,7 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Breaking Changes
 
-- Removed the `/omp-actual-terminal-sessions` command and the Tern terminals segment, Terminals view and terminal page: a person opens, types into and ends a terminal from omp's jobs page and its Console instead
+- Removed the `/omp-actual-terminal-sessions` command and the Tern terminals segment and Terminals view: a person opens a terminal's Console, renamed from the terminal page, from omp's jobs page instead, where Leave replaces Back and End replaces Kill
 - Replaced the `exec_command` tool with terminals opened through `bash` with `pty: true` (`cmd` and `workdir` became `command` and `cwd`), while `bash` calls without `pty`, named services included, still run as omp's own `bash`
 - Ran terminals without `shell` in the session's shell, omp's shell process started with the session's exports, functions, aliases and URL paths, instead of omp's `shellPath`, `SHELL` or the platform default
 - Approved terminal calls with omp's own `bash` approval, `bash.allowedEnvVars` included, instead of the plugin's copy of its rules
@@ -18,7 +18,6 @@ All notable changes to this project. **Newest entries go on top.**
 ### Added
 
 - Added an Open action on omp's jobs page that opens a terminal in a full Console view
-- Ended a terminal from the Console's End action, which kills it and stops forwarding input
 - Registered each terminal as an omp background job under its title in the root agent's job manager, counting toward `async.maxJobs` so a call at the limit fails
 - Surfaced terminals on omp's jobs page, where cancelling a job ends the terminal and marks its job cancelled
 - Let terminals without `shell` read a bound session's attached images through their `attachment://` paths
