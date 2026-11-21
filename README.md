@@ -200,18 +200,18 @@ The schema is omp's own `bash` schema plus the terminal fields below, in every
 session: main agents, subagents and `omp -p`, with or without a UI. Its
 description is omp's own `bash` description followed by the terminal's.
 
-All six are top-level omp tools (`loadMode: "essential"`), not `xd://` devices.
-Read `xd://<tool>` for any of the six tools' concise descriptions and topic pointers.
+All six are top-level omp tools (`loadMode: "essential"`), not tool commands.
+Each tool lists its topic pointers at the end of its description, and `read help://<tool>` lists a tool's topic URLs.
 Each tool supplies its own topic bodies through `docTopics()`:
 
-- `xd://bash/terminal`: the terminal's shell, its return, input bytes, monitoring output and remote-script quoting.
-- `xd://bash/lifecycle`: terminal reclaim and exit wakes.
-- `xd://bash/waiting`: terminal lifetime, completion-only monitors and non-consuming reads.
-- `xd://write_stdin/input`: verbatim input, empty-input rejection, cancellation and observed exits.
-- `xd://set_on_exit/wake`: arming, disarming and queued exit wakes.
-- `xd://monitor/subscription`: future-output matching, judge monitors, cancellation, reminders and input-wait alerts.
-- `xd://kill_session/termination`: signals, wake/monitor suppression and retained terminals.
-- `xd://list_sessions/inventory`: inventory state, output reads and exit-wake effects.
+- `help://bash/terminal`: the terminal's shell, its return, input bytes, monitoring output and remote-script quoting.
+- `help://bash/lifecycle`: terminal reclaim and exit wakes.
+- `help://bash/waiting`: terminal lifetime, completion-only monitors and non-consuming reads.
+- `help://write_stdin/input`: verbatim input, empty-input rejection, cancellation and observed exits.
+- `help://set_on_exit/wake`: arming, disarming and queued exit wakes.
+- `help://monitor/subscription`: future-output matching, judge monitors, cancellation, reminders and input-wait alerts.
+- `help://kill_session/termination`: signals, wake/monitor suppression and retained terminals.
+- `help://list_sessions/inventory`: inventory state, output reads and exit-wake effects.
 
 The Markdown files ship in `src/topics/`; topic reads need no external
 configuration extension. An unknown topic returns a missing-topic error.

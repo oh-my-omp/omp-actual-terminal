@@ -83,7 +83,7 @@ function clamp(n: number, lo: number, hi: number): number {
 }
 
 function clampYield(ms: number | undefined, defaultMs: number): number {
-	const v = typeof ms === "number" && ms > 0 ? ms : defaultMs;
+	const v = typeof ms === "number" && !Number.isNaN(ms) ? ms : defaultMs;
 	return clamp(Math.floor(v), MIN_YIELD_TIME_MS, MAX_YIELD_TIME_MS);
 }
 

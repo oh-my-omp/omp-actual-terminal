@@ -648,6 +648,39 @@ describe("omp-actual-terminal e2e", () => {
 		assert.equal(l.details.running_count, 0);
 	});
 
+	it("session_shutdown does not notify when only already-exited terminals remain in the store, and counts only live ones otherwise", async () => {
+		const h = makeHarness();
+		await h.emit("session_start");
+		const finished = await h.call("bash", { pty: true, title: "ShortBG", command: "sleep 0.4; echo done-short", yield_time_ms: 250 });
+		assert.equal(finished.details.status, "running");
+		assert.ok(await waitFor(async () => {
+			const l = await h.call("list_sessions", {});
+			return l.details.running_count === 0 && l.details.returned_count === 1;
+		}));
+		h.uiEvents.notifications.length = 0;
+		await h.emit("session_shutdown");
+		assert.equal(
+			h.uiEvents.notifications.some((n) => /terminated \d+ live session/.test(n.message)),
+			false,
+			JSON.stringify(h.uiEvents.notifications),
+		);
+
+		await h.emit("session_start");
+		const finished2 = await h.call("bash", { pty: true, title: "ShortBG2", command: "sleep 0.4; echo done-short2", yield_time_ms: 250 });
+		assert.equal(finished2.details.status, "running");
+		assert.ok(await waitFor(async () => {
+			const l = await h.call("list_sessions", {});
+			return l.details.running_count === 0 && l.details.returned_count === 1;
+		}));
+		const live = await h.call("bash", { pty: true, title: "LiveBG", command: "sleep 10", yield_time_ms: 250 });
+		assert.equal(live.details.status, "running");
+		h.uiEvents.notifications.length = 0;
+		await h.emit("session_shutdown");
+		const shutdownNotices = h.uiEvents.notifications.filter((n) => /terminated \d+ live session/.test(n.message));
+		assert.equal(shutdownNotices.length, 1, JSON.stringify(h.uiEvents.notifications));
+		assert.match(shutdownNotices[0].message, /terminated 1 live session\(s\) on shutdown/);
+	});
+
 	it("session_shutdown racing a terminal's creation does not orphan the child", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
@@ -1134,6 +1167,22 @@ describe("bash pty fields", { skip: IS_WINDOWS }, () => {
 			const listed = await h.call("list_sessions", {});
 			const entry = listed.details.sessions.find((s: { job_id: string }) => s.job_id === r.details.job_id);
 			assert.ok(entry?.monitor, JSON.stringify(listed.details));
+		} finally {
+			await h.emit("session_shutdown");
+		}
+	});
+
+	it("clamps yield_time_ms: 0 to the 250ms lower bound instead of falling back to the 10s default", async () => {
+		const h = makeHarness();
+		await h.emit("session_start");
+		try {
+			const started = Date.now();
+			const r = await h.call("bash", { command: "sleep 3; echo y0-done", pty: true, title: "YieldZero", yield_time_ms: 0 });
+			const elapsed = Date.now() - started;
+			assert.ok(elapsed < 1500, `yield_time_ms: 0 waited ${elapsed}ms instead of clamping to 250ms`);
+			assert.equal(r.details.status, "running", JSON.stringify(r.details));
+			assert.equal(typeof r.details.job_id, "string", JSON.stringify(r.details));
+			assert.equal(r.details.yield_time_ms, 250, JSON.stringify(r.details));
 		} finally {
 			await h.emit("session_shutdown");
 		}
