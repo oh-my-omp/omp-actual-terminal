@@ -78,7 +78,7 @@ async function startRawCat(h: ExecCaller, out: string): Promise<number> {
 }
 
 async function spawnCapture() {
-	const dir = mkdtempSync(join(tmpdir(), "unified-exec-chars-"));
+	const dir = mkdtempSync(join(tmpdir(), "omp-actual-terminal-chars-"));
 	const out = join(dir, "stdin.bin");
 	const h = makeHarness();
 	await h.emit("session_start");
@@ -174,7 +174,7 @@ describe("write_stdin chars encoding", () => {
 	});
 
 	it("chars_b64 delivers the exact decoded bytes (binary-safe)", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "unified-exec-chars-"));
+		const dir = mkdtempSync(join(tmpdir(), "omp-actual-terminal-chars-"));
 		const out = join(dir, "stdin.bin");
 		const h = makeHarness();
 		await h.emit("session_start");

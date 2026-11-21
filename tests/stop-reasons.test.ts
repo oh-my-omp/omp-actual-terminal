@@ -3,8 +3,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { loadStopConfig, parseStopSection } from "../fork-features/stop-config.ts";
-import { renderStopConfigReason, renderStopReason, type StopConfigReason, type StopReason } from "../fork-features/stop-reasons.ts";
+import { loadStopConfig, parseStopSection } from "../src/stop-config.ts";
+import { renderStopConfigReason, renderStopReason, type StopConfigReason, type StopReason } from "../src/stop-reasons.ts";
 
 const configCases: readonly [StopConfigReason, string, string][] = [
 	[{ kind: "non_mapping", scope: "root" }, "root is not a mapping", "根节点不是映射"],
@@ -51,17 +51,17 @@ describe("stop diagnostic facts and boundary rendering", () => {
 		assert.deepEqual(parseStopSection({ noticeTemplate: "{typo}" }), { kind: "error", reason: { kind: "unknown_placeholders", key: "noticeTemplate", names: ["typo"], known: ["summary", "items", "instruction", "terminal_count", "notice_count"] } });
 	});
 	it("keeps file-source problems structured and accepts a valid fallback", () => {
-		const dir = mkdtempSync(join(tmpdir(), "unified-stop-reasons-"));
+		const dir = mkdtempSync(join(tmpdir(), "omp-actual-terminal-stop-reasons-"));
 		try {
 			const project = join(dir, "project");
 			const agent = join(dir, "agent");
 			mkdirSync(join(project, ".omp"), { recursive: true });
 			mkdirSync(agent);
-			writeFileSync(join(project, ".omp", "omomp.json"), JSON.stringify({ "omp-unified-exec": "bad" }));
-			writeFileSync(join(agent, "omomp.json"), JSON.stringify({ "omp-unified-exec": { stop: "off" } }));
+			writeFileSync(join(project, ".omp", "omomp.json"), JSON.stringify({ "omp-actual-terminal": "bad" }));
+			writeFileSync(join(agent, "omomp.json"), JSON.stringify({ "omp-actual-terminal": { stop: "off" } }));
 			const load = loadStopConfig(project, agent);
 			assert.equal(load.config.mode, "off");
-			assert.deepEqual(load.problems, [{ path: `${join(project, ".omp", "omomp.json")}#omp-unified-exec`, reason: { kind: "non_mapping", scope: "section" } }]);
+			assert.deepEqual(load.problems, [{ path: `${join(project, ".omp", "omomp.json")}#omp-actual-terminal`, reason: { kind: "non_mapping", scope: "section" } }]);
 			const reason = load.problems[0].reason;
 			const identity = JSON.stringify(reason);
 			assert.equal(renderStopConfigReason(reason, "zh"), "配置段不是映射");

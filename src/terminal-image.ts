@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { TerminalColor, TerminalProjection } from "../src/terminal-screen.ts";
+import type { TerminalColor, TerminalProjection } from "./terminal-screen.ts";
 
 const CELL_WIDTH = 8;
 const CELL_HEIGHT = 16;

@@ -21,7 +21,7 @@ export interface ScreenJudge {
 export function screenJudge(host: StopHost, session: () => BoundSession | undefined): ScreenJudge {
 	const chain = () => {
 		const bound = detectorSession(session());
-		return bound === undefined ? undefined : judgeChain(host, bound, "unified-exec-monitor");
+		return bound === undefined ? undefined : judgeChain(host, bound, "omp-actual-terminal-monitor");
 	};
 	return {
 		available: () => chain() !== undefined,

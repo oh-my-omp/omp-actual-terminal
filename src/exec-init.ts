@@ -1,7 +1,7 @@
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { IS_WINDOWS, isPosixShell, type LaunchShell, shellBase } from "../src/shell.ts";
+import { IS_WINDOWS, isPosixShell, type LaunchShell, shellBase } from "./shell.ts";
 import type { PluginSettingsReader } from "./plugin-settings.ts";
 
 export const INIT_FILE_KEY = "exec.initFile";
@@ -48,7 +48,7 @@ function posixQuote(text: string): string {
 	return `'${text.replaceAll("'", `'\\''`)}'`;
 }
 
-const STATUS_VAR = "__omp_unified_exec_init_status";
+const STATUS_VAR = "__omp_actual_terminal_init_status";
 
 export type ShellScript =
 	| { readonly kind: "ready"; readonly cmd: string }

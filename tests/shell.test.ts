@@ -167,23 +167,23 @@ describe("resolveWindowsShell", () => {
 		assert.equal(resolveWindowsShell("C:\\tools\\x.exe", { PATH: "" }), "C:\\tools\\x.exe");
 	});
 
-	it("PI_UNIFIED_EXEC_BASH names the bash that a bash name resolves to", () => {
+	it("OMP_ACTUAL_TERMINAL_BASH names the bash that a bash name resolves to", () => {
 		const override = makePathDir("envbash", ["custom-bash.exe"]);
 		const pathDir = makePathDir("pathbash", ["bash.exe"]);
-		const env = { PATH: pathDir, PI_UNIFIED_EXEC_BASH: join(override, "custom-bash.exe") };
+		const env = { PATH: pathDir, OMP_ACTUAL_TERMINAL_BASH: join(override, "custom-bash.exe") };
 		assert.equal(resolveWindowsShell("bash", env), join(override, "custom-bash.exe"));
 		assert.equal(resolveWindowsShell("bash.exe", env), join(override, "custom-bash.exe"));
 	});
 
-	it("ignores PI_UNIFIED_EXEC_BASH for other shells and when it names no file", () => {
+	it("ignores OMP_ACTUAL_TERMINAL_BASH for other shells and when it names no file", () => {
 		const override = makePathDir("envbash2", ["custom-bash.exe"]);
 		const pathDir = makePathDir("pathbash2", ["powershell.exe", "bash.exe"]);
 		assert.equal(
-			resolveWindowsShell("powershell", { PATH: pathDir, PI_UNIFIED_EXEC_BASH: join(override, "custom-bash.exe") }),
+			resolveWindowsShell("powershell", { PATH: pathDir, OMP_ACTUAL_TERMINAL_BASH: join(override, "custom-bash.exe") }),
 			join(pathDir, "powershell.exe"),
 		);
 		assert.equal(
-			resolveWindowsShell("bash", { PATH: pathDir, PI_UNIFIED_EXEC_BASH: join(override, "nope.exe") }),
+			resolveWindowsShell("bash", { PATH: pathDir, OMP_ACTUAL_TERMINAL_BASH: join(override, "nope.exe") }),
 			join(pathDir, "bash.exe"),
 		);
 	});
@@ -198,8 +198,8 @@ describe("resolveWindowsShell", () => {
 		assert.throws(() => resolveWindowsShell("bash", { PATH: join(stub, "System32") }), /pi-shell/);
 	});
 
-	it("unresolvable bash points at pi-shell and PI_UNIFIED_EXEC_BASH", () => {
-		assert.throws(() => resolveWindowsShell("bash", { PATH: "" }), /PI_UNIFIED_EXEC_BASH/);
+	it("unresolvable bash points at pi-shell and OMP_ACTUAL_TERMINAL_BASH", () => {
+		assert.throws(() => resolveWindowsShell("bash", { PATH: "" }), /OMP_ACTUAL_TERMINAL_BASH/);
 		assert.throws(() => resolveWindowsShell("bash", { PATH: "" }), /pi-shell/);
 	});
 });

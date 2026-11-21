@@ -4,19 +4,19 @@ import type {
 	ToolDefinition,
 	ToolRenderResultOptions,
 	TruncationResult,
-} from "@earendil-works/pi-coding-agent";
+} from "@oh-my-pi/pi-coding-agent";
 import type * as Registry from "@oh-my-pi/pi-coding-agent/config/registry";
 import type * as GhCache from "@oh-my-pi/pi-coding-agent/tools/gh-cache-invalidation";
 import type * as ThemeModule from "@oh-my-pi/pi-tui/theme";
 import type * as PiTuiTools from "@oh-my-pi/pi-tui/tools";
-import type { Component } from "@earendil-works/pi-tui";
+import type { Component } from "@oh-my-pi/pi-tui";
 
-import { sanitizeOutputText } from "../src/output-safety.ts";
+import { sanitizeOutputText } from "./output-safety.ts";
 import { tr } from "./omomp-shared/i18n.ts";
-import { requireBunRuntime } from "../src/pty.ts";
-import type { SessionStore } from "../src/session-store.ts";
-import type { TerminalAppearance } from "../src/terminal-screen.ts";
-import { truncationMarker } from "../src/tool-result.ts";
+import { requireBunRuntime } from "./pty.ts";
+import type { SessionStore } from "./session-store.ts";
+import type { TerminalAppearance } from "./terminal-screen.ts";
+import { truncationMarker } from "./tool-result.ts";
 import { type AgentHost, loadAgentHost } from "./agent-park.ts";
 import { loadShellHost, type ShellHost } from "./shell-host.ts";
 import { type CommandApprovalHost, loadCommandApprovalHost } from "./command-approval.ts";
@@ -76,7 +76,7 @@ function parseShellRenderer(value: Partial<Pick<typeof PiTuiTools, "toolRenderer
 	const bash = value.toolRenderers?.bash;
 	if (!bash) {
 		throw new Error(
-			"omp-unified-exec: @oh-my-pi/pi-tui/tools toolRenderers.bash no longer provides renderCall/renderResult/describeCall/describeResult/mergeCallAndResult/inline; requalify fork-features/omp-presentation.ts for this omp version",
+			"omp-actual-terminal: @oh-my-pi/pi-tui/tools toolRenderers.bash no longer provides renderCall/renderResult/describeCall/describeResult/mergeCallAndResult/inline; requalify src/omp-presentation.ts for this omp version",
 		);
 	}
 	const { renderCall, renderResult, describeCall, describeResult, mergeCallAndResult, inline } = bash;
@@ -89,7 +89,7 @@ function parseShellRenderer(value: Partial<Pick<typeof PiTuiTools, "toolRenderer
 		typeof inline !== "boolean"
 	) {
 		throw new Error(
-			"omp-unified-exec: @oh-my-pi/pi-tui/tools toolRenderers.bash no longer provides renderCall/renderResult/describeCall/describeResult/mergeCallAndResult/inline; requalify fork-features/omp-presentation.ts for this omp version",
+			"omp-actual-terminal: @oh-my-pi/pi-tui/tools toolRenderers.bash no longer provides renderCall/renderResult/describeCall/describeResult/mergeCallAndResult/inline; requalify src/omp-presentation.ts for this omp version",
 		);
 	}
 	return { renderCall, renderResult, describeCall, describeResult, mergeCallAndResult, inline };
@@ -347,7 +347,7 @@ export function killShellArgs(args: StreamedArgs<"session_id" | "signal">): Shel
 function requireComponent(component: Component | undefined): Component {
 	if (component === undefined) {
 		throw new Error(
-			"omp-unified-exec: @oh-my-pi/pi-tui/tools toolRenderers.bash rendered no component; requalify fork-features/omp-presentation.ts for this omp version",
+			"omp-actual-terminal: @oh-my-pi/pi-tui/tools toolRenderers.bash rendered no component; requalify src/omp-presentation.ts for this omp version",
 		);
 	}
 	return component;
@@ -411,7 +411,7 @@ async function loadOmpAppearance(): Promise<() => TerminalAppearance> {
 		await import("@oh-my-pi/pi-tui/theme");
 	const { isLightTheme, getCurrentThemeName } = themeModule;
 	if (typeof isLightTheme !== "function" || typeof getCurrentThemeName !== "function") {
-		throw new Error("omp-unified-exec: @oh-my-pi/pi-tui/theme lacks isLightTheme/getCurrentThemeName");
+		throw new Error("omp-actual-terminal: @oh-my-pi/pi-tui/theme lacks isLightTheme/getCurrentThemeName");
 	}
 	return () => (isLightTheme(getCurrentThemeName()) ? "light" : "dark");
 }
@@ -421,7 +421,7 @@ async function loadOmpShellPath(host: ExtensionAPI): Promise<() => string | unde
 		await import("@oh-my-pi/pi-coding-agent/config/registry");
 	const { lookup } = registry;
 	if (typeof lookup !== "function") {
-		throw new Error("omp-unified-exec: settings registry lacks lookup");
+		throw new Error("omp-actual-terminal: settings registry lacks lookup");
 	}
 	const handle = lookup("shellPath");
 	const settings =
@@ -429,7 +429,7 @@ async function loadOmpShellPath(host: ExtensionAPI): Promise<() => string | unde
 			? host.pi.settings
 			: undefined;
 	if (handle == null || typeof handle.get !== "function" || settings === undefined) {
-		throw new Error("omp-unified-exec: host lacks shellPath setting or pi.settings scope");
+		throw new Error("omp-actual-terminal: host lacks shellPath setting or pi.settings scope");
 	}
 	return shellPathReader(handle.get.bind(handle), settings);
 }
@@ -438,7 +438,7 @@ function shellPathReader(get: (scope: Registry.ScopeLike) => unknown, settings: 
 	return () => {
 		const value = get(settings);
 		if (value === undefined) return undefined;
-		if (typeof value !== "string") throw new Error("omp-unified-exec: shellPath must be a string or undefined");
+		if (typeof value !== "string") throw new Error("omp-actual-terminal: shellPath must be a string or undefined");
 		return value.trim() || undefined;
 	};
 }
@@ -448,7 +448,7 @@ async function loadGithubCacheInvalidation(): Promise<(command: string) => void>
 		Pick<typeof GhCache, "invalidateGithubCacheForBashCommand">
 	> = await import("@oh-my-pi/pi-coding-agent/tools/gh-cache-invalidation");
 	if (typeof invalidateGithubCacheForBashCommand !== "function") {
-		throw new Error("omp-unified-exec: tools/gh-cache-invalidation lacks invalidateGithubCacheForBashCommand");
+		throw new Error("omp-actual-terminal: tools/gh-cache-invalidation lacks invalidateGithubCacheForBashCommand");
 	}
 	return invalidateGithubCacheForBashCommand;
 }
@@ -469,7 +469,7 @@ export function withHostPresentation(
 ): (host: ExtensionAPI) => void | Promise<void> {
 	return (host) => {
 		if (!("arktype" in host)) {
-			throw new Error("omp-unified-exec only supports omp (oh-my-pi); the current host is not omp (missing arktype).");
+			throw new Error("omp-actual-terminal only supports omp (oh-my-pi); the current host is not omp (missing arktype).");
 		}
 		requireBunRuntime();
 		return Promise.all([

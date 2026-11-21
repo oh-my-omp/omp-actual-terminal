@@ -4,6 +4,21 @@ All notable changes to this project. **Newest entries go on top.**
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Renamed the plugin to `omp-actual-terminal`: install it from `https://github.com/oh-my-omp/omp-actual-terminal#release` and uninstall `omp-unified-exec`
+- Renamed the omomp section `omp-unified-exec` to `omp-actual-terminal`
+- Renamed `PI_UNIFIED_EXEC_BASH` to `OMP_ACTUAL_TERMINAL_BASH`
+- Renamed the notice message type to `omp-actual-terminal-notice`, the `/unified-exec-sessions` command to `/omp-actual-terminal-sessions`, and session logs to `omp-actual-terminal-<pid>-<sid>-<hex>.log`
+
+### Changed
+
+- Switched host integration to the `@oh-my-pi/pi-*` packages and dropped the `@earendil-works` path aliases
+
+### Removed
+
+- Detached from `iamwrm/pi-unified-exec`: upstream sync, npm publishing and the fork records are gone
+
 ## [0.15.4] - 2026-11-21
 
 ### Changed

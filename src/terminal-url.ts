@@ -1,11 +1,11 @@
 import type * as InternalUrls from "@oh-my-pi/pi-coding-agent/internal-urls";
 
-import { sanitizeOutputText } from "../src/output-safety.ts";
+import { sanitizeOutputText } from "./output-safety.ts";
 import { registerInternalScheme } from "./omomp-shared/internal-url.ts";
 import { writeTerminalImage } from "./terminal-image.ts";
 import { getTerminalResource, noteTerminalRead, parseTerminalTarget, readTerminal, terminalText } from "./terminal-resource.ts";
 
-const handlerBrand = Symbol.for("omp-unified-exec.term-handler");
+const handlerBrand = Symbol.for("omp-actual-terminal.term-handler");
 
 type TerminalUrlHandler = InternalUrls.ProtocolHandler & {
 	readonly scheme: "term";
@@ -22,7 +22,7 @@ type InternalUrlRouterHost = Pick<typeof InternalUrls, "InternalUrlRouter">;
 export function parseInternalUrlRouterHost(value: Partial<InternalUrlRouterHost>): InternalUrlRouterHost {
 	const { InternalUrlRouter } = value;
 	if (typeof InternalUrlRouter !== "function" || typeof InternalUrlRouter.instance !== "function") {
-		throw new Error("omp-unified-exec: internal-urls lacks InternalUrlRouter.instance; requalify term:// integration");
+		throw new Error("omp-actual-terminal: internal-urls lacks InternalUrlRouter.instance; requalify term:// integration");
 	}
 	return { InternalUrlRouter };
 }
@@ -54,17 +54,17 @@ export async function initializeTerminalUrls(): Promise<void> {
 	};
 	const existing = router.getHandler("term");
 	if (existing !== undefined && handlerBrand in existing && existing[handlerBrand] === true) router.unregister("term");
-	const outcome = registerInternalScheme(router, "omp-unified-exec/term", handler);
+	const outcome = registerInternalScheme(router, "omp-actual-terminal/term", handler);
 	switch (outcome.kind) {
 		case "registered":
 			if (router.getHandler("term") !== handler) {
-				throw new Error("omp-unified-exec: InternalUrlRouter did not retain term handler identity");
+				throw new Error("omp-actual-terminal: InternalUrlRouter did not retain term handler identity");
 			}
 			return;
 		case "builtin":
 		case "held":
 			throw new Error(
-				`omp-unified-exec: term:// belongs to another handler (${outcome.reason}); restart omp after upgrading the plugin`,
+				`omp-actual-terminal: term:// belongs to another handler (${outcome.reason}); restart omp after upgrading the plugin`,
 			);
 	}
 }

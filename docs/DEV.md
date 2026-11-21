@@ -5,11 +5,11 @@ and tool reference, see [../README.md](../README.md).
 
 ## Prerequisites
 
-- **Bun 1.4+**, providing native TypeScript imports, the `bun test` runner
-  and `Bun.Terminal` (see `package.json` `engines`).
-- **Node and npm** for the npm lockfile/install workflow, ordinary `node`
-  children in `tests/bun-pty-runtime.mjs`, and the unsupported-host rejection
-  regression. Node is not a supported plugin host.
+- **Bun 1.4+**, providing native TypeScript imports, the package manager
+  (`bun.lock`), the `bun test` runner and `Bun.Terminal` (see `package.json`
+  `engines`).
+- **Node** for ordinary `node` children in `tests/bun-pty-runtime.mjs` and the
+  unsupported-host rejection regression. Node is not a supported plugin host.
 - **Linux, macOS, or Windows.** The platform default shell is omp's own
   pi-shell (`omp bash`) on Windows and `bash` elsewhere. The stub host of the
   test suite is not omp and has no pi-shell, so on Windows the suite runs its
@@ -18,16 +18,16 @@ and tool reference, see [../README.md](../README.md).
   [Shell selection](../README.md#shell-selection)).
   Every PTY uses Bun's native `Bun.Terminal`.
 - **omp** installed and runnable (`omp --version`). Only omp is supported;
-  Pi and other non-omp hosts fail at the extension factory before tool registration.
+  non-omp hosts fail at the extension factory before tool registration.
 
 ## First-time setup
 
 Clone the repo and install dev dependencies:
 
 ```bash
-git clone https://github.com/oh-my-omp/omp-unified-exec
-cd omp-unified-exec
-npm install
+git clone https://github.com/oh-my-omp/omp-actual-terminal
+cd omp-actual-terminal
+bun install
 ```
 
 Load the working copy directly for interactive testing:
@@ -47,9 +47,12 @@ capabilities fails immediately with the runtime reason.
 Verify the install:
 
 ```bash
-npm run check                       # clean strict typecheck
-npm test                            # typecheck + all tests
+bun run check                       # clean strict typecheck
+OMOMP_LANG=en bun run test          # all tests
 ```
+
+The tests assert English UI text, so run them with `OMOMP_LANG=en` when the
+locale environment selects another language.
 
 Expect zero failures on Linux, macOS and Windows; CI runs the full suite on all
 three. Platform-specific cases and the explicit omp install gate may skip; PTY
@@ -59,53 +62,55 @@ TypeScript entry before executing it in Node, whose strip-only loader cannot
 parse the HUD's parameter properties; it runs against stub packages for the
 names the bundle imports, because the host packages ship TypeScript source.
 The missing-renderer regression runs the built presentation module in a child
-`bun --no-install` whose `node_modules` lacks `@oh-my-pi/pi-tui`.
+`bun --no-install` whose staged `@oh-my-pi/pi-tui` re-exports the real package
+root but has no `./tools` subpath.
 
 ## Repo layout
 
-See [Layout](../README.md#layout) for the `src/` and `fork-features/` layout.
-A sibling view, indexed by concern:
+See [Layout](../README.md#layout) for the `src/` layout. A sibling view,
+indexed by concern:
 
 | Concern | File(s) |
 |---|---|
 | Tool schemas and orchestration | `src/index.ts` (`exec_command`, `write_stdin`, `set_on_exit`, `monitor`, `kill_session`, `list_sessions`) |
-| Tool-owned topics (`read xd://<tool>/<topic>`) and full-description pointers for all six PTY tools | `fork-features/exec-command-docs.ts`, `fork-features/topics/*.md`; typed definitions in `src/index.ts`, included by `package.json` `files` |
+| Tool-owned topics (`read xd://<tool>/<topic>`) and full-description pointers for all six PTY tools | `src/exec-command-docs.ts`, `src/topics/*.md`; typed definitions in `src/index.ts` |
 | Session lifecycle (spawn, write, kill, log-stream) | `src/session.ts` |
 | Session registry, LRU eviction, shutdown | `src/session-store.ts` |
 | Per-call observation (`CollectResult`: screen, final screen or none) | `src/collect.ts`; produced by `ExecSession.collect` in `src/session.ts` |
 | Event-driven, monotonic waits: collection, shutdown and kill confirmation | `src/long-wait.ts` |
 | Human duration labels and host UTC time | `src/format-time.ts` |
 | `on_exit: "wake"` completion scheduling (exactly-once) and monitor ownership | `src/completion.ts` (`setOnExit`, tombstones, flush) |
-| Terminal notices: ADT, formatter, the dispatcher that holds notices during a run and merges them at its stop (`unified-exec-notice`) | `fork-features/terminal-notice.ts`; run events (`agent_start`, `agent_end`, `session_stop`) in `src/index.ts` |
-| Finished-work stop gate: `omp-unified-exec` omomp section, judge / `@smol` / todo detectors, silent collection of returned terminals; a finished agent woken only by a terminal problem (`isTerminalProblem`, the `done` stop state) | `fork-features/stop-config.ts`, `fork-features/stop-gate.ts` (omp modules loaded by `loadStopHost`), `TerminalLifecycle.collectReturned`, `NoticeDispatcher.flush` in `fork-features/terminal-notice.ts`; withheld settlement in `src/completion.ts` (`submitWake`) and `fork-features/monitor-subscription.ts`; `tests/stop-gate.test.ts` |
-| Structured stop/config diagnostics and boundary-only English/Chinese rendering | `fork-features/stop-reasons.ts`; producers in `stop-config.ts`, `stop-gate.ts` and `terminal-notice.ts`, human notifications in `src/index.ts` |
-| Terminal lifecycle: return, reads, silent linger of a normal return with no process left, TTL, grace, reclaim, reclaimed-terminal record, minute sweep; the `notice.graceReclaim` plugin setting gating the grace reclaim notice | `fork-features/terminal-lifecycle.ts`; `fork-features/plugin-settings.ts` (omp's `getPluginSettings`, loaded by `loadPluginSettingsReader`); reclaim, leftover-group kill and setting parsing/warnings in `src/index.ts`; `onShellExit`/`onTerminalRead`/`signalProcessGroup` in `src/session.ts` |
-| A subagent's terminals across omp's idle park: agent registry/lifecycle reader, parked runtimes, revive-then-deliver | `fork-features/agent-park.ts`; `createRuntime`, `deliverNotice`, `endRuntime` and the `session_start`/`session_shutdown` handlers in `src/index.ts`; `finished` in `fork-features/terminal-notice.ts`; `tests/agent-park.test.ts` |
+| Terminal notices: ADT, formatter, the dispatcher that holds notices during a run and merges them at its stop (`omp-actual-terminal-notice`) | `src/terminal-notice.ts`; run events (`agent_start`, `agent_end`, `session_stop`) in `src/index.ts` |
+| Finished-work stop gate: `omp-actual-terminal` omomp section, judge / `@smol` / todo detectors, silent collection of returned terminals; a finished agent woken only by a terminal problem (`isTerminalProblem`, the `done` stop state) | `src/stop-config.ts`, `src/stop-gate.ts` (omp modules loaded by `loadStopHost`), `TerminalLifecycle.collectReturned`, `NoticeDispatcher.flush` in `src/terminal-notice.ts`; withheld settlement in `src/completion.ts` (`submitWake`) and `src/monitor-subscription.ts`; `tests/stop-gate.test.ts` |
+| Structured stop/config diagnostics and boundary-only English/Chinese rendering | `src/stop-reasons.ts`; producers in `stop-config.ts`, `stop-gate.ts` and `terminal-notice.ts`, human notifications in `src/index.ts` |
+| Terminal lifecycle: return, reads, silent linger of a normal return with no process left, TTL, grace, reclaim, reclaimed-terminal record, minute sweep; the `notice.graceReclaim` plugin setting gating the grace reclaim notice | `src/terminal-lifecycle.ts`; `src/plugin-settings.ts` (omp's `getPluginSettings`, loaded by `loadPluginSettingsReader`); reclaim, leftover-group kill and setting parsing/warnings in `src/index.ts`; `onShellExit`/`onTerminalRead`/`signalProcessGroup` in `src/session.ts` |
+| A subagent's terminals across omp's idle park: agent registry/lifecycle reader, parked runtimes, revive-then-deliver | `src/agent-park.ts`; `createRuntime`, `deliverNotice`, `endRuntime` and the `session_start`/`session_shutdown` handlers in `src/index.ts`; `finished` in `src/terminal-notice.ts`; `tests/agent-park.test.ts` |
 | Rendered terminal screen: emulator, history + screen observations, snapshots | `src/terminal-screen.ts` (owned by `ExecSession`) |
 | On-disk raw log file mirroring | `src/session.ts` (`logStream`) |
 | Terminal-inert result/partial text | `src/output-safety.ts` |
 | Bounded process/kill details + LLM-visible text | `src/tool-result.ts` (host-compatible `truncateTail`) |
 | C-style escape decoding for `chars` | `src/unescape.ts` |
 | Bun.Terminal backend, runtime admission, spawn preflight, shell-exit events, process-group signals, Windows tree-kill | `src/pty.ts` |
-| Shell selection & argv construction; omp's cmd.exe test loaded at factory time | `src/shell.ts`; `fork-features/shell-host.ts` |
-| `exec.initFile` plugin setting: parse, path resolution, the source-then-`eval` script for POSIX shells | `fork-features/exec-init.ts`; omp's POSIX-shell test in `src/shell.ts` (`isPosixShell`, shared with command approval); read per call in `runExecCommand` (`src/index.ts`); `tests/exec-init.test.ts` |
-| omp-only host admission, top-level `loadMode`, bash delegation, argument/result display adapters, live `shellPath` registry lookup | `fork-features/omp-presentation.ts` |
-| Tern terminal HUD: pill segment, Terminals view, terminal page | `fork-features/tern-terminal-hud.ts` |
-| Removal of the Tern plugin versions up to 0.14.7 installed | `fork-features/tern-plugin-removal.ts` |
-| `term://` resources, read handler and screenshots | `fork-features/terminal-resource.ts`, `fork-features/terminal-url.ts`, `fork-features/terminal-image.ts` |
-| Monitors: conditions, judge monitors, batching, End/match/judgment/reminder notices | `fork-features/monitor-subscription.ts`; screen judgment through omp's judge chain in `fork-features/screen-judge.ts`, reached per judgment through `RuntimeHost.judge` in `src/index.ts`; subscriptions owned by `src/completion.ts` (`startMonitor`) |
-| Input-wait alerts: prompt detection, quiet watcher, notice | `fork-features/input-wait.ts`; `ExecSession.watchInputWait` in `src/session.ts`; `alertInputWait` in `src/completion.ts` |
-| Session log naming, open-log tracking and seven-day gzip compression | `fork-features/log-archive.ts`; `ExecSession.spawn` in `src/session.ts`; scheduled by `withHostPresentation` |
-| Command approval and host session binding | `fork-features/command-approval.ts`, `fork-features/session-binding.ts` |
+| Shell selection & argv construction; omp's cmd.exe test loaded at factory time | `src/shell.ts`; `src/shell-host.ts` |
+| `exec.initFile` plugin setting: parse, path resolution, the source-then-`eval` script for POSIX shells | `src/exec-init.ts`; omp's POSIX-shell test in `src/shell.ts` (`isPosixShell`, shared with command approval); read per call in `runExecCommand` (`src/index.ts`); `tests/exec-init.test.ts` |
+| omp-only host admission, top-level `loadMode`, bash delegation, argument/result display adapters, live `shellPath` registry lookup | `src/omp-presentation.ts` |
+| Tern terminal HUD: pill segment, Terminals view, terminal page | `src/tern-terminal-hud.ts` |
+| Removal of the `omp-unified-exec` Tern plugin that versions up to 0.14.7 installed | `src/tern-plugin-removal.ts` |
+| `term://` resources, read handler and screenshots | `src/terminal-resource.ts`, `src/terminal-url.ts`, `src/terminal-image.ts` |
+| Monitors: conditions, judge monitors, batching, End/match/judgment/reminder notices | `src/monitor-subscription.ts`; screen judgment through omp's judge chain in `src/screen-judge.ts`, reached per judgment through `RuntimeHost.judge` in `src/index.ts`; subscriptions owned by `src/completion.ts` (`startMonitor`) |
+| Input-wait alerts: prompt detection, quiet watcher, notice | `src/input-wait.ts`; `ExecSession.watchInputWait` in `src/session.ts`; `alertInputWait` in `src/completion.ts` |
+| Session log naming, open-log tracking and seven-day gzip compression | `src/log-archive.ts`; `ExecSession.spawn` in `src/session.ts`; scheduled by `withHostPresentation` |
+| Command approval and host session binding | `src/command-approval.ts`, `src/session-binding.ts` |
+| Copies of oh-my-omp/shared code (`i18n.ts`, `todo-read.ts`, `internal-url.ts`, `tern-plugin.ts`), declared in `omomp-shared.json` | `src/omomp-shared/`; never edit a copy, shared main owns them and its sync workflow opens PRs that refresh them |
 | `monitor` result details type | `src/script-result.ts` |
 | Tool limits, early-exit grace, session-store limits | top of `src/index.ts` |
 
 ## Dev loop
 
-1. Edit files under `src/` or `fork-features/`.
-2. `npm run check` (catch type errors early).
+1. Edit files under `src/`.
+2. `bun run check` (catch type errors early).
 3. `bun test ./tests/<relevant>.test.ts` (fast inner loop).
-4. `npm test` before committing.
+4. `bun run check` and `OMOMP_LANG=en bun run test` before committing.
 5. In a running omp: `/reload` to pick up changes.
 
 ### Important gotchas for the dev loop
@@ -130,9 +135,8 @@ omp --no-extensions -e "$PWD/src/index.ts" --no-session
 Ask the model to start a long-running command through `exec_command`, drive
 input with `write_stdin`, and terminate it with `kill_session`. Exec/write/kill
 must use omp's bash cards; monitor/set-on-exit/list use its default cards.
-For Tern, exercise the pill segment, Terminals view, typed input and Kill in a real
-window; the procedure is in
-[fork-features/README.md](../fork-features/README.md).
+For Tern, exercise the pill segment, Terminals view, typed input and Kill in a
+real window as [Tern HUD](#tern-hud) describes.
 
 For a fresh non-interactive tool execution:
 
@@ -215,10 +219,10 @@ The constants in the README's `## Constants` section live in the module that
 owns them: yield limits, early-exit grace, session-store limits and
 `INPUT_WAIT_QUIET_MS` at the top of `src/index.ts`, `TERMINAL_HISTORY_CELLS`
 in `src/terminal-screen.ts`, `DEFAULT_REMIND_AFTER_MS` and
-`DEFAULT_JUDGE_INTERVAL_MS` in `fork-features/monitor-subscription.ts`,
-`JUDGE_DEADLINE_MS` in `fork-features/screen-judge.ts`, `RECLAIM_TTL_MS`,
+`DEFAULT_JUDGE_INTERVAL_MS` in `src/monitor-subscription.ts`,
+`JUDGE_DEADLINE_MS` in `src/screen-judge.ts`, `RECLAIM_TTL_MS`,
 `RECLAIM_GRACE_MS`, `RECLAIM_LINGER_MS` and `LIFECYCLE_SWEEP_MS` in
-`fork-features/terminal-lifecycle.ts`, the output caps in the host's
+`src/terminal-lifecycle.ts`, the output caps in the host's
 `DEFAULT_MAX_BYTES` / `DEFAULT_MAX_LINES`. When you touch one:
 
 1. Update the value in its owning module.
@@ -235,7 +239,7 @@ in `src/terminal-screen.ts`, `DEFAULT_REMIND_AFTER_MS` and
 3. Add it to `renderProcessResultText()` / `renderKillResultText()` only when
    the model needs the field in textual content (details are TUI/session data).
 4. If the TUI should show it, update the display adapter in
-   `fork-features/omp-presentation.ts`.
+   `src/omp-presentation.ts`.
 5. Add a pure assertion in `tests/tool-result.test.ts` and an end-to-end
    assertion in `tests/e2e.test.ts` when process lifecycle matters; update the
    response example and API tables in both READMEs.
@@ -249,22 +253,22 @@ defense for legacy results and fallback content.
 
 ### Tune TUI rendering
 
-Tool result cards: `fork-features/omp-presentation.ts` adapts exec/write/kill
+Tool result cards: `src/omp-presentation.ts` adapts exec/write/kill
 to omp's exported bash renderer, including Tern's describe hooks. Other tools
 use omp's default cards. Keep model content and persisted details unchanged by
 display adapters. Update `tests/omp-presentation.test.ts`, then exercise the
 actual omp ANSI TUI and Tern path. A missing or reshaped required omp module
 must fail factory loading before tools register, not fall back to another
-host's rendering.
+rendering.
 
 Tern terminal HUD (pill segment, Terminals view, terminal page):
-`fork-features/tern-terminal-hud.ts`, covered by the real-PTY
+`src/tern-terminal-hud.ts`, covered by the real-PTY
 `tests/tern-terminal-hud.test.ts`; requalify in a real Tern window as
-[fork-features/README.md](../fork-features/README.md) describes.
+[Tern HUD](#tern-hud) describes.
 
 ## Debugging aids
 
-- **Per-session log files** at `pi-unified-exec-<pid>-<sid>-*.log` in the
+- **Per-session log files** at `omp-actual-terminal-<pid>-<sid>-*.log` in the
   system temporary directory (`/tmp` or `%TEMP%`) capture the complete raw
   byte stream the child wrote; after seven days with a provably gone writer
   they become `*.log.gz` (`gzcat` or `zcat <` on macOS). Inspect them with a
@@ -273,7 +277,7 @@ Tern terminal HUD (pill segment, Terminals view, terminal page):
   `content[0].text` (structured); the TUI renderer reads
   `details.output` (clean body). If the TUI shows a header like
   `[still running]\nsession_id: …` verbatim, the renderer is failing
-  and falling back to omp's default. Check `fork-features/omp-presentation.ts`.
+  and falling back to omp's default. Check `src/omp-presentation.ts`.
 - **`list_sessions` tool** (invokable from the LLM side) is the
   quickest way to audit what's stored, including each returned terminal's
   lifecycle phase and whether it has been read.
@@ -284,25 +288,272 @@ Tern terminal HUD (pill segment, Terminals view, terminal page):
 
 Review [oh-my-pi](https://github.com/can1357/oh-my-pi) release notes and the
 extension API, bash renderer, theme, native rendering and internal-URL seams
-listed in [fork-features/README.md](../fork-features/README.md).
+listed under [omp upgrade requalification](#omp-upgrade-requalification).
 The host must continue to identify itself through `ExtensionAPI.arktype`.
 
 The host packages are the `@oh-my-pi/*` devDependencies and peerDependencies
-at `latest` / `*`; every type that describes the host comes from their
-exports. Upstream's `@earendil-works/pi-coding-agent` and
-`@earendil-works/pi-tui` import specifiers stay in upstream-owned files and
-`tsconfig.json` `paths` maps them to the `@oh-my-pi` packages, as omp's
-runtime does. CI (`.github/workflows/ci.yml`) upgrades the host packages to
-their newest release after `npm ci` and runs daily, so a host type change
-fails `npm run check` before an omp release reaches users. Refresh the lock
-file with `npm update` when it does.
+at `latest` / `*`; every type that describes the host, including the host
+modules the factory loads, comes from their exports, and TypeBox comes from
+`@oh-my-pi/omptype/typebox`. Two workflows check every PR, every push to
+`main` and a daily schedule. `omomp-check` calls oh-my-omp/.github's shared
+check in `bun` mode: the dependency convention, `bun install
+--frozen-lockfile`, an upgrade of the `@oh-my-pi/*` packages to their newest
+release, `bun run check`, `bun run test` and the comparison of
+`src/omomp-shared/` with shared main. `ci.yml` runs the same install, upgrade,
+check and test on Linux, macOS and Windows, plus the Bun PTY runtime fixture
+from source and from a compiled executable. A host type change therefore fails
+`bun run check` before an omp release reaches users; refresh `bun.lock` with
+`bun update` when it does.
 
-Run `npm run check` and `npm test`, then validate the actual installed omp
-runtime. Stub-host tests alone do not qualify host compatibility. Confirm
-checkout loading, `omp plugin install` loading through `omp.extensions`,
-exec/write/kill cards, and Tern terminal interactions; required host modules
-must fail loading rather than silently degrade. Record observed qualification
-in `CHANGELOG.md` with environment and evidence.
+Run `bun run check` and `OMOMP_LANG=en bun run test`, then validate the actual
+installed omp runtime. Stub-host tests alone do not qualify host
+compatibility. Confirm checkout loading, `omp plugin install` loading through
+`omp.extensions`, exec/write/kill cards, and Tern terminal interactions;
+required host modules must fail loading rather than silently degrade. Record
+observed qualification in `CHANGELOG.md` with environment and evidence.
+
+## omp upgrade requalification
+
+Each seam below is a host contract the plugin depends on. On an omp upgrade,
+check the named exports and run the listed real-omp scenario.
+
+### Tool text and topics
+
+On omp upgrades, read every installed tool's bare full description, all
+advertised `xd://<tool>/<topic>` addresses, and an unknown topic per tool
+through real `read`; known topics must return body-only Markdown and unknown
+ones an error. Stop/config diagnostic changes must retain structured reasons
+until human notification generation and preserve environment-only language
+selection; requalify a malformed section warning in both English and Chinese.
+
+### Top-level mount
+
+In a real `omp --mode rpc` session, `get_state` `dumpTools` (top-level
+definitions only) must list all six tools, the system prompt's `xd://` device
+section must list none of them, and omp must still read no
+`promptSnippet`/`promptGuidelines`.
+
+### `exec.initFile`
+
+Through real omp: with a user value whose file defines an alias and an
+export, an `exec_command` under zsh and under bash must show both, omp's
+`bash` tool must show neither, and a project `.omp/plugin-overrides.json`
+value must replace the user one.
+
+### Shell bridge
+
+`@oh-my-pi/pi-coding-agent/config/registry` must still export `lookup`, and
+`lookup("shellPath").get(host.pi.settings)` must still return omp's effective
+setting as a string or undefined, and `@oh-my-pi/pi-utils` must still export
+`procmgr.isCmdShell` (the factory fails loading without it). Through real
+interactive omp, a `shellPath` overlay must outrank `SHELL` and an explicit
+`shell` must outrank both; with none of them set, `exec_command` must run in
+pi-shell (`shell` names the omp binary and `<omp> bash -c` runs POSIX syntax);
+an explicit `shell: "C:\\Windows\\System32\\cmd.exe"` must fail with one
+notice naming its source and no cmd process; an explicit `shell` that does not
+exist must return `spawn … ENOENT` and no output rather than another shell
+(omp itself rejects a missing `shellPath` at startup, before the extension
+loads); later input writes, kills and listings must repeat the session's
+shell; and the default `workdir` must still follow omp's cwd.
+`OMP_ACTUAL_TERMINAL_BASH` names the bash a bash selection resolves to.
+
+### GitHub view cache
+
+The factory imports omp's
+`tools/gh-cache-invalidation.invalidateGithubCacheForBashCommand` and calls it
+with the raw `cmd` before spawning, as `BashTool.execute` does. Requalify that
+this export still exists and that a `gh issue close` through `exec_command`
+makes the next `issue://` read refetch.
+
+### Command approval
+
+Command approval is ported from
+[`can1357/oh-my-pi` v18.22.2 (`e1ae2cc998ef`)](https://github.com/can1357/oh-my-pi/blob/v18.22.2/packages/coding-agent/src/tools/bash.ts),
+`packages/coding-agent/src/tools/bash.ts` (internal rule helpers and
+`BashTool.approval`). The host exports none of these pattern judgements, so the
+port is copied, not called: `BashTool.approval` needs a full ToolSession and
+would inherit `bash.interceptor`. The shell judgements the host does export are
+injected, including the `NAME=` prefix test `isShellEnvironmentAssignment`.
+Differences are argument name `cmd`, explicit bound-session settings (the
+session's own `bash.patterns` and the operator layers from `grantAuthority()`),
+injected host helpers, and typed boundary parsing. Operator `deny` and `prompt`
+rules are not lifted by project `allow` rules, and rule ordering and every
+compound/critical branch follow v18.22.2. `bash.allowedEnvVars` and per-rule
+`env` allow lists are not ported, so an allow that depends on a leading env
+assignment asks for approval instead of passing.
+The POSIX-shell predicate is copied from `packages/utils/src/procmgr.ts` into
+`src/shell.ts`, where `exec.initFile` uses it too.
+Factory loading imports root `AgentRegistry` / `CRITICAL_BASH_PATTERNS`,
+`exec/settings`'s `cfgBashPatterns` / `cfgBashAllowCompoundCommands`,
+`tools/shell-tokenize`'s `tokenizeShellSegments` / `isShellEnvironmentAssignment` /
+`extractLiteralAndChainSegments`, and `tools/approval`'s `truncateForPrompt`.
+Missing exports reject plugin loading; synchronous approval imports nothing.
+
+On omp upgrades, compare the port with the current built-in functions, then
+run real omp comparisons with compound approval both off and on: ordered
+first-match, whole-chain restrictions, all-segments-allow, deny/prompt/critical
+precedence, and display truncation. Requalify the internal session interface:
+registry registration before `session_start`, `ctx.agent.id`, the exact
+`sessionManager` identity, live `session.settings` and `getShellConfig().shell`;
+switches/branches must retain the same session without registry lookup.
+Create real child agents with distinct settings overlays and a private-registry
+Unbound child; ensure pending/Unbound reads no settings and returns bare `exec`.
+Verify the host's tool proxy and our presentation spread retain `approval` and
+`formatApprovalDetails`, deny calls spawn nothing, and real TUI confirmation
+shows the critical reason and `Command: …`. Only approval uses this binding;
+PTY shell selection keeps its existing host bridge.
+
+### `term://` resources and screenshots
+
+`@oh-my-pi/pi-coding-agent/internal-urls`: `InternalUrlRouter.instance()` must
+share the production `read` router; after `registerInternalScheme` (the
+`src/omomp-shared/internal-url.ts` copy) reports `registered`,
+`getHandler("term")` must return the handler object just registered, whose
+spec and methods the router consults per request. The handler uses
+`{backing: "file", selectors: "lines", immutable: false}`: `locate()` returns
+a path only for `/screen.png`, null for text. Read all retained rows,
+`/screen`, the bare read inside `tmux` (it must equal `/screen`),
+positive/negative pages, head/tail and unknown-key/page errors through real
+`read`; confirm child-agent same-number keys, post-exit/kill/LRU access and
+two reloads preserve URLs without consuming observations or re-registering.
+Requalify root `@oh-my-pi/pi-natives.rasterizeSvg`: PNG bytes, system-font
+CJK, palette/RGB and attributes, the 16,777,216-pixel limit, and real `read`
+image blocks. Check one live session across dark/light themes, frozen
+appearance, Live outline cursor versus Frozen no cursor, and concurrent
+private PNG paths. Successful screenshots rely on OS temporary-file cleanup,
+like logs, because the path-only host API supplies no read-complete callback.
+Upgrading an already running text-only handler requires one omp restart;
+reloads of the same version do not.
+
+### Notice delivery, monitors, input waits and lifecycle
+
+Through real RPC and interactive hosts: an `omp-actual-terminal-notice` sent
+during a run must reach the model as a `developer` message at the next step
+boundary (`/dump`) and start no turn after the final answer, and one sent
+while idle must start a model turn without an additional user prompt. Verify
+monitor default/custom limits, batching, advisory, last partial output,
+human/model termination, End/wake merging, rendered prompts and redraws, and
+unchanged default-card/message styling in ANSI/Tern. With a short
+`remind_after_ms`, a silent monitor must send exactly one `monitor_silent`
+notice on its own, and a delivered match must restart its clock. Without any
+monitor, a real whiptail/debconf dialog (`ucf --debconf-ok` on a modified file
+in a Debian container through `exec_command`) and an apt `[Y/n]` prompt must
+each enqueue one `input_wait` notice that triggers a turn, and none while an
+attached call shows the prompt. For the lifecycle, a real `read term://` of a
+returned terminal must mark it read (`list_sessions` `lifecycle.read`), and an
+idle agent must be woken by a reclaim-due notice; after the grace its terminal
+must leave `list_sessions` with its background jobs gone, with no further
+notice while `notice.graceReclaim` is off and one `reclaimed` notice after it
+is turned on in `/settings` without a restart.
+`@oh-my-pi/pi-coding-agent/extensibility/plugins/loader` must still export
+`getPluginSettings(plugin, cwd)` returning the merged stored values without
+defaults.
+
+### Stop gate
+
+`agent_end` must still carry `willContinue` and `awaitingAsyncWork`, and
+`session_stop` must still fire for main-agent final stops with
+`last_assistant_message`; the functions `loadStopHost` loads must exist with
+the shapes `stop-gate.ts` parses, and the bound AgentSession must still expose
+`settings`, `modelRegistry.resolver`, `sessionId`, `sessionManager` and
+`agent.metadataForProvider`/`telemetry`. Through real omp with a returned,
+unread background terminal: a final answer that finishes the task must start
+no notice turn and remove the terminal from `list_sessions`, and afterwards a
+running terminal's `on_exit: "wake"` exit must start no turn while its
+non-zero exit starts one with `abnormal_return`; an answer that leaves work
+open must deliver one merged notice; a notice raised during a long tool call
+must reach the model right after that call's result, in the same run;
+`stop: off` must drop lifecycle notices and keep monitor ones; and `judge`,
+`llm` and `todo` must each decide when chosen explicitly.
+
+### Judge monitors
+
+`@oh-my-pi/pi-coding-agent/judgment` must still resolve a chain whose
+`judge({state, questions}, {signal})` accepts a `choice` question and answers
+`answers.<name>.choice`, rejecting on failure. Through real omp with a session
+whose screen changes from an unready to a ready state worded differently from
+the intent: a judge monitor with a short `judge_interval_ms` must stay silent
+on the unready screen, deliver one `monitor_judge_match` notice quoting the
+ready screen that triggers a turn, and appear in `list_sessions` as
+`judge=… every=…`; with no judge model bound, starting must fail with
+`judge_unavailable`.
+
+### Agent park
+
+`@oh-my-pi/pi-coding-agent` must still export `AgentRegistry` with `global()`,
+`get(id)` and `onChange()` emitting `removed` and `status_changed` with the
+entry as `ref`, and `@oh-my-pi/pi-coding-agent/registry/agent-lifecycle` must
+stay mapped for plugins with `AgentLifecycleManager.global()`,
+`isParking(id, ref)` (true through the park's `session_shutdown`),
+`has(id, ref)` and `ensureLive(id)` (resolving after the revived activation's
+`session_start`). Through real omp with `task.agentIdleTtlMs` lowered: a
+parked subagent's running terminal must survive and be driven by the same
+`session_id` after a revive; a parked subagent's `on_exit: "wake"` exit must
+not revive it; its non-zero exit must revive it and deliver one
+`abnormal_return`; quitting the main session must leave no process of a
+parked subagent's terminal.
+
+### Presentation
+
+`toolRenderers.bash` from `@oh-my-pi/pi-tui/tools` must still expose
+`renderCall`/`renderResult`/`describeCall`/`describeResult`/`mergeCallAndResult`/`inline`
+and accept `{command, cwd}` args and `{exitCode, wallTimeMs, async}` details.
+Package installation validation must still await the extension factory and
+propagate its rejection.
+
+### Tern HUD
+
+`@oh-my-pi/pi-tui/native/state` must still export
+`isNativeRendering`/`onNativeRenderingChange`;
+`@oh-my-pi/pi-coding-agent/modes/interactive-mode` must still export
+`InteractiveMode` whose prototype `describeHudPills` returns an `omp.hud` row
+holding at most one `omp.hud.pill` row (`hidden` when empty) and whose
+instances keep `ui.requestRender`; omp's dock must still describe that row on
+every native frame, describe a component child in a node's children in place
+(no wrapper element) and route its events to that component's
+`handleNativeEvent`, and Tern must still draw a divider between sibling
+`omp.hud.seg` rows of one pill. A custom overlay's `nativeOverlay` role and
+head must still reach Tern's overlay frame with `select`/`activate`/`action`
+events and `handleInput` keys reaching the component, and the view's action
+ids (`omp-actual-terminal.terminal.open`, `kill`, `close`, `back`) must not be
+one of Tern's own actions (0.9.5 consumes `open`, `copy` and `zoom` itself, so
+a button sending `open` without `href`/`path` does nothing); Tern must still
+scope the Background jobs layout under
+`.sf-overlay[data-role='omp.overlay.jobs']` with the `omp.jobs.*` inner roles
+(split, master, detail, status, state, age, id, command, facts, out, label,
+output, nooutput, summary, empty) and key no behavior on them, and draw
+`omp.overlay.console` as a full-pane overlay. In Tern, a `full` overlay's
+`ansi` must still fill the height its action bar leaves under `grow` and a
+fractional `max.h`, and scroll inside itself, and an `ansi` with role
+`omp.jobs.output` must keep colors and follow its newest row within
+`max.h: "16lines"`. Tern's `plugin list --json` (`plugins[].id`),
+`remove ID --json`, its exact `is linked; use unlink` answer and
+`unlink ID --json` must retain their contract for the removal of the old
+`omp-unified-exec` Tern plugin, with a 75-second timeout covering Tern's
+60-second reload wait.
+
+Check it in a real Tern window (`tern --control`, plugins load only in
+windows, not in `tern serve`) with the owner's settings, isolated
+`TERN_CONFIG_DIR` and `TERN_DAEMON_SOCKET`, a running turn, a background agent
+and a background bash job, at 1100×850 and 700px width, in Reader, Spine and
+Console with a light and a dark appearance (`palette "Dark appearance"`;
+`theme dark NAME` only picks the dark theme), both with no Tern plugin and
+with omp-todo-more's extension and Tern plugin. The terminals segment must be
+the last `omp.hud.seg` of omp's single `omp.hud.pill`, with the same height
+and font as the agents and jobs segments and Tern's segment divider at its
+left edge (Tern drops that 1px line at some sub-pixel boundary positions,
+native boundaries included; compare the boundary x with a native-only pill
+before blaming the segment), and no second `omp.hud` row. The Terminals view
+must match the native Background jobs view's card, master and detail widths
+and layout in the same window, and pick a session by click and ↑/↓. Kill and
+`x` must end only the selected running session after confirmed exit; Open /
+Enter must show the full-pane page at the session's full width, with retained
+history still scrollable after model observations and typed keys reaching a
+running `cat`. Esc / Back must return to the view; Close and Esc must leave
+processes alive and the composer usable. Removing the last session removes the
+segment; starting another session immediately adds it again. A Tern config
+holding the old `omp-unified-exec` plugin must list no `omp-unified-exec`
+after loading.
 
 ## Re-recording the README demos
 
@@ -352,19 +603,20 @@ READMEs show the GIF and link the MP4.
 
 ## Package delivery
 
-This fork does not publish to npm; its publish workflow is disabled. The
-`release` branch is the published channel, moved daily at 02:00 GMT+9 by the
-`omomp-release` workflow, while `main` is development. Users install the Git
-source with:
+Nothing is published to npm. The `release` branch is the published channel,
+moved daily at 02:00 GMT+9 by the `omomp-release` workflow, while `main` is
+development. A run promotes `## [Unreleased]` of `CHANGELOG.md` to a version
+section, bumps `package.json`, and moves `main`, the tag and the `release`
+branch together; a run with no top-level item under `## [Unreleased]` pushes
+nothing. Users install the Git source with:
 
 ```bash
-omp plugin install https://github.com/oh-my-omp/omp-unified-exec#release --force
+omp plugin install https://github.com/oh-my-omp/omp-actual-terminal#release --force
 ```
 
-`files` in `package.json` includes `src`, the fork's TypeScript modules and
-`fork-features/topics/*.md`, `README.md`, `LICENSE` and `CHANGELOG.md` (the
-`omomp.changelog` declaration). Keep required runtime files inside that package
-set.
+`files` in `package.json` includes `src` (with `src/topics/*.md`),
+`README.md`, `LICENSE` and `CHANGELOG.md` (the `omomp.changelog`
+declaration). Keep required runtime files inside that package set.
 
 ## Commit conventions
 
@@ -381,12 +633,8 @@ prior commits gives a sense of scope.
 
 ## Sources to read before changing core behavior
 
-- This fork's behavior is defined by the READMEs, the fork customizations and
-  expected sync conflicts in
-  [fork-features/README.md](../fork-features/README.md), the implementation
-  and its tests. Upstream and codex diverge from it (PTY-only sessions, input-only
-  `write_stdin`, `term://`, `monitor`, host shell selection, omp presentation);
-  do not port their behavior back over a fork deletion.
+- The plugin's behavior is defined by the READMEs, the implementation and its
+  tests.
 - Codex's `unified_exec`
   ([`codex-rs/core/src/unified_exec/`](https://github.com/openai/codex/tree/main/codex-rs/core/src/unified_exec))
   is useful for comparing shared session semantics and candidate fixes.

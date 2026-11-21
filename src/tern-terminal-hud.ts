@@ -1,20 +1,20 @@
 import { homedir } from "node:os";
 import { isAbsolute, relative, sep } from "node:path";
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import type * as NativeState from "@oh-my-pi/pi-tui/native/state";
-import { matchesKey, type Component, type NativeNode } from "@earendil-works/pi-tui";
+import { matchesKey, type Component, type NativeNode } from "@oh-my-pi/pi-tui";
 
-import { formatElapsedUi } from "../src/format-time.ts";
-import { sanitizeOutputText } from "../src/output-safety.ts";
+import { formatElapsedUi } from "./format-time.ts";
+import { sanitizeOutputText } from "./output-safety.ts";
 import { tr } from "./omomp-shared/i18n.ts";
-import type { ExecSession } from "../src/session.ts";
-import type { SessionStore } from "../src/session-store.ts";
-import type { StyledScreen } from "../src/terminal-screen.ts";
+import type { ExecSession } from "./session.ts";
+import type { SessionStore } from "./session-store.ts";
+import type { StyledScreen } from "./terminal-screen.ts";
 
 function requalify(change: string): Error {
-	return new Error(`omp-unified-exec: ${change}; requalify fork-features/tern-terminal-hud.ts for this omp version`);
+	return new Error(`omp-actual-terminal: ${change}; requalify src/tern-terminal-hud.ts for this omp version`);
 }
 
 export type NativeRenderingState = Pick<typeof NativeState, "isNativeRendering" | "onNativeRenderingChange">;
@@ -47,8 +47,8 @@ export interface TernHudHost {
 	readonly pills: HudPillsPrototype;
 }
 
-export const OPEN_ACTION = "unified-exec.terminals.open";
-export const OPEN_TERMINAL_ACTION = "unified-exec.terminal.open";
+export const OPEN_ACTION = "omp-actual-terminal.terminals.open";
+export const OPEN_TERMINAL_ACTION = "omp-actual-terminal.terminal.open";
 export const KILL_ACTION = "kill";
 export const CLOSE_ACTION = "close";
 export const BACK_ACTION = "back";
@@ -534,7 +534,7 @@ interface PillsRegistry {
 	readonly wrapped: WeakSet<object>;
 }
 
-const pillsRegistrySymbol = Symbol.for("omp-unified-exec.tern-hud-pills");
+const pillsRegistrySymbol = Symbol.for("omp-actual-terminal.tern-hud-pills");
 const processGlobal = globalThis as typeof globalThis & { [pillsRegistrySymbol]?: PillsRegistry };
 const pillsRegistry: PillsRegistry = processGlobal[pillsRegistrySymbol] ??= { decorate: undefined, wrapped: new WeakSet() };
 

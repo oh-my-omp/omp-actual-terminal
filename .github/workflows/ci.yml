@@ -28,11 +28,11 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Install dependencies from npm lockfile
-        run: npm ci
+      - name: Install dependencies from bun.lock
+        run: bun install --frozen-lockfile
 
       - name: Upgrade omp host packages to their newest release
-        run: npm install --no-save $(node -p "Object.keys(require('./package.json').devDependencies).filter((name) => name.startsWith('@oh-my-pi/')).map((name) => name + '@latest').join(' ')")
+        run: bun update $(bun -e "console.log(Object.keys(require('./package.json').devDependencies).filter((name) => name.startsWith('@oh-my-pi/')).join(' '))")
 
       - name: Typecheck
         run: bun run check
@@ -55,5 +55,5 @@ jobs:
           ./.build/bun-pty-runtime.exe
 
       - name: Test
-        run: bun test
+        run: bun run test
         timeout-minutes: 10

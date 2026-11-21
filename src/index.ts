@@ -1,13 +1,13 @@
 import { constants as osConstants } from "node:os";
 import { statSync } from "node:fs";
 import { resolve } from "node:path";
-import { type AgentToolResult, type AgentToolUpdateCallback, type ExtensionAPI, type ExtensionContext, type SessionStopEvent, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Box, Text } from "@earendil-works/pi-tui";
+import { type AgentToolResult, type AgentToolUpdateCallback, type ExtensionAPI, type ExtensionContext, type SessionStopEvent, type ToolDefinition } from "@oh-my-pi/pi-coding-agent";
+import { Box, Text } from "@oh-my-pi/pi-tui";
 import { Type, type TUnsafe } from "@oh-my-pi/omptype/typebox";
 
-import { type AgentHost, type AgentIdentity, type ParkedRuntime, parkedRuntimes } from "../fork-features/agent-park.ts";
-import { type ActivatedExtension, withHostPresentation } from "../fork-features/omp-presentation.ts";
-import { approvalCommand, approveBoundCommand, type CommandApprovalHost } from "../fork-features/command-approval.ts";
+import { type AgentHost, type AgentIdentity, type ParkedRuntime, parkedRuntimes } from "./agent-park.ts";
+import { type ActivatedExtension, withHostPresentation } from "./omp-presentation.ts";
+import { approvalCommand, approveBoundCommand, type CommandApprovalHost } from "./command-approval.ts";
 import {
 	execCommandDocumentation, execCommandTopicPointers,
 	writeStdinDocumentation, writeStdinTopicPointers,
@@ -15,23 +15,23 @@ import {
 	monitorDocumentation, monitorTopicPointers,
 	killSessionDocumentation, killSessionTopicPointers,
 	listSessionsDocumentation, listSessionsTopicPointers,
-} from "../fork-features/exec-command-docs.ts";
-import { bindingContext, bindSession, type HostBindingState, recheckBinding } from "../fork-features/session-binding.ts";
-import { MonitorError, type MonitorWatchStatus } from "../fork-features/monitor-subscription.ts";
-import { loadInitFile, shellScript } from "../fork-features/exec-init.ts";
-import { noShellHost, type ShellHost } from "../fork-features/shell-host.ts";
-import { parseGraceReclaim, type PluginSettingsReader } from "../fork-features/plugin-settings.ts";
-import { loadStopConfig } from "../fork-features/stop-config.ts";
-import { detectStop, type StopHost } from "../fork-features/stop-gate.ts";
-import { screenJudge, type ScreenJudge } from "../fork-features/screen-judge.ts";
-import { renderStopConfigReason, renderStopReason } from "../fork-features/stop-reasons.ts";
-import { type LifecycleClock, type ReclaimResult, TerminalLifecycle } from "../fork-features/terminal-lifecycle.ts";
-import { buildNoticeDisplayMessage, MAX_TITLE_CHARS, NoticeDispatcher, type NoticeGate, type NoticeMessage, outcomeText, parseTerminalTitle } from "../fork-features/terminal-notice.ts";
+} from "./exec-command-docs.ts";
+import { bindingContext, bindSession, type HostBindingState, recheckBinding } from "./session-binding.ts";
+import { MonitorError, type MonitorWatchStatus } from "./monitor-subscription.ts";
+import { loadInitFile, shellScript } from "./exec-init.ts";
+import { noShellHost, type ShellHost } from "./shell-host.ts";
+import { parseGraceReclaim, type PluginSettingsReader } from "./plugin-settings.ts";
+import { loadStopConfig } from "./stop-config.ts";
+import { detectStop, type StopHost } from "./stop-gate.ts";
+import { screenJudge, type ScreenJudge } from "./screen-judge.ts";
+import { renderStopConfigReason, renderStopReason } from "./stop-reasons.ts";
+import { type LifecycleClock, type ReclaimResult, TerminalLifecycle } from "./terminal-lifecycle.ts";
+import { buildNoticeDisplayMessage, MAX_TITLE_CHARS, NoticeDispatcher, type NoticeGate, type NoticeMessage, outcomeText, parseTerminalTitle } from "./terminal-notice.ts";
 import { type CollectResult, NO_OUTPUT } from "./collect.ts";
 import { CompletionCoordinator, type OnExitPolicy, sanitizeMeta } from "./completion.ts";
 import { formatElapsed, formatElapsedUi, nowUtcIso } from "./format-time.ts";
-import { language, tr } from "../fork-features/omomp-shared/i18n.ts";
-import { readTodos } from "../fork-features/omomp-shared/todo-read.ts";
+import { language, tr } from "./omomp-shared/i18n.ts";
+import { readTodos } from "./omomp-shared/todo-read.ts";
 import { waitForExitOrDeadline } from "./long-wait.ts";
 import { sleep } from "./notify.ts";
 import { sanitizeOutputText } from "./output-safety.ts";
@@ -70,7 +70,7 @@ const MIN_PTY_COLS = 20;
 const MAX_PTY_COLS = 500;
 const MIN_PTY_ROWS = 5;
 const MAX_PTY_ROWS = 300;
-const SESSION_UI_KEY = "unified-exec.sessions";
+const SESSION_UI_KEY = "omp-actual-terminal.sessions";
 
 /** A TypeBox literal union (anyOf/const) breaks Google models. */
 function StringEnum<T extends readonly string[]>(values: T, description: string): TUnsafe<T[number]> {
@@ -241,7 +241,7 @@ async function runExecCommand(
 	const finalizeResponse = (input: FinalizeInput): ResponseShape =>
 		finalizeProcessResult({ ...input, operation: "exec_command" });
 	if (ctx.shuttingDown) {
-		throw new Error("unified-exec: session is shutting down; not starting new commands.");
+		throw new Error("omp-actual-terminal: session is shutting down; not starting new commands.");
 	}
 	const title = parseTerminalTitle(args.title);
 	if (title === undefined) {
@@ -273,14 +273,14 @@ async function runExecCommand(
 		const origin = refuseOrigin(chosen.source);
 		ctx.ui?.notify(
 			tr(
-				`unified-exec: not launching cmd (from ${origin.en}); omit shell to run in omp's pi-shell (omp bash), or pass a bash executable path.`,
-				`unified-exec：不启动 cmd（来自 ${origin.zh}）；省略 shell 以使用 omp 的 pi-shell（omp bash），或传入 bash 可执行文件路径。`,
+				`omp-actual-terminal: not launching cmd (from ${origin.en}); omit shell to run in omp's pi-shell (omp bash), or pass a bash executable path.`,
+				`omp-actual-terminal：不启动 cmd（来自 ${origin.zh}）；省略 shell 以使用 omp 的 pi-shell（omp bash），或传入 bash 可执行文件路径。`,
 			),
 			"warning",
 		);
 		return setupFailure(
 			chosen.shell,
-			`shell "${chosen.shell}" is not supported: omp-unified-exec never launches cmd. Omit shell to run in omp's pi-shell (omp bash), or pass a bash executable path.`,
+			`shell "${chosen.shell}" is not supported: omp-actual-terminal never launches cmd. Omit shell to run in omp's pi-shell (omp bash), or pass a bash executable path.`,
 		);
 	}
 	const shell: LaunchShell = chosen.kind === "pi-shell"
@@ -396,8 +396,8 @@ async function runExecCommand(
 			ctx.lifecycle.evicted(pruned, ctx.store.maxSessions);
 			ctx.ui?.notify(
 				tr(
-					`unified-exec: evicted session ${pruned.id} (LRU, over cap ${ctx.store.maxSessions})`,
-					`unified-exec：已淘汰会话 ${pruned.id}（LRU，超过上限 ${ctx.store.maxSessions}）`,
+					`omp-actual-terminal: evicted session ${pruned.id} (LRU, over cap ${ctx.store.maxSessions})`,
+					`omp-actual-terminal：已淘汰会话 ${pruned.id}（LRU，超过上限 ${ctx.store.maxSessions}）`,
 				),
 				"warning",
 			);
@@ -405,8 +405,8 @@ async function runExecCommand(
 		if (count >= WARNING_SESSIONS) {
 			ctx.ui?.notify(
 				tr(
-					`unified-exec: ${count}/${ctx.store.maxSessions} sessions open`,
-					`unified-exec：已打开 ${count}/${ctx.store.maxSessions} 个会话`,
+					`omp-actual-terminal: ${count}/${ctx.store.maxSessions} sessions open`,
+					`omp-actual-terminal：已打开 ${count}/${ctx.store.maxSessions} 个会话`,
 				),
 				"warning",
 			);
@@ -682,8 +682,8 @@ function formatRunningSessionsWidget(ctx: ExtensionCtx, sessions: ExecSession[])
 	const shown = sessions.slice(0, 5);
 	const lines = [
 		tr(
-			`⚠ unified-exec: ${sessions.length} ${sessionWord(sessions.length)} still running`,
-			`⚠ unified-exec：${sessions.length} 个会话仍在运行`,
+			`⚠ omp-actual-terminal: ${sessions.length} ${sessionWord(sessions.length)} still running`,
+			`⚠ omp-actual-terminal：${sessions.length} 个会话仍在运行`,
 		),
 		...shown.map((s) => {
 			const wake = ctx.coordinator.isArmed(s.id) ? tr(" [wake]", " [已唤醒]") : "";
@@ -714,8 +714,8 @@ function updateRunningSessionsUi(ctx: ExtensionCtx, opts: { showWidget?: boolean
 	const sessions = runningSessions(ctx);
 	const status = sessions.length
 		? tr(
-			`unified-exec: ${sessions.length} ${sessionWord(sessions.length)} running`,
-			`unified-exec：${sessions.length} 个会话正在运行`,
+			`omp-actual-terminal: ${sessions.length} ${sessionWord(sessions.length)} running`,
+			`omp-actual-terminal：${sessions.length} 个会话正在运行`,
 		)
 		: undefined;
 	ui.setStatus(SESSION_UI_KEY, status);
@@ -723,8 +723,8 @@ function updateRunningSessionsUi(ctx: ExtensionCtx, opts: { showWidget?: boolean
 	if (opts.notifyTree && sessions.length > 0) {
 		ui.notify(
 			tr(
-				`unified-exec: ${sessions.length} ${sessionWord(sessions.length)} still running after /tree.`,
-				`unified-exec：/tree 后仍有 ${sessions.length} 个会话在运行。`,
+				`omp-actual-terminal: ${sessions.length} ${sessionWord(sessions.length)} still running after /tree.`,
+				`omp-actual-terminal：/tree 后仍有 ${sessions.length} 个会话在运行。`,
 			),
 			"warning",
 		);
@@ -854,8 +854,8 @@ function createRuntime(opts: RuntimeOptions): ExtensionCtx {
 		onSendError: (err) => {
 			ctx.ui?.notify(
 				tr(
-					`unified-exec: failed to deliver a terminal notice: ${err instanceof Error ? err.message : String(err)}`,
-					`unified-exec：终端通知投递失败：${err instanceof Error ? err.message : String(err)}`,
+					`omp-actual-terminal: failed to deliver a terminal notice: ${err instanceof Error ? err.message : String(err)}`,
+					`omp-actual-terminal：终端通知投递失败：${err instanceof Error ? err.message : String(err)}`,
 				),
 				"warning",
 			);
@@ -947,8 +947,8 @@ async function endRuntime(ctx: ExtensionCtx): Promise<void> {
 		const leftover = drained.filter((s) => !s.hasExited).length;
 		ctx.ui.notify(
 			tr(
-				`unified-exec: terminated ${drained.length - leftover} live session(s) on shutdown${leftover ? `; ${leftover} did not confirm exit` : ""}`,
-				`unified-exec：关机时终止了 ${drained.length - leftover} 个活动会话${leftover ? `；${leftover} 个会话未确认退出` : ""}`,
+				`omp-actual-terminal: terminated ${drained.length - leftover} live session(s) on shutdown${leftover ? `; ${leftover} did not confirm exit` : ""}`,
+				`omp-actual-terminal：关机时终止了 ${drained.length - leftover} 个活动会话${leftover ? `；${leftover} 个会话未确认退出` : ""}`,
 			),
 			leftover ? "warning" : "info",
 		);
@@ -980,7 +980,7 @@ export function activate(
 				reportedConfigProblems.add(key);
 				const reason = renderStopConfigReason(problem.reason, language());
 				ctx.ui?.notify(
-					tr(`unified-exec: ignoring ${problem.path}: ${reason}`, `unified-exec：忽略 ${problem.path}：${reason}`),
+					tr(`omp-actual-terminal: ignoring ${problem.path}: ${reason}`, `omp-actual-terminal：忽略 ${problem.path}：${reason}`),
 					"warning",
 				);
 			}
@@ -1001,8 +1001,8 @@ export function activate(
 				case "done":
 					ctx.ui?.notify(
 						tr(
-							`unified-exec: the agent's work is done (${verdict.detector}); returned terminals reclaimed, their notices dropped`,
-							`unified-exec：判定 agent 已完成（${verdict.detector}）；已回收返回的终端并丢弃其通知`,
+							`omp-actual-terminal: the agent's work is done (${verdict.detector}); returned terminals reclaimed, their notices dropped`,
+							`omp-actual-terminal：判定 agent 已完成（${verdict.detector}）；已回收返回的终端并丢弃其通知`,
 						),
 						"info",
 					);
@@ -1012,7 +1012,7 @@ export function activate(
 				case "undecided":
 					if (verdict.cause === "failed") {
 						const reason = renderStopReason(verdict.reason, language());
-						ctx.ui?.notify(tr(`unified-exec: stop decision failed: ${reason}`, `unified-exec：完成判定失败：${reason}`), "warning");
+						ctx.ui?.notify(tr(`omp-actual-terminal: stop decision failed: ${reason}`, `omp-actual-terminal：完成判定失败：${reason}`), "warning");
 					}
 					return;
 			}
@@ -1022,7 +1022,7 @@ export function activate(
 		kind: "attached",
 		send: (message) => {
 			pi.sendMessage(
-				{ customType: "unified-exec-notice", content: message.content, display: true, details: message.details },
+				{ customType: "omp-actual-terminal-notice", content: message.content, display: true, details: message.details },
 				{ deliverAs: "aside" },
 			);
 		},
@@ -1041,23 +1041,23 @@ export function activate(
 				} catch (error) {
 					const reason = error instanceof Error ? error.message : String(error);
 					warnOnce(`plugin-settings\n${reason}`, tr(
-						`unified-exec: could not read plugin settings, using defaults: ${reason}`,
-						`unified-exec：无法读取插件设置，改用默认值：${reason}`,
+						`omp-actual-terminal: could not read plugin settings, using defaults: ${reason}`,
+						`omp-actual-terminal：无法读取插件设置，改用默认值：${reason}`,
 					));
 				}
 			}
 			const read = parseGraceReclaim(stored);
 			if (read.kind === "ok") return read.value;
 			warnOnce(`plugin-setting\n${read.key}`, tr(
-				`unified-exec: plugin setting ${read.key} must be true or false; using ${read.fallback}`,
-				`unified-exec：插件设置 ${read.key} 必须为 true 或 false；改用 ${read.fallback}`,
+				`omp-actual-terminal: plugin setting ${read.key} must be true or false; using ${read.fallback}`,
+				`omp-actual-terminal：插件设置 ${read.key} 必须为 true 或 false；改用 ${read.fallback}`,
 			));
 			return read.fallback;
 		},
 	};
 	const parked = parkedRuntimes<ExtensionCtx>();
 	let ctx = createRuntime({ attachment, agentHost, lifecycleClock, appearance, shellPath, shellHost, invalidateGithubCache, pluginSettings });
-	pi.registerMessageRenderer("unified-exec-notice", (message) => {
+	pi.registerMessageRenderer("omp-actual-terminal-notice", (message) => {
 		const box = new Box(1, 1);
 		box.addChild(new Text(buildNoticeDisplayMessage(message.details), 0, 0));
 		return box;
@@ -1128,10 +1128,10 @@ export function activate(
 		await parked.settled();
 	});
 
-	pi.registerCommand("unified-exec-sessions", {
+	pi.registerCommand("omp-actual-terminal-sessions", {
 		description: tr(
-			"List live unified-exec sessions and optionally kill one (or all)",
-			"列出正在运行的 unified-exec 会话，并可结束其中一个（或全部）",
+			"List live omp-actual-terminal sessions and optionally kill one (or all)",
+			"列出正在运行的 omp-actual-terminal 会话，并可结束其中一个（或全部）",
 		),
 		handler: async (_args, cmdCtx) => {
 			ctx.ui = cmdCtx.ui;
@@ -1139,7 +1139,7 @@ export function activate(
 			const sessions = runningSessions(ctx);
 			if (sessions.length === 0) {
 				cmdCtx.ui.notify(
-					tr("unified-exec: no live sessions", "unified-exec：没有正在运行的会话"),
+					tr("omp-actual-terminal: no live sessions", "omp-actual-terminal：没有正在运行的会话"),
 					"info",
 				);
 				return;
@@ -1160,8 +1160,8 @@ export function activate(
 			);
 			const choice = await cmdCtx.ui.select(
 				tr(
-					`unified-exec: ${sessions.length} live ${sessionWord(sessions.length)} — select to kill (Esc to cancel)`,
-					`unified-exec：${sessions.length} 个正在运行的会话——选择要结束的会话（Esc 取消）`,
+					`omp-actual-terminal: ${sessions.length} live ${sessionWord(sessions.length)} — select to kill (Esc to cancel)`,
+					`omp-actual-terminal：${sessions.length} 个正在运行的会话——选择要结束的会话（Esc 取消）`,
 				),
 				[...labels, KILL_ALL],
 			);
@@ -1177,8 +1177,8 @@ export function activate(
 			updateRunningSessionsUi(ctx);
 			cmdCtx.ui.notify(
 				tr(
-					`unified-exec: killed ${killed} ${sessionWord(killed)}${failed ? `; ${failed} did not confirm exit (still listed)` : ""}`,
-					`unified-exec：已结束 ${killed} 个会话${failed ? `；${failed} 个会话未确认退出（仍在列表中）` : ""}`,
+					`omp-actual-terminal: killed ${killed} ${sessionWord(killed)}${failed ? `; ${failed} did not confirm exit (still listed)` : ""}`,
+					`omp-actual-terminal：已结束 ${killed} 个会话${failed ? `；${failed} 个会话未确认退出（仍在列表中）` : ""}`,
 				),
 				failed ? "warning" : "info",
 			);
@@ -1436,7 +1436,7 @@ export function activate(
 		name: "list_sessions",
 		...listSessionsDocumentation,
 		label: tr("List sessions", "列出会话"),
-		description: "List this omp run's unified-exec terminals: running ones, and returned ones not yet reclaimed, with their titles and lifecycle state." + listSessionsTopicPointers,
+		description: "List this omp run's omp-actual-terminal terminals: running ones, and returned ones not yet reclaimed, with their titles and lifecycle state." + listSessionsTopicPointers,
 		parameters: listSessionsParameters,
 		async execute(_toolCallId, _params, _signal, _onUpdate, eventCtx) {
 			ctx.ui ??= eventCtx.ui;
@@ -1483,7 +1483,7 @@ export function activate(
 						return `  ${String(s.session_id).padStart(3)}  ${JSON.stringify(s.title)}  pid=${String(s.pid ?? "?").padStart(6)}  ${((s.elapsed_ms / 1000).toFixed(1) + "s").padStart(8)}${wake}${monitor}  ${oneLineCommand(s.command, 60)}${exited}${life}\n        shell: ${sanitizeMeta(s.shell ?? "")}\n        log: ${s.log_path}${s.terminal_url ? `\n        terminal_url: ${s.terminal_url}` : ""}`;
 					})
 				: ["  (no terminals)"];
-			const header = `unified-exec terminals (${runningCount} running, ${returnedCount} returned):`;
+			const header = `omp-actual-terminal terminals (${runningCount} running, ${returnedCount} returned):`;
 			return {
 				content: [{ type: "text", text: `${header}\n${lines.join("\n")}\ntool_time_utc: ${toolTimeUtc}` }],
 				details: { sessions, running_count: runningCount, returned_count: returnedCount, tool_time_utc: toolTimeUtc },

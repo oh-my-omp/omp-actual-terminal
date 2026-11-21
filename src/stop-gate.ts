@@ -40,7 +40,7 @@ export interface StopHost {
 }
 
 function hostFunction<T>(value: T | undefined, name: string, from: string): T {
-	if (typeof value !== "function") throw new Error(`omp-unified-exec: ${from} lacks ${name}`);
+	if (typeof value !== "function") throw new Error(`omp-actual-terminal: ${from} lacks ${name}`);
 	return value;
 }
 
@@ -54,7 +54,7 @@ export async function loadStopHost(): Promise<StopHost> {
 	]);
 	const thinkingLevels = ai.THINKING_EFFORTS;
 	if (!Array.isArray(thinkingLevels)) {
-		throw new Error("omp-unified-exec: @oh-my-pi/pi-ai lacks THINKING_EFFORTS");
+		throw new Error("omp-actual-terminal: @oh-my-pi/pi-ai lacks THINKING_EFFORTS");
 	}
 	return {
 		getAgentDir: hostFunction(agent.getAgentDir, "getAgentDir", "@oh-my-pi/pi-coding-agent"),
@@ -189,7 +189,7 @@ async function runJudge(chain: Judgment.ChainJudge, prompt: string, signal: Abor
 function defaultEffort(levels: typeof PiAi.THINKING_EFFORTS): PiAi.Effort {
 	const low = levels.find((level) => String(level) === "low");
 	if (low === undefined) {
-		throw new Error("omp-unified-exec: @oh-my-pi/pi-ai offers no low thinking level; requalify fork-features/stop-gate.ts for this omp version");
+		throw new Error("omp-actual-terminal: @oh-my-pi/pi-ai offers no low thinking level; requalify src/stop-gate.ts for this omp version");
 	}
 	return low;
 }
@@ -242,7 +242,7 @@ export async function detectStop(deps: StopDetectorDeps, config: StopConfig, inp
 	const session = detectorSession(deps.session());
 	if (session === undefined) return { kind: "undecided", cause: "unavailable", reason: { kind: "no_session" } };
 	const deadline = AbortSignal.any([signal, AbortSignal.timeout(DETECT_DEADLINE_MS)]);
-	const judge = config.mode === "llm" ? undefined : judgeChain(deps.host, session, "unified-exec-stop");
+	const judge = config.mode === "llm" ? undefined : judgeChain(deps.host, session, "omp-actual-terminal-stop");
 	if (judge !== undefined) return runJudge(judge, prompt, deadline);
 	if (config.mode === "judge") return { kind: "undecided", cause: "unavailable", reason: { kind: "no_judge" } };
 	const models = smolModels(deps.host, session);

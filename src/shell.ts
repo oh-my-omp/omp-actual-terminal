@@ -150,7 +150,7 @@ export function resolveWindowsShell(bin: string, env?: NodeJS.ProcessEnv): strin
 	}
 	const effectiveEnv = env ?? process.env;
 	const bash = bin.replace(/\.(exe|com)$/i, "").toLowerCase() === "bash";
-	const override = bash ? effectiveEnv.PI_UNIFIED_EXEC_BASH?.trim() : undefined;
+	const override = bash ? effectiveEnv.OMP_ACTUAL_TERMINAL_BASH?.trim() : undefined;
 	const found = override && isFile(override)
 		? override
 		// A bash name must not land on System32's WSL stub (a different OS view).
@@ -158,7 +158,7 @@ export function resolveWindowsShell(bin: string, env?: NodeJS.ProcessEnv): strin
 	if (!found) {
 		throw new Error(
 			bash
-				? `bash not found on PATH (searched ${WINDOWS_SHELL_EXTS.join("/")}). Install Git for Windows, set PI_UNIFIED_EXEC_BASH to your bash.exe, or omit shell to run in omp's pi-shell (omp bash).`
+				? `bash not found on PATH (searched ${WINDOWS_SHELL_EXTS.join("/")}). Install Git for Windows, set OMP_ACTUAL_TERMINAL_BASH to your bash.exe, or omit shell to run in omp's pi-shell (omp bash).`
 				: `shell "${bin}" not found on PATH (searched ${WINDOWS_SHELL_EXTS.join("/")}). Pass an absolute path, or use "powershell" or an installed bash.`,
 		);
 	}

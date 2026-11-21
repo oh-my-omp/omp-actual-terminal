@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { join, parse, sep } from "node:path";
 import { describe, it, type TestContext } from "node:test";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { NativeChild, NativeNode } from "@earendil-works/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { NativeChild, NativeNode } from "@oh-my-pi/pi-tui";
 import {
 	BACK_ACTION,
 	CLOSE_ACTION,
@@ -22,7 +22,7 @@ import {
 	type NativeRenderingState,
 	type TerminalEntry,
 	type TerminalState,
-} from "../fork-features/tern-terminal-hud.ts";
+} from "../src/tern-terminal-hud.ts";
 import { ExecSession } from "../src/session.ts";
 import { SessionStore } from "../src/session-store.ts";
 
@@ -212,7 +212,7 @@ describe("terminal HUD pill segment", () => {
 	});
 
 	it("rejects a reshaped omp with a requalify error", () => {
-		const requalify = { message: /requalify fork-features\/tern-terminal-hud\.ts/ };
+		const requalify = { message: /requalify src\/tern-terminal-hud\.ts/ };
 		for (const row of [
 			undefined, null, "row", { k: "col" }, { k: "row", p: { role: "omp.hud.status" } },
 			{ k: "row", p: { role: "omp.hud" }, c: [{ k: "row", p: { role: "omp.hud.seg" } }] },
@@ -710,7 +710,7 @@ describe("terminal HUD lifecycle with real sessions", () => {
 		await h.emit("session_start");
 		assert.deepEqual(h.mode.describeHudPills(), { k: "col" }, "without a session omp's value passes through");
 		h.spawn();
-		assert.throws(() => h.mode.describeHudPills(), { message: /requalify fork-features\/tern-terminal-hud\.ts/ });
+		assert.throws(() => h.mode.describeHudPills(), { message: /requalify src\/tern-terminal-hud\.ts/ });
 	});
 
 	it("refreshes the segment's stored and running counts for every stored session", async (t) => {

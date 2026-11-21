@@ -2,9 +2,9 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { MonitorSubscription, type MonitorSession } from "../fork-features/monitor-subscription.ts";
-import type { ScreenJudge, ScreenVerdict } from "../fork-features/screen-judge.ts";
-import { NoticeDispatcher, type NoticeMessage, type NoticeOutcome } from "../fork-features/terminal-notice.ts";
+import { MonitorSubscription, type MonitorSession } from "../src/monitor-subscription.ts";
+import type { ScreenJudge, ScreenVerdict } from "../src/screen-judge.ts";
+import { NoticeDispatcher, type NoticeMessage, type NoticeOutcome } from "../src/terminal-notice.ts";
 import { CompletionCoordinator } from "../src/completion.ts";
 import { ExecSession } from "../src/session.ts";
 import { TerminalScreen, type TerminalLineSubscription } from "../src/terminal-screen.ts";

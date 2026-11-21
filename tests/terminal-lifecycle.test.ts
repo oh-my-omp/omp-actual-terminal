@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { afterEach, describe, it } from "node:test";
-import type { PluginSettingsReader } from "../fork-features/plugin-settings.ts";
-import { noteTerminalRead, readTerminal } from "../fork-features/terminal-resource.ts";
+import type { PluginSettingsReader } from "../src/plugin-settings.ts";
+import { noteTerminalRead, readTerminal } from "../src/terminal-resource.ts";
 import { activate } from "../src/index.ts";
 import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";
 
@@ -401,7 +401,7 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		assert.equal(monitor.details.status, "started");
 		assert.ok(await waitFor(() => h.notices("monitor_match").length === 1));
 		const message = h.sent.find((s) => s.message.details.notices.some((n) => n.kind === "monitor_match"))!;
-		assert.equal(message.message.customType, "unified-exec-notice");
+		assert.equal(message.message.customType, "omp-actual-terminal-notice");
 		assert.match(message.message.content, new RegExp(`session_id=${sid} title="watched"`));
 		assert.match(message.message.content, /needle-line/);
 	});

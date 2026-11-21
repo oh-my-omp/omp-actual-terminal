@@ -1,4 +1,4 @@
-import { tr } from "../fork-features/omomp-shared/i18n.ts";
+import { tr } from "./omomp-shared/i18n.ts";
 
 export function formatElapsed(ms: number): string {
 	const totalSeconds = Math.max(0, Math.floor(ms / 1000));

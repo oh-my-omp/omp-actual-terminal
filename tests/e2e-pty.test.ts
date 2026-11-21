@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { spawnSync } from "node:child_process";
 import { describe, it } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { readTerminal } from "../fork-features/terminal-resource.ts";
+import { readTerminal } from "../src/terminal-resource.ts";
 import { activate } from "../src/index.ts";
 import { IS_WINDOWS } from "../src/shell.ts";
 import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";
@@ -63,7 +63,7 @@ async function readUntil(url: string, expected: RegExp): Promise<string> {
 	return text;
 }
 
-describe("unified-exec PTY mode", () => {
+describe("omp-actual-terminal PTY mode", () => {
 	// NOTE: every test runs its body in try/finally with session_shutdown in
 	// the finally. A failed assertion mid-test must not leak a live PTY
 	// session: on Windows, ConPTY's conout worker keeps the event loop alive

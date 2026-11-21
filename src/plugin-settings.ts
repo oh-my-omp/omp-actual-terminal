@@ -1,7 +1,7 @@
 import manifest from "../package.json";
 import type * as Loader from "@oh-my-pi/pi-coding-agent/extensibility/plugins/loader";
 
-export const PLUGIN_NAME = "omp-unified-exec";
+export const PLUGIN_NAME = "omp-actual-terminal";
 
 export type PluginSettingsReader = (cwd: string) => Promise<Readonly<Record<string, unknown>>>;
 
@@ -21,7 +21,7 @@ export async function loadPluginSettingsReader(): Promise<PluginSettingsReader> 
 	const loader: Partial<typeof Loader> = await import("@oh-my-pi/pi-coding-agent/extensibility/plugins/loader");
 	const getPluginSettings = loader.getPluginSettings;
 	if (typeof getPluginSettings !== "function") {
-		throw new Error("omp-unified-exec: extensibility/plugins/loader lacks getPluginSettings");
+		throw new Error("omp-actual-terminal: extensibility/plugins/loader lacks getPluginSettings");
 	}
 	return async (cwd) => getPluginSettings(PLUGIN_NAME, cwd);
 }

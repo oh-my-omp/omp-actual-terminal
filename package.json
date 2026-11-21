@@ -1,12 +1,11 @@
 {
-	"name": "omp-unified-exec",
+	"name": "omp-actual-terminal",
 	"version": "0.15.4",
-	"description": "Long-lived PTY sessions for omp: send input with write_stdin, read terminal state via term://, and await events or completion with monitor. Full raw output logged to disk.",
+	"description": "Long-lived PTY terminals for omp: send input with write_stdin, read terminal state via term://, and await events or completion with monitor. Full raw output logged to disk.",
 	"keywords": [
 		"omp",
 		"omp-extension",
-		"codex",
-		"unified-exec",
+		"terminal",
 		"bash",
 		"pty"
 	],
@@ -14,22 +13,19 @@
 	"author": "Ren Wang <iamwrm@gmail.com>",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/oh-my-omp/omp-unified-exec.git"
+		"url": "git+https://github.com/oh-my-omp/omp-actual-terminal.git"
 	},
-	"homepage": "https://github.com/oh-my-omp/omp-unified-exec#readme",
+	"homepage": "https://github.com/oh-my-omp/omp-actual-terminal#readme",
 	"type": "module",
 	"scripts": {
 		"check": "tsc --noEmit",
-		"test": "npm run check && bun test"
+		"test": "bun test"
 	},
 	"engines": {
 		"bun": ">=1.4"
 	},
 	"files": [
 		"src",
-		"fork-features/*.ts",
-		"fork-features/omomp-shared/*.ts",
-		"fork-features/topics/*.md",
 		"README.md",
 		"LICENSE",
 		"CHANGELOG.md"

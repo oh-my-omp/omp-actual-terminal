@@ -5,7 +5,7 @@ import {
 	type CompletionSessionLike,
 	sanitizeMeta,
 } from "../src/completion.ts";
-import { buildNoticeMessage, NoticeDispatcher, type NoticeMessage, type TerminalNotice } from "../fork-features/terminal-notice.ts";
+import { buildNoticeMessage, NoticeDispatcher, type NoticeMessage, type TerminalNotice } from "../src/terminal-notice.ts";
 
 class FakeSession implements CompletionSessionLike {
 	readonly id: number;
@@ -13,7 +13,7 @@ class FakeSession implements CompletionSessionLike {
 	displayCommand = "sleep 99";
 	cwd = "/tmp/project";
 	startedAt = Date.now() - 1234;
-	logPath: string | undefined = "/tmp/pi-unified-exec-fake.log";
+	logPath: string | undefined = "/tmp/omp-actual-terminal-fake.log";
 	get terminalUrl(): string { return `term://${this.id}-fake`; }
 	hasExited = false;
 	exitCode: number | null = null;
@@ -325,7 +325,7 @@ describe("CompletionCoordinator", () => {
 		coordinator.handleEviction(s); // store drops the session
 		await settle();
 		assert.equal(sent.length, 1, "completion must not be silently lost");
-		assert.match(sent[0].content, /log_path: \/tmp\/pi-unified-exec-fake\.log/);
+		assert.match(sent[0].content, /log_path: \/tmp\/omp-actual-terminal-fake\.log/);
 	});
 
 	it("a failed send is retried at the next flush trigger, still exactly once", async () => {

@@ -1,8 +1,8 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { DEFAULT_STOP_CONFIG, fillTemplate, parseStopSection, type StopConfig } from "../fork-features/stop-config.ts";
-import { parseLlmAnswer, todoVerdict } from "../fork-features/stop-gate.ts";
-import type { TodoReadCounts, TodoReadResult } from "../fork-features/omomp-shared/todo-read.ts";
+import { DEFAULT_STOP_CONFIG, fillTemplate, parseStopSection, type StopConfig } from "../src/stop-config.ts";
+import { parseLlmAnswer, todoVerdict } from "../src/stop-gate.ts";
+import type { TodoReadCounts, TodoReadResult } from "../src/omomp-shared/todo-read.ts";
 import {
 	NoticeDispatcher,
 	type NoticeGate,
@@ -11,7 +11,7 @@ import {
 	type StopInput,
 	type StopVerdict,
 	type TerminalNotice,
-} from "../fork-features/terminal-notice.ts";
+} from "../src/terminal-notice.ts";
 
 function notice(sessionId: number, body: TerminalNotice["body"]): TerminalNotice {
 	return { identity: { sessionId, title: `t${sessionId}`, terminalUrl: undefined, logPath: undefined }, body };
