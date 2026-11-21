@@ -44,6 +44,7 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Fixed
 
+- Reset terminals on a session switch to a different session: the previous session's running and returned terminals end, and their notices and wakes no longer reach the new session
 - Counted only live terminals in the shutdown notice, and stopped announcing a termination when every remaining terminal had already exited
 - Clamped `yield_time_ms: 0` on `bash` with `pty: true` to the 250 ms lower bound instead of falling back to the 10 s default
 - Started terminals from the session's shell while the Spotlight experiment is on; they had started from a fresh shell without the session's exports, functions and aliases

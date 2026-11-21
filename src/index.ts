@@ -3,7 +3,7 @@ import { constants as osConstants, tmpdir } from "node:os";
 import { statSync } from "node:fs";
 import { rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { type AgentToolResult, type AgentToolUpdateCallback, type CustomTool, type ExtensionAPI, type ExtensionContext, type ImageAttachmentEntry, type SessionStopEvent, type Settings, type Skill, type ToolDefinition } from "@oh-my-pi/pi-coding-agent";
+import { type AgentToolResult, type AgentToolUpdateCallback, type CustomTool, type ExtensionAPI, type ExtensionContext, type ImageAttachmentEntry, type SessionStopEvent, type SessionSwitchEvent, type Settings, type Skill, type ToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import type { ResolveContext } from "@oh-my-pi/pi-coding-agent/internal-urls/types";
 import { Box, Text } from "@oh-my-pi/pi-tui";
 import { Type } from "@oh-my-pi/omptype/typebox";
@@ -1058,7 +1058,8 @@ async function deliverNotice(ctx: ExtensionCtx, agentHost: AgentHost | undefined
 	host.send(message);
 }
 
-async function endRuntime(ctx: ExtensionCtx): Promise<void> {
+async function endRuntime(ctx: ExtensionCtx, opts: { notifyShutdown?: boolean } = {}): Promise<void> {
+	const notifyShutdown = opts.notifyShutdown ?? true;
 	ctx.host = { kind: "ended" };
 	ctx.shuttingDown = true;
 	// Cancel lifecycle sweeps, wake timers/listeners and pending notices
@@ -1069,6 +1070,7 @@ async function endRuntime(ctx: ExtensionCtx): Promise<void> {
 	ctx.notices.stop();
 	// The plugin ends these terminals: their jobs show cancelled.
 	for (const job of ctx.jobs.values()) job.cancel();
+	ctx.jobs.clear();
 	const drained = ctx.store.terminateAll();
 	for (const s of ctx.pendingSessions) {
 		void s.releaseForShutdown();
@@ -1081,7 +1083,7 @@ async function endRuntime(ctx: ExtensionCtx): Promise<void> {
 	// the store once its grace ends (the store belongs to this ended period).
 	ctx.pendingSessions.clear();
 	clearSessionExitWatchers(ctx);
-	updateRunningSessionsUi(ctx);
+	if (notifyShutdown) updateRunningSessionsUi(ctx);
 	// Children run detached (own process groups), so anything that ignores
 	// SIGTERM would outlive pi as an orphan.
 	await Promise.all(drained.map((s) => waitForExitOrDeadline({ exited: s.exited, durationMs: SHUTDOWN_TERM_GRACE_MS })));
@@ -1090,7 +1092,7 @@ async function endRuntime(ctx: ExtensionCtx): Promise<void> {
 		for (const s of survivors) s.kill("SIGKILL");
 		await Promise.all(survivors.map((s) => waitForExitOrDeadline({ exited: s.exited, durationMs: SHUTDOWN_KILL_GRACE_MS })));
 	}
-	if (drained.length && ctx.ui) {
+	if (notifyShutdown && drained.length && ctx.ui) {
 		const leftover = drained.filter((s) => !s.hasExited).length;
 		ctx.ui.notify(
 			tr(
@@ -1100,6 +1102,14 @@ async function endRuntime(ctx: ExtensionCtx): Promise<void> {
 			leftover ? "warning" : "info",
 		);
 	}
+}
+
+function isDifferentSession(event: SessionSwitchEvent, eventCtx: ExtensionContext): boolean {
+	if (event.reason !== "resume") return true;
+	const prev = event.previousSessionFile;
+	const curr = eventCtx.sessionManager?.getSessionFile?.();
+	if (prev && curr && resolve(prev) === resolve(curr)) return false;
+	return true;
 }
 
 export function activate(
@@ -1202,7 +1212,10 @@ export function activate(
 		},
 	};
 	const parked = parkedRuntimes<ExtensionCtx>();
-	let ctx = createRuntime({ attachment, agentHost, lifecycleClock, appearance, terminalHost, shellHost, invalidateGithubCache, pluginSettings });
+	const runtimeOptions: RuntimeOptions = {
+		attachment, agentHost, lifecycleClock, appearance, terminalHost, shellHost, invalidateGithubCache, pluginSettings,
+	};
+	let ctx = createRuntime(runtimeOptions);
 	pi.registerMessageRenderer("omp-actual-terminal-notice", (message) => {
 		const box = new Box(1, 1);
 		box.addChild(new Text(buildNoticeDisplayMessage(message.details), 0, 0));
@@ -1224,32 +1237,43 @@ export function activate(
 		ctx.notices.agentStopped(awaitingAsyncWork ? "awaiting" : "final");
 	});
 
-	pi.on("session_start", async (_event, eventCtx) => {
-		if (binding.kind === "pending") binding = bindSession(terminalHost, bindingContext(eventCtx));
+	const startSession = async (eventCtx: ExtensionContext, opts: { resumeParked: boolean }): Promise<void> => {
 		hostCwd = eventCtx.cwd;
 		agentId = bindingContext(eventCtx).agentId;
 		const agent = agentHost && agentId !== undefined ? agentHost.identify(agentId) : undefined;
-		const resumed = agent && parked.take(agent.generation);
+		const resumed = opts.resumeParked && agent ? parked.take(agent.generation) : undefined;
+		let previous: ExtensionCtx | undefined;
 		if (resumed) {
 			ctx = resumed;
 		} else {
-			ctx.shuttingDown = false; // reload/new/resume re-arms the extension
-			// Never resurrect notices or wakes from a previous session.
-			ctx.notices.reset();
-			ctx.coordinator.reset();
-			ctx.lifecycle.restart();
+			previous = ctx;
+			previous.ui = undefined;
+			ctx = createRuntime(runtimeOptions);
 			ctx.agent = agent;
 		}
 		ctx.host = attachment;
 		ctx.ui = eventCtx.ui;
 		updateRunningSessionsUi(ctx);
+		if (previous && !previous.shuttingDown) {
+			await endRuntime(previous, { notifyShutdown: false });
+		}
+	};
+
+	pi.on("session_start", async (_event, eventCtx) => {
+		if (binding.kind === "pending") binding = bindSession(terminalHost, bindingContext(eventCtx));
+		await startSession(eventCtx, { resumeParked: true });
 	});
 
 	const rebind = (eventCtx: ExtensionContext): void => {
 		binding = recheckBinding(binding, bindingContext(eventCtx));
 		ctx.notices.forgetResponse();
 	};
-	pi.on("session_switch", async (_event, eventCtx) => rebind(eventCtx));
+	pi.on("session_switch", async (event, eventCtx) => {
+		rebind(eventCtx);
+		if (isDifferentSession(event, eventCtx)) {
+			await startSession(eventCtx, { resumeParked: false });
+		}
+	});
 	pi.on("session_branch", async (_event, eventCtx) => rebind(eventCtx));
 	pi.on("session_stop", async (event) => {
 		const text = finalResponseText(event);
