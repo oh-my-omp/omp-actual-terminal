@@ -111,7 +111,7 @@ Markdown 文件随包放在 `src/topics/`；读取 topic 不依赖外部配置�
 | `yield_time_ms` | number | `10_000` | 本次调用保持连接、等待输出的时长（不是命令的生命期），限制在 [250, 30_000]。 |
 | `on_exit` | `"none"` \| `"wake"` | `"none"` | 无人观察时进程退出的处理策略。`"wake"`：发一条后续提示唤醒 agent——仅在人明确希望自动恢复时使用。之后可用 `set_on_exit` 修改。 |
 
-`title`、`shell`、`cols`、`rows`、`yield_time_ms` 和 `on_exit` 只适用于终端：不带 `pty: true`、或同时带 `name` 的调用带了其中任何一个，都在运行任何内容之前失败。`async`、`notify` 和 `timeout` 在不带 `pty: true` 的调用里保持 omp 的含义。
+`title`、`shell`、`cols`、`rows`、`yield_time_ms` 和 `on_exit` 只适用于终端：不带 `pty: true`、或同时带 `name` 的调用带了其中任何一个，都在运行任何内容之前失败。`ready` 只适用于命名服务，终端调用带了它同样失败。`async`、`notify` 和 `timeout` 在不带 `pty: true` 的调用和命名服务里保持 omp 的含义。
 
 响应体（运行中、输出较短、未截断时）：
 

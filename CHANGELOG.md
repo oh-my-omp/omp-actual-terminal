@@ -16,6 +16,8 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Added
 
+- Let terminals without `shell` read a bound session's attached images through their `attachment://` paths
+- Rejected `ready` on `pty: true` calls without `name` before anything runs, since it only applies to a named service
 - Added `timeout` to terminal calls: it ends the terminal and reports an abnormal `timeout=<n>s` return
 - Added `async: true` to terminal calls, returning the terminal's `session_id` at once
 - Added `notify` to terminal calls, starting a monitor whose start the result's `monitor` line reports
@@ -24,10 +26,13 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Changed
 
+- Mounted the bound session's skills in terminals without `shell`, so `skill://` paths follow the session rather than the process
 - Switched host integration to the `@oh-my-pi/pi-*` packages and dropped the `@earendil-works` path aliases
 
 ### Fixed
 
+- Started terminals from the session's shell while the Spotlight experiment is on; they had started from a fresh shell without the session's exports, functions and aliases
+- Described `notify`'s regex syntax by `name`: a `pty: true` call with `name` is omp's own service and takes its Rust syntax, while a terminal takes JavaScript regex source
 - Sent `on_exit` of `bash` and `set_on_exit`, and `action` of `monitor`, to the model with their allowed values and descriptions, and rejected other values; their schemas had reached omp as an unconstrained field
 
 ### Removed

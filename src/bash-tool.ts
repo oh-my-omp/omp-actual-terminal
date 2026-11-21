@@ -25,7 +25,7 @@ const baseFields = {
 		description: "Without `pty: true`: run as a background job whose result arrives as a follow-up (needs `async.enabled`). With `pty: true`: return the terminal's `session_id` at once, without waiting for output.",
 	})),
 	notify: Type.Optional(Type.String({
-		description: "Regex. Without `pty: true` (Rust syntax): each matching output line arrives as a follow-up while the command runs, which makes it a background job like `async`; with `name`, the service's output. With `pty: true` (JavaScript regex source, no `/` delimiters): starts a `monitor` on the terminal with it as `condition`.",
+		description: "Regex. Without `pty: true`, or with `name` (Rust syntax): each matching output line arrives as a follow-up while the command or service runs; a command without `name` becomes a background job like `async`. With `pty: true` and no `name` (JavaScript regex source, no `/` delimiters): starts a `monitor` on the terminal with it as `condition`.",
 	})),
 	title: Type.Optional(Type.String({
 		description: `${PTY_ONLY}, and required there: terminal name in list_sessions, the Terminals view and every notice; one nonblank line, at most ${MAX_TITLE_CHARS} characters kept.`,
@@ -114,6 +114,9 @@ export function parseBashCall(input: unknown): BashCall {
 				: `bash: ${fields} only ${applies} to a terminal (\`pty: true\` without \`name\`); a named service takes none of these fields.`);
 		}
 		return { kind: "native", params };
+	}
+	if (params.ready !== undefined) {
+		throw new Error("bash: `ready` only applies to a named service; add `name` to start a service, or drop `ready` to open a terminal.");
 	}
 	const title = parseTerminalTitle(params.title);
 	if (title === undefined) {

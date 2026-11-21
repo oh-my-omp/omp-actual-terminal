@@ -1065,6 +1065,7 @@ describe("bash without a terminal", () => {
 			await assert.rejects(h.call("bash", { command: "x", pty: true, name: "svc", shell: "/bin/sh" }), /`shell` only applies to a terminal/);
 			await assert.rejects(h.call("bash", { command: "echo x", workdir: "/" }), /bash: /);
 			await assert.rejects(h.call("bash", { command: "echo x", pty: true, title: "t", on_exit: "always" }), /on_exit/);
+			await assert.rejects(h.call("bash", { command: "echo x", pty: true, title: "t", ready: { port: 1 } }), /`ready` only applies to a named service/);
 		} finally {
 			await h.emit("session_shutdown");
 		}

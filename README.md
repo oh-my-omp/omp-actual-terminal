@@ -240,8 +240,9 @@ configuration extension. An unknown topic returns a missing-topic error.
 
 `title`, `shell`, `cols`, `rows`, `yield_time_ms` and `on_exit` apply only to a
 terminal: a call carrying any of them without `pty: true`, or together with
-`name`, fails before anything runs. `async`, `notify` and `timeout` keep omp's
-meaning on calls without `pty: true`.
+`name`, fails before anything runs. `ready` applies only to a named service, so a
+terminal call carrying it fails the same way. `async`, `notify` and `timeout` keep
+omp's meaning on calls without `pty: true` and on named services.
 
 Response body (running, short output, no truncation):
 

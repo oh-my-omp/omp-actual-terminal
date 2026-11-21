@@ -354,17 +354,24 @@ root, `exec/bash-executor`'s `executeBash`, `exec/settings`'s
 `cfgBashGitGuard`, `exec/non-interactive-env`'s `buildNonInteractiveEnv`,
 `exec/shell-process`'s `shellProcessCommand` and `shellMounts`,
 `internal-urls/router`'s `InternalUrlRouter`, `internal-urls/url-filesystem`'s
-`InternalUrlFilesystem` and `UrlFsError`, `task/settings`'s `ovnfsCommand` and
-`tools/settings`'s `cfgLaunchEnabled`; `@oh-my-pi/pi-utils` must still export
+`InternalUrlFilesystem` and `UrlFsError`, `task/settings`'s `ovnfsCommand`,
+`tools/settings`'s `cfgLaunchEnabled` and `config/registry`'s `lookup`, which
+must still find `spotlight.experiment.enabled`; `@oh-my-pi/pi-utils` must still export
 `procmgr.isCmdShell`. A missing export fails loading. The seed repeats
 `BashTool`'s private session seed (`tools/bash.ts`): compare its session key,
 seed key, minimizer, git guard and overlay options with the current one on
-every upgrade.
+every upgrade, and check that the session's tool session still carries the
+Spotlight experiment exactly when `spotlight.experiment.enabled` is on
+(`sdk.ts`, `startSpotlightExperiment`). The mounts call `shellMounts` without a
+tool session and add the attachment lines themselves from the bound session's
+`getImageAttachments()`: compare them with `shellMounts`' own attachment loop.
 
 Through real interactive omp, in a main agent, a subagent and `omp -p`: after
 a `bash` call exports a variable, defines a function and an alias, a terminal
-without `shell` must see all three, read `local://` and `skill://` paths and
-start in a URL `cwd`; one with `shell: "/bin/sh"` must see the export only and
+without `shell` must see all three, read `local://`, `skill://` and an
+attached image's `attachment://1` (`omp -p @image.png …`), see them again with
+`PI_SPOTLIGHT_EXPERIMENT=1`, and start in a URL `cwd`; one with
+`shell: "/bin/sh"` must see the export only and
 refuse a URL `cwd`; an explicit `shell: "C:\\Windows\\System32\\cmd.exe"` must
 fail with one notice and no cmd process; an explicit `shell` that does not
 exist must return `spawn … ENOENT` and no output rather than another shell;

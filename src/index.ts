@@ -3,7 +3,7 @@ import { constants as osConstants, tmpdir } from "node:os";
 import { statSync } from "node:fs";
 import { rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { type AgentToolResult, type AgentToolUpdateCallback, type CustomTool, type ExtensionAPI, type ExtensionContext, type SessionStopEvent, type Settings, type ToolDefinition } from "@oh-my-pi/pi-coding-agent";
+import { type AgentToolResult, type AgentToolUpdateCallback, type CustomTool, type ExtensionAPI, type ExtensionContext, type ImageAttachmentEntry, type SessionStopEvent, type Settings, type Skill, type ToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import type { ResolveContext } from "@oh-my-pi/pi-coding-agent/internal-urls/types";
 import { Box, Text } from "@oh-my-pi/pi-tui";
 import { Type } from "@oh-my-pi/omptype/typebox";
@@ -213,6 +213,9 @@ interface CallingSession {
 	readonly sessionFile: string | undefined;
 	readonly settings: Settings;
 	readonly localProtocolOptions: ExtensionContext["localProtocolOptions"];
+	/** The session's skills; undefined when the registry does not resolve the session, and omp then mounts the process's. */
+	readonly skills: readonly Skill[] | undefined;
+	readonly attachments: readonly ImageAttachmentEntry[];
 	readonly bash: NativeBash;
 }
 
@@ -300,6 +303,7 @@ async function runTerminal(
 		sessionId: caller.sessionId,
 		sessionFile: caller.sessionFile,
 		localProtocolOptions: caller.localProtocolOptions,
+		skills: caller.skills,
 	};
 	switch (cwd.kind) {
 		case "host": {
@@ -344,7 +348,7 @@ async function runTerminal(
 	let source: string | undefined;
 	let command: readonly string[];
 	if (shell.kind === "session") {
-		const prelude = (await host.mounts(resolveContext, tier)) + seed.script;
+		const prelude = (await host.mounts(resolveContext, tier, caller.attachments)) + seed.script;
 		if (prelude) {
 			source = join(tmpdir(), `omp-actual-terminal-seed-${randomUUID()}.sh`);
 			await writeFile(source, prelude, { mode: 0o600 });
@@ -1298,12 +1302,15 @@ export function activate(
 				}
 				case "terminal": {
 					const settings = sessionSettings();
+					const bound = binding.kind === "bound" ? binding.session : undefined;
 					const shape = await runTerminal(ctx, call.request, {
 						cwd: eventCtx.cwd,
 						sessionId: eventCtx.sessionManager.getSessionId(),
 						sessionFile: eventCtx.sessionManager.getSessionFile(),
 						settings,
 						localProtocolOptions: eventCtx.localProtocolOptions,
+						skills: bound?.skills,
+						attachments: bound?.getImageAttachments() ?? [],
 						bash: terminalHost.bash(settings),
 					}, signal, onUpdate, toolCallId);
 					updateRunningSessionsUi(ctx);

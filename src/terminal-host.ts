@@ -1,5 +1,5 @@
 import type * as Root from "@oh-my-pi/pi-coding-agent";
-import type { BashTool, Settings, ToolSession, ToolTier } from "@oh-my-pi/pi-coding-agent";
+import type { BashTool, ImageAttachmentEntry, Settings, ToolSession, ToolTier } from "@oh-my-pi/pi-coding-agent";
 import type * as BashExecutor from "@oh-my-pi/pi-coding-agent/exec/bash-executor";
 import type * as ExecSettings from "@oh-my-pi/pi-coding-agent/exec/settings";
 import type * as NonInteractiveEnv from "@oh-my-pi/pi-coding-agent/exec/non-interactive-env";
@@ -7,6 +7,7 @@ import type * as ShellProcess from "@oh-my-pi/pi-coding-agent/exec/shell-process
 import type { ShellProcessSpec } from "@oh-my-pi/pi-coding-agent/exec/shell-process-protocol";
 import type * as Router from "@oh-my-pi/pi-coding-agent/internal-urls/router";
 import type { ResolveContext } from "@oh-my-pi/pi-coding-agent/internal-urls/types";
+import type * as ConfigRegistry from "@oh-my-pi/pi-coding-agent/config/registry";
 import type * as UrlFilesystem from "@oh-my-pi/pi-coding-agent/internal-urls/url-filesystem";
 import type * as TaskSettings from "@oh-my-pi/pi-coding-agent/task/settings";
 import type * as ToolSettings from "@oh-my-pi/pi-coding-agent/tools/settings";
@@ -44,7 +45,11 @@ export interface TerminalHost extends SessionRegistry {
 	/** Whether `launch.enabled` gives bash its named services (`name`, `ready`). */
 	readonly servicesEnabled: (settings: Settings) => boolean;
 	readonly seed: (request: SeedRequest) => Promise<SessionSeed>;
-	readonly mounts: (context: ResolveContext, tier: ToolTier) => Promise<string>;
+	/**
+	 * The script mounting the URL paths a session-shell terminal may open: `local://` and the skills
+	 * of `context`, and the session's `attachments`.
+	 */
+	readonly mounts: (context: ResolveContext, tier: ToolTier, attachments: readonly ImageAttachmentEntry[]) => Promise<string>;
 	/** argv of a shell process of this omp build running `spec`. */
 	readonly shellProcess: (spec: ShellProcessSpec) => readonly string[];
 	readonly terminalEnv: (exports: Readonly<Record<string, string>>) => Record<string, string>;
@@ -102,15 +107,16 @@ type RouterModule = Partial<Pick<typeof Router, "InternalUrlRouter">>;
 type UrlFilesystemModule = Partial<Pick<typeof UrlFilesystem, "InternalUrlFilesystem" | "UrlFsError">>;
 type TaskSettingsModule = Partial<Pick<typeof TaskSettings, "ovnfsCommand">>;
 type ToolSettingsModule = Partial<Pick<typeof ToolSettings, "cfgLaunchEnabled">>;
+type ConfigRegistryModule = Partial<Pick<typeof ConfigRegistry, "lookup">>;
 
 function missing(what: string): never {
 	throw new Error(`omp-actual-terminal: ${what}; requalify src/terminal-host.ts for this omp version`);
 }
 
 export async function loadTerminalHost(): Promise<TerminalHost> {
-	const [root, executor, execSettings, nonInteractive, shellProcess, router, urlFilesystem, taskSettings, toolSettings]: [
+	const [root, executor, execSettings, nonInteractive, shellProcess, router, urlFilesystem, taskSettings, toolSettings, configRegistry]: [
 		RootModule, ExecutorModule, ExecSettingsModule, NonInteractiveModule, ShellProcessModule, RouterModule, UrlFilesystemModule, TaskSettingsModule,
-		ToolSettingsModule,
+		ToolSettingsModule, ConfigRegistryModule,
 	] = await Promise.all([
 		import("@oh-my-pi/pi-coding-agent"),
 		import("@oh-my-pi/pi-coding-agent/exec/bash-executor"),
@@ -121,6 +127,7 @@ export async function loadTerminalHost(): Promise<TerminalHost> {
 		import("@oh-my-pi/pi-coding-agent/internal-urls/url-filesystem"),
 		import("@oh-my-pi/pi-coding-agent/task/settings"),
 		import("@oh-my-pi/pi-coding-agent/tools/settings"),
+		import("@oh-my-pi/pi-coding-agent/config/registry"),
 	]);
 	const { BashTool: Bash, settings, AgentRegistry } = root;
 	const { executeBash } = executor;
@@ -131,6 +138,7 @@ export async function loadTerminalHost(): Promise<TerminalHost> {
 	const { InternalUrlFilesystem, UrlFsError } = urlFilesystem;
 	const { ovnfsCommand } = taskSettings;
 	const { cfgLaunchEnabled } = toolSettings;
+	const { lookup } = configRegistry;
 	if (typeof Bash !== "function") missing("@oh-my-pi/pi-coding-agent lacks BashTool");
 	if (settings === undefined) missing("@oh-my-pi/pi-coding-agent lacks settings");
 	if (AgentRegistry === undefined || typeof AgentRegistry.global !== "function") missing("@oh-my-pi/pi-coding-agent lacks AgentRegistry.global()");
@@ -142,6 +150,10 @@ export async function loadTerminalHost(): Promise<TerminalHost> {
 	if (typeof InternalUrlFilesystem !== "function" || typeof UrlFsError !== "function") missing("internal-urls/url-filesystem lacks InternalUrlFilesystem/UrlFsError");
 	if (typeof ovnfsCommand !== "function") missing("task/settings lacks ovnfsCommand()");
 	if (cfgLaunchEnabled === undefined || typeof cfgLaunchEnabled.get !== "function") missing("tools/settings lacks cfgLaunchEnabled");
+	if (typeof lookup !== "function") missing("config/registry lacks lookup()");
+	// `spotlight/settings` is not among the package's exports, so its setting is looked up by id.
+	const spotlightExperiment = lookup("spotlight.experiment.enabled");
+	if (spotlightExperiment === undefined) missing("config/registry has no spotlight.experiment.enabled setting");
 	const registry = AgentRegistry.global();
 
 	return {
@@ -175,7 +187,10 @@ export async function loadTerminalHost(): Promise<TerminalHost> {
 						cwd,
 						sessionKey: `${sessionKey}:async:service-env:${crypto.randomUUID()}`,
 						seedSessionKey: sessionKey,
-						minimize: true,
+						// The minimizer is part of the shell's key. omp runs a session's calls without it while
+						// the Spotlight experiment shapes output (`nativeShapingOff`), and its tool session
+						// carries the experiment exactly when this setting is on (`startSpotlightExperiment`).
+						minimize: spotlightExperiment.get(sessionSettings) !== true,
 						gitGuard: cfgBashGitGuard.get(sessionSettings),
 						ovnfs: ovnfsCommand(sessionSettings),
 						timeout: 10_000,
@@ -189,7 +204,11 @@ export async function loadTerminalHost(): Promise<TerminalHost> {
 				await rm(dir, { recursive: true, force: true });
 			}
 		},
-		mounts: (context, tier) => shellMounts(context, tier),
+		// omp mounts attachments from `context.session`, a tool session the plugin is not given; the
+		// same `urlmap` lines are written here from the bound session's attachments instead.
+		mounts: async (context, tier, attachments) =>
+			(await shellMounts(context, tier))
+			+ attachments.map((attachment) => `urlmap -r -e ${posixQuote(attachment.uri)} ${posixQuote(attachment.sourcePath)}\n`).join(""),
 		shellProcess: (spec) => {
 			const { application, args } = shellProcessCommand(spec);
 			return [application, ...args];
