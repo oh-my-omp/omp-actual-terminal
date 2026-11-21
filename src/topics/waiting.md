@@ -5,4 +5,4 @@
 - To look at progress without disturbing the wait, read `terminal_url` (`term://…`); `monitor` observes without consuming output.
 - `kill_session` stops the terminal and cancels its monitor silently. It does not require the waiting command to exit on its own.
 
-See `xd://bash/terminal` for conditional monitors and `xd://bash/lifecycle` for exit wakes and reclaim.
+See `help://bash/terminal` for conditional monitors and `help://bash/lifecycle` for exit wakes and reclaim.

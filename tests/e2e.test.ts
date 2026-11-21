@@ -1116,4 +1116,20 @@ describe("bash pty fields", { skip: IS_WINDOWS }, () => {
 			await h.emit("session_shutdown");
 		}
 	});
+
+	it("clamps yield_time_ms: 0 to the 250ms lower bound instead of falling back to the 10s default", async () => {
+		const h = makeHarness();
+		await h.emit("session_start");
+		try {
+			const started = Date.now();
+			const r = await h.call("bash", { command: "sleep 3; echo y0-done", pty: true, title: "YieldZero", yield_time_ms: 0 });
+			const elapsed = Date.now() - started;
+			assert.ok(elapsed < 1500, `yield_time_ms: 0 waited ${elapsed}ms instead of clamping to 250ms`);
+			assert.equal(r.details.status, "running", JSON.stringify(r.details));
+			assert.equal(typeof r.details.job_id, "string", JSON.stringify(r.details));
+			assert.equal(r.details.yield_time_ms, 250, JSON.stringify(r.details));
+		} finally {
+			await h.emit("session_shutdown");
+		}
+	});
 });

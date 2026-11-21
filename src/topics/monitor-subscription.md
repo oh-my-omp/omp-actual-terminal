@@ -5,7 +5,7 @@
 - Starting establishes or replaces the subscription; cancelling removes it silently. Reaching `max_returns` ends the monitor, not the process. End does not count toward the limit.
 - A no-return reminder quotes the current screen. Read the terminal, then answer a prompt with `write_stdin`, call `monitor` again, or cancel. A return restarts the reminder clock; a reminder neither counts toward `max_returns` nor ends the monitor.
 - A terminal settling on an unseen input prompt raises an input-wait alert with or without a monitor.
-- A wake needs an unfinished task: once your final response shows the task finished, a monitor ends at its next return without waking you. To wait on it, say so in your response instead of reporting the task done; see `xd://bash/lifecycle`.
+- A wake needs an unfinished task: once your final response shows the task finished, a monitor ends at its next return without waking you. To wait on it, say so in your response instead of reporting the task done; see `help://bash/lifecycle`.
 
 ## Judge monitors
 
@@ -15,4 +15,4 @@
 - A failed judgment (no judge model, an error, no answer within 30 s) sends a failure notice and ends the monitor; the process keeps running. Starting fails with `judge_unavailable` when no judge model resolves.
 - Each judgment of a changed screen costs one judge call, billed to the session; a screen that changes every interval is judged every interval.
 
-See `xd://bash/waiting` for completion-only waits and `xd://write_stdin/input` before answering a prompt.
+See `help://bash/waiting` for completion-only waits and `help://write_stdin/input` before answering a prompt.

@@ -64,7 +64,8 @@ test("all six registrations own packaged providers and end with full topic point
 			assert.ok(body.startsWith("# "));
 			assert.ok(!body.startsWith("---"));
 			assert.ok(!body.includes("tool://"));
-			assert.ok(pointers.includes(`- \`xd://${name}/${topic}\` — `));
+			assert.ok(!body.includes("xd://"));
+			assert.ok(pointers.includes(`- \`help://${name}/${topic}\` — `));
 		}
 		assert.equal(Object.hasOwn(topics, "nope"), false);
 	}
@@ -78,7 +79,7 @@ test("no tool description, field or topic names a tool the plugin no longer regi
 	const tools = registeredTools();
 	for (const tool of tools.values()) {
 		const text = `${tool.description}\n${JSON.stringify(tool.parameters)}`;
-		assert.doesNotMatch(text, /exec_command|xd:\/\/exec_command/, tool.name);
+		assert.doesNotMatch(text, /exec_command|xd:\/\//, tool.name);
 	}
 	for (const file of readdirSync(new URL("../src/topics/", import.meta.url))) {
 		assert.doesNotMatch(readFileSync(new URL(`../src/topics/${file}`, import.meta.url), "utf8"), /exec_command/, file);

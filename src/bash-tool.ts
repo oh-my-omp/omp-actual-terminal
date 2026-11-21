@@ -20,7 +20,7 @@ const baseFields = {
 		description: "Seconds. Without `pty: true`: the command deadline, default 300; 0 disables it; nonzero values are clamped to 1-3600. With `pty: true`: omitted or 0, the terminal has no deadline; a positive value ends the terminal at that time and reports it as an abnormal return.",
 	})),
 	cwd: Type.Optional(Type.String({ description: "Working directory: a host path, relative to the session cwd, or a URL directory such as `local://`. Defaults to the session cwd." })),
-	pty: Type.Optional(Type.Boolean({ description: "`true`: run `command` in a terminal of its own that outlives this call (`xd://bash/terminal`). Omitted or `false`: a finite command." })),
+	pty: Type.Optional(Type.Boolean({ description: "`true`: run `command` in a terminal of its own that outlives this call (`help://bash/terminal`). Omitted or `false`: a finite command." })),
 	async: Type.Optional(Type.Boolean({
 		description: "Without `pty: true`: run as a background job whose result arrives as a follow-up (needs `async.enabled`). With `pty: true`: return the terminal's `job_id` at once, without waiting for output.",
 	})),

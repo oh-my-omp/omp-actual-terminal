@@ -5,4 +5,4 @@
 - An exit observed here consumes an armed wake; cancellation leaves the process alive.
 - Results are rendered terminal state like a `bash` call with `pty: true`, not raw bytes. A running result shows unseen history plus the current screen (`screen_changed:false` when unchanged); a finished one shows its final screen. Raw bytes stay in `log_path`.
 
-See `xd://bash/terminal` for rendered terminal addresses and input encodings, `xd://monitor/subscription` for waits, and `xd://set_on_exit/wake` for exit wakes.
+See `help://bash/terminal` for rendered terminal addresses and input encodings, `help://monitor/subscription` for waits, and `help://set_on_exit/wake` for exit wakes.
