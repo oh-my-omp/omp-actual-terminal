@@ -29,12 +29,15 @@ export interface LifecycleSession {
 	processesRemain(): boolean;
 }
 
+type Deadline = { readonly kind: "open" } | { readonly kind: "expired"; readonly seconds: number };
+
 interface Ending {
 	readonly killed: boolean;
 	readonly interrupted: boolean;
+	readonly deadline: Deadline;
 }
 
-const NATURAL: Ending = { killed: false, interrupted: false };
+const NATURAL: Ending = { killed: false, interrupted: false, deadline: { kind: "open" } };
 
 const INTERRUPT_BYTES: readonly number[] = [0x03, 0x1c];
 
@@ -88,6 +91,7 @@ export function identityOf(session: LifecycleSession): TerminalIdentity {
 }
 
 export function classifyReturn(exit: ShellExit, failureMessage: string | null, ending: Ending): TerminalOutcome {
+	if (ending.deadline.kind === "expired") return { kind: "abnormal", reason: `timeout=${ending.deadline.seconds}s` };
 	if (ending.killed || ending.interrupted) return { kind: "normal" };
 	const failure = failureMessage ?? exit.failureMessage;
 	if (failure) return { kind: "abnormal", reason: `failure: ${failure}` };
@@ -148,6 +152,12 @@ export class TerminalLifecycle {
 	noteKill(sessionId: number): void {
 		const entry = this.tracked.get(sessionId);
 		if (entry?.life.kind === "running") entry.life = { kind: "running", ending: { ...entry.life.ending, killed: true } };
+	}
+
+	/** The terminal's `timeout` ended it: whatever ends it now is an abnormal return. */
+	noteDeadline(sessionId: number, seconds: number): void {
+		const entry = this.tracked.get(sessionId);
+		if (entry?.life.kind === "running") entry.life = { kind: "running", ending: { ...entry.life.ending, deadline: { kind: "expired", seconds } } };
 	}
 
 	killFailed(sessionId: number): void {

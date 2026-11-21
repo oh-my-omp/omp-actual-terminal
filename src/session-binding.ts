@@ -13,7 +13,7 @@ export type SessionManager = AgentSessionHandle["sessionManager"];
  * What the plugin binds to. Registry entries can be replaced by same-id helper sessions, so the
  * plugin reads these once and from then on only rechecks the session manager by identity.
  */
-export type BoundSession = Pick<AgentSession, "settings"> & Pick<AgentSessionHandle, "sessionManager">;
+export type BoundSession = Pick<AgentSession, "settings" | "skills" | "getImageAttachments"> & Pick<AgentSessionHandle, "sessionManager">;
 
 /** Registry lookup the plugin needs: the ref of the agent's current generation. */
 export type SessionRegistry = Pick<AgentRegistryApi, "get">;
@@ -35,7 +35,8 @@ export type BindingContext = {
  * structural check can only prove its presence.
  */
 function isBoundSession(session: AgentRef["session"]): session is AgentSessionHandle & BoundSession {
-	return typeof session === "object" && session !== null && "settings" in session && "sessionManager" in session;
+	return typeof session === "object" && session !== null && "settings" in session && "sessionManager" in session
+		&& "skills" in session && "getImageAttachments" in session;
 }
 
 export function bindingContext(ctx: Pick<ExtensionContext, "agent"> & Pick<AgentSessionHandle, "sessionManager">): BindingContext {

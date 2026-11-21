@@ -1,46 +1,48 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 import type { ExtensionAPI, ToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import {
-	execCommandDocumentation, execCommandTopicPointers,
+	bashDocumentation, bashTerminalSection, bashTopicPointers,
 	writeStdinDocumentation, writeStdinTopicPointers,
 	setOnExitDocumentation, setOnExitTopicPointers,
 	monitorDocumentation, monitorTopicPointers,
 	killSessionDocumentation, killSessionTopicPointers,
 	listSessionsDocumentation, listSessionsTopicPointers,
-} from "../src/exec-command-docs.ts";
+} from "../src/tool-docs.ts";
 import { activate } from "../src/index.ts";
+import { stubTerminalHost } from "./stub-shell.ts";
 
-test("exec_command provides the three packaged, body-only topics", () => {
-	const topics = execCommandDocumentation.docTopics();
-	assert.deepEqual(Object.keys(topics), ["interactive", "lifecycle", "waiting"]);
-	for (const [name, body] of Object.entries(topics)) {
-		assert.equal(body, readFileSync(new URL(`../src/topics/${name}.md`, import.meta.url), "utf8"));
-		assert.ok(body.startsWith("# "));
-		assert.ok(!body.includes("tool://exec_command/"));
-		assert.ok(execCommandTopicPointers.includes(`- \`xd://exec_command/${name}\` — `));
-	}
-	assert.equal(Object.hasOwn(topics, "nope"), false);
-});
-
-test("waiting documents the plugin contract without the local polling policy", () => {
-	const { waiting, interactive } = execCommandDocumentation.docTopics();
-	assert.match(waiting, /yield_time_ms/);
-	assert.match(waiting, /without `condition`/);
-	assert.match(waiting, /observes without consuming output/);
-	assert.doesNotMatch(waiting, /seq 288|sleep 300|Do not loop|Never add a per-check marker/);
-	assert.ok(interactive.includes("ssh host bash -s <<'EOF'"));
-});
-
-test("all six registrations own packaged providers and end with full topic pointers", () => {
+function registeredTools(): Map<string, ToolDefinition> {
 	const tools = new Map<string, ToolDefinition>();
 	activate({
 		registerTool: (tool: ToolDefinition) => { tools.set(tool.name, tool); },
 		registerCommand: () => {}, registerFlag: () => {}, registerMessageRenderer: () => {}, on: () => {},
-	} as unknown as ExtensionAPI);
+	} as unknown as ExtensionAPI, undefined, stubTerminalHost({
+		bash: () => ({ approval: () => "exec", formatApprovalDetails: () => [], description: "omp's own bash description" }),
+	}));
+	return tools;
+}
+
+test("bash describes omp's own bash, then the plugin's terminal, then its topics", () => {
+	const bash = registeredTools().get("bash");
+	assert.ok(bash);
+	assert.equal(bash.description, `omp's own bash description${bashTerminalSection}${bashTopicPointers}`);
+});
+
+test("waiting documents the plugin contract without the local polling policy", () => {
+	const { waiting, terminal } = bashDocumentation.docTopics();
+	assert.match(waiting, /yield_time_ms/);
+	assert.match(waiting, /without `condition`/);
+	assert.match(waiting, /observes without consuming output/);
+	assert.doesNotMatch(waiting, /seq 288|sleep 300|Do not loop|Never add a per-check marker/);
+	assert.ok(terminal.includes("ssh host bash -s <<'EOF'"));
+});
+
+test("all six registrations own packaged providers and end with full topic pointers", () => {
+	const tools = registeredTools();
 	const definitions = [
-		["exec_command", execCommandDocumentation, execCommandTopicPointers, ["interactive", "lifecycle", "waiting"]],
+		["bash", bashDocumentation, bashTopicPointers, ["terminal", "lifecycle", "waiting"]],
 		["write_stdin", writeStdinDocumentation, writeStdinTopicPointers, ["write-stdin-input"]],
 		["set_on_exit", setOnExitDocumentation, setOnExitTopicPointers, ["set-on-exit-wake"]],
 		["monitor", monitorDocumentation, monitorTopicPointers, ["monitor-subscription"]],
@@ -66,8 +68,19 @@ test("all six registrations own packaged providers and end with full topic point
 		}
 		assert.equal(Object.hasOwn(topics, "nope"), false);
 	}
-	const exec = tools.get("exec_command")!;
-	assert.doesNotMatch(exec.description, /30 minutes|screen_changed|Notices name/);
-	assert.match(execCommandDocumentation.docTopics().interactive, /screen_changed:false/);
-	assert.match(execCommandDocumentation.docTopics().lifecycle, /Notices name.*session_id.*title/);
+	const bash = tools.get("bash")!;
+	assert.doesNotMatch(bash.description, /30 minutes|screen_changed|Notices name/);
+	assert.match(bashDocumentation.docTopics().terminal, /screen_changed:false/);
+	assert.match(bashDocumentation.docTopics().lifecycle, /Notices name.*session_id.*title/);
+});
+
+test("no tool description, field or topic names a tool the plugin no longer registers", () => {
+	const tools = registeredTools();
+	for (const tool of tools.values()) {
+		const text = `${tool.description}\n${JSON.stringify(tool.parameters)}`;
+		assert.doesNotMatch(text, /exec_command|xd:\/\/exec_command/, tool.name);
+	}
+	for (const file of readdirSync(new URL("../src/topics/", import.meta.url))) {
+		assert.doesNotMatch(readFileSync(new URL(`../src/topics/${file}`, import.meta.url), "utf8"), /exec_command/, file);
+	}
 });

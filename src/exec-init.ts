@@ -1,7 +1,7 @@
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { IS_WINDOWS, isPosixShell, type LaunchShell, shellBase } from "./shell.ts";
+import { IS_WINDOWS, isPosixShell, shellBase, type TerminalShell } from "./shell.ts";
 import type { PluginSettingsReader } from "./plugin-settings.ts";
 
 export const INIT_FILE_KEY = "exec.initFile";
@@ -54,7 +54,7 @@ export type ShellScript =
 	| { readonly kind: "ready"; readonly cmd: string }
 	| { readonly kind: "unusable"; readonly reason: string };
 
-export function shellScript(initFile: InitFile, shell: LaunchShell, cmd: string, isWindows: boolean = IS_WINDOWS): ShellScript {
+export function shellScript(initFile: InitFile, shell: TerminalShell, cmd: string, isWindows: boolean = IS_WINDOWS): ShellScript {
 	switch (initFile.kind) {
 		case "none":
 			return { kind: "ready", cmd };
@@ -63,8 +63,8 @@ export function shellScript(initFile: InitFile, shell: LaunchShell, cmd: string,
 		case "file":
 			break;
 	}
-	const bash = shell.kind === "pi-shell" || shellBase(shell.shell) === "bash";
-	if (shell.kind === "shell" && !isPosixShell(shell.shell)) {
+	const bash = shell.kind === "session" || shellBase(shell.shell) === "bash";
+	if (shell.kind === "explicit" && !isPosixShell(shell.shell)) {
 		return { kind: "unusable", reason: `${INIT_FILE_KEY} is a POSIX shell script; ${shell.shell} is not sh, bash, dash, ash, ksh or zsh. Unset ${INIT_FILE_KEY} or run the command under a POSIX shell.` };
 	}
 	const sourced = isWindows ? initFile.path.replaceAll("\\", "/") : initFile.path;

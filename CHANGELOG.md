@@ -6,14 +6,34 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Breaking Changes
 
+- Replaced the `exec_command` tool with terminals opened through `bash` with `pty: true` (`cmd` and `workdir` became `command` and `cwd`), while `bash` calls without `pty`, named services included, still run as omp's own `bash`
+- Ran terminals without `shell` in the session's shell, omp's shell process started with the session's exports, functions, aliases and URL paths, instead of omp's `shellPath`, `SHELL` or the platform default
+- Approved terminal calls with omp's own `bash` approval, `bash.allowedEnvVars` included, instead of the plugin's copy of its rules
 - Renamed the plugin to `omp-actual-terminal`: install it from `https://github.com/oh-my-omp/omp-actual-terminal#release` and uninstall `omp-unified-exec`
 - Renamed the omomp section `omp-unified-exec` to `omp-actual-terminal`
 - Renamed `PI_UNIFIED_EXEC_BASH` to `OMP_ACTUAL_TERMINAL_BASH`
 - Renamed the notice message type to `omp-actual-terminal-notice`, the `/unified-exec-sessions` command to `/omp-actual-terminal-sessions`, and session logs to `omp-actual-terminal-<pid>-<sid>-<hex>.log`
 
+### Added
+
+- Let terminals without `shell` read a bound session's attached images through their `attachment://` paths
+- Rejected `ready` on `pty: true` calls without `name` before anything runs, since it only applies to a named service
+- Added `timeout` to terminal calls: it ends the terminal and reports an abnormal `timeout=<n>s` return
+- Added `async: true` to terminal calls, returning the terminal's `session_id` at once
+- Added `notify` to terminal calls, starting a monitor whose start the result's `monitor` line reports
+- Offered terminals in subagents and `omp -p`, whose `bash` schema now carries `pty` and the terminal fields
+- Rejected terminal-only fields on `bash` calls without `pty: true` before anything runs
+
 ### Changed
 
+- Mounted the bound session's skills in terminals without `shell`, so `skill://` paths follow the session rather than the process
 - Switched host integration to the `@oh-my-pi/pi-*` packages and dropped the `@earendil-works` path aliases
+
+### Fixed
+
+- Started terminals from the session's shell while the Spotlight experiment is on; they had started from a fresh shell without the session's exports, functions and aliases
+- Described `notify`'s regex syntax by `name`: a `pty: true` call with `name` is omp's own service and takes its Rust syntax, while a terminal takes JavaScript regex source
+- Sent `on_exit` of `bash` and `set_on_exit`, and `action` of `monitor`, to the model with their allowed values and descriptions, and rejected other values; their schemas had reached omp as an unconstrained field
 
 ### Removed
 

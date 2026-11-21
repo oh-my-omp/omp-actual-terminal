@@ -3,15 +3,15 @@
 [English](README.md) | 简体中文
 
 为 [oh-my-pi](https://github.com/can1357/oh-my-pi)（omp）提供长时间运行的终端
-会话，并在 Tern 里带一个终端 HUD。宿主的 `bash` 负责短的一次性命令；长命令、交互程序（REPL、TUI、`ssh`、`sudo`）、并发计算和开发期 daemon 交给 `exec_command`，它把每条命令放进一个 PTY 会话，由模型通过写入、读取和 monitor 来驱动，而不是一次阻塞到底的调用。会话在多轮对话之间持续运行，没有命令截止时间，人也可以在 Tern 里查看它们、向它们输入。
+会话，并在 Tern 里带一个终端 HUD。插件接管 omp 的 `bash` 中带 `pty: true` 的调用：长命令、交互程序（REPL、TUI、`ssh`、`sudo`）、并发计算和开发期 daemon 在本会话自己 shell 的 PTY 会话里运行，由模型通过写入、读取和 monitor 来驱动，而不是一次阻塞到底的调用。其余 `bash` 调用仍是 omp 自己的。会话在多轮对话之间持续运行，调用不设 `timeout` 就没有截止时间；主 agent、子 agent 和 `omp -p` 里都一样，人也可以在 Tern 里查看它们、向它们输入。
 
 [![omp-actual-terminal 在 Tern 中的演示](docs/assets/demo.gif)](docs/assets/demo.mp4)
 
-agent 用 `exec_command` 启动 `python3 -q`，再通过 `write_stdin` 执行 `x = 21`。人点击 omp 运行中计数药丸的终端分段打开这个会话，在终端页里输入 `y = x * 2`；随后 agent 在同一会话里打印 `y`，得到 42。最后在 Terminals 视图里用 Kill 结束会话。录制环境为 Tern、omp 18.12.6 与 Gemini 4 Argon，模型轮次以 3 倍速播放。原分辨率视频：[docs/assets/demo.mp4](docs/assets/demo.mp4)。
+agent 在终端里启动 `python3 -q`，再通过 `write_stdin` 执行 `x = 21`。人点击 omp 运行中计数药丸的终端分段打开这个会话，在终端页里输入 `y = x * 2`；随后 agent 在同一会话里打印 `y`，得到 42。最后在 Terminals 视图里用 Kill 结束会话。录制环境为 Tern、omp 18.12.6 与 Gemini 4 Argon，模型轮次以 3 倍速播放。原分辨率视频：[docs/assets/demo.mp4](docs/assets/demo.mp4)。
 
 [![omp 在 Tern 中驱动 lazygit](docs/assets/demo-lazygit.gif)](docs/assets/demo-lazygit.mp4)
 
-全屏 TUI 也一样。使用 GPT-6.1 Sol 时，agent 用 `exec_command` 打开 lazygit，只靠 `write_stdin` 操作它：只暂存 `src/todos.ts`，以 `feat: toggle todos` 提交，`README.md` 保持未暂存。人在终端页里打开同一个 lazygit（带颜色），按 `4` 切到提交面板查看新提交的补丁，再按 `q` 退出；随后 Terminals 视图显示该会话 `Exit 0`。模型轮次以 3 倍速播放。原分辨率视频：[docs/assets/demo-lazygit.mp4](docs/assets/demo-lazygit.mp4)。
+全屏 TUI 也一样。使用 GPT-6.1 Sol 时，agent 在终端里打开 lazygit，只靠 `write_stdin` 操作它：只暂存 `src/todos.ts`，以 `feat: toggle todos` 提交，`README.md` 保持未暂存。人在终端页里打开同一个 lazygit（带颜色），按 `4` 切到提交面板查看新提交的补丁，再按 `q` 退出；随后 Terminals 视图显示该会话 `Exit 0`。模型轮次以 3 倍速播放。原分辨率视频：[docs/assets/demo-lazygit.mp4](docs/assets/demo-lazygit.mp4)。
 
 ## 安装
 
@@ -42,17 +42,18 @@ omp plugin install https://github.com/oh-my-omp/omp-actual-terminal#release --fo
 
 ## 功能
 
-- **会话，而不是调用。** `exec_command` 在 PTY 中启动进程，在等待窗口内返回已有输出和一个 `session_id`；之后的轮次里，`write_stdin` 把字节原样写给它（文本、`\x03` Ctrl-C、方向键）。状态与内容用 `read terminal_url` 读取，事件与完成用 `monitor` 等待。取消调用永远不会杀掉进程。没有命令截止时间，退出的进程也不会被重启。
-- **宿主的 shell。** 调用没有指定 `shell` 时，命令使用 omp 的 `shellPath` 设置，未设置时用环境变量 `SHELL`，再没有则用平台默认值：Windows 上是 omp 自带的 pi-shell（`omp bash`，bash 5.3 语法），其他平台是 `bash`。`cmd` 会被拒绝，不会被启动。每个结果都写明启动所用的 shell，模型据此按该 shell 的语法写命令。
+- **会话，而不是调用。** 带 `pty: true` 的 `bash` 在 PTY 中启动进程，在等待窗口内返回已有输出和一个 `session_id`；之后的轮次里，`write_stdin` 把字节原样写给它（文本、`\x03` Ctrl-C、方向键）。状态与内容用 `read terminal_url` 读取，事件与完成用 `monitor` 等待。取消调用永远不会杀掉进程。调用不设 `timeout` 时终端没有截止时间，退出的进程也不会被重启。
+- **本会话的 shell。** 调用没有指定 `shell` 时，终端运行 omp 自己的 shell（bash 5.3 语法），从本会话之前的 `bash` 调用留下的状态启动：export 的变量、函数、别名以及本会话的 URL 路径（`local://`、`skill://` 等）都在。指定的 `shell` 只保留 export 的环境。`cmd` 会被拒绝，不会被启动。每个结果都写明启动所用的 shell，模型据此按该 shell 的语法写命令。
+- **omp 自己的审批。** 终端调用由 omp 的 bash 审批判定，`bash.patterns`、环境变量白名单和审批模式与其他 `bash` 调用相同。
 - **输出就是终端上看到的内容。** 每个会话都经过无头终端模拟器。运行中的结果返回当前屏幕、自上次调用以来滚出的未见历史与光标位置，而不是叠加每次重绘；退出结果只返回最终活动屏，其余保留行通过 `terminal_url` 读取。模拟器会像真实终端一样回应光标位置、设备属性与默认颜色查询，因此等待回应或选择配色的程序表现与真实终端一致。
 - **输出有上限，完整内容可找回。** 模型看到的每个结果都从尾部截取，最多 50 KiB / 3000 行，并去掉终端控制序列；每个会话的完整原始输出都写入 `log_path`。
 - **终端生命周期。** 后台终端的命令返回后，终端仍保留在列表里，直到被回收。正常返回且已没有任何进程的终端，保留 5 分钟后静默回收，读没读过都一样；其 `term://` 和日志仍可读。异常返回立即提醒；对异常返回的终端、或正常返回但仍有进程的终端，返回或最近一次读取 30 分钟后，从未读过的收到一条读取提醒，读过的收到一条即将回收提醒，并有 5 分钟反悔期，期满仍未再读就结束其剩余进程并回收；除非打开插件设置 `notice.graceReclaim`，回收不另发通知。见[终端生命周期](#terminal-lifecycle)。
-- **统一的通知通道。** 完成唤醒、monitor 的返回与提醒、等待输入提醒和生命周期通知都是终端通知：每条用 `session_id` 和传给 `exec_command` 的标题指明终端，并附一句简短原因。运行中的 agent 在下一个步骤边界读到通知，与 omp-todo-more 投递提醒的方式相同；空闲的 agent 被唤醒、开始一轮，而不是等到用户下一次发言才看到。
+- **统一的通知通道。** 完成唤醒、monitor 的返回与提醒、等待输入提醒和生命周期通知都是终端通知：每条用 `session_id` 和传给其 `bash` 调用的标题指明终端，并附一句简短原因。运行中的 agent 在下一个步骤边界读到通知，与 omp-todo-more 投递提醒的方式相同；空闲的 agent 被唤醒、开始一轮，而不是等到用户下一次发言才看到。
 - **工作完成后保持安静。** 主 agent 停下时，任何通知发出之前先判定它的最终回复（OMP 的 judge，否则 `@smol`，否则 Todo 列表）；工作已完成时，已返回的终端被回收，并且直到下一次运行开始，只有终端出问题（`abnormal_return`）才触发新的轮次。已完成的子 agent 遵循同一规则。见[完成的工作](#finished-work)。
 - **可选的完成唤醒。** `on_exit: "wake"` 让后台进程在无人观察时退出后唤醒一次 agent；`set_on_exit` 可以取消。
 - **等待匹配输出。** `monitor` 不消费输出地观察已有会话，在匹配批次、judge 模型判定满足所述意图的新屏幕或结束时唤醒模型；默认最多成功返回十次。monitor 20 分钟没有返回时，会提醒 agent 一次去检查会话。
 - **等待输入提醒。** 无论有没有 monitor，会话屏幕停在 agent 还没看过的提示上（`apt upgrade` 询问 sshd_config 这类 debconf/whiptail 对话框、`[Y/n]`、密码、分页器）时，都会唤醒 agent。
-- **omp 原生呈现。** `exec_command`、`write_stdin` 和 `kill_session` 用 omp 自己的 bash 卡片渲染（命令行、输出、退出码标签、错误配色），在 ANSI TUI 和 Tern 里都是如此。
+- **omp 原生呈现。** `bash`、`write_stdin` 和 `kill_session` 用 omp 自己的 bash 卡片渲染（命令行、输出、退出码标签、错误配色），在 ANSI TUI 和 Tern 里都是如此。
 - **Tern 里的终端 HUD。** 不用调用工具，就能查看、回滚、输入并结束模型的会话。
 
 <a id="tern-hud"></a>
@@ -73,17 +74,19 @@ HUD 直接读取会话。终端视图只读取选中会话的屏幕，且只在�
 
 ## 工具
 
-### `exec_command`
+### 带 `pty: true` 的 `bash`
 
-在一个持久的 PTY 会话里运行命令。用于长命令、交互程序（REPL、TUI、`ssh`、`sudo`）、并发计算和开发期 daemon；短的一次性命令用宿主的 `bash`。没有命令截止时间，退出的进程也不会被重启。用 `monitor` 和 `read term://…` 观察会话，用 `write_stdin` 发送输入；输出是渲染后的终端屏幕（见[终端输出](#terminal-output)）。
+插件用自己的 `bash` 取代 omp 的 `bash`。不带 `pty: true` 的调用，或用 `name` 指定服务的调用，原样交给 omp 自己的 `bash`：字段、审批、执行、结果和渲染都不变。带 `pty: true` 的调用在一个持久的 PTY 会话里运行命令。用于长命令、交互程序（REPL、TUI、`ssh`、`sudo`）、并发计算和开发期 daemon；短的一次性命令不带 `pty`。退出的进程不会被重启。用 `monitor` 和 `read term://…` 观察会话，用 `write_stdin` 发送输入；输出是渲染后的终端屏幕（见[终端输出](#terminal-output)）。
+
+schema 是 omp 自己的 `bash` schema 加上下表的终端字段，在每个会话里都一样：主 agent、子 agent 和 `omp -p`，有没有界面都是如此。说明文字是 omp 自己的 `bash` 说明，后接终端的说明。
 
 六个工具都是 omp 的顶层工具（`loadMode: "essential"`），不是 `xd://` 设备。
 用 `read xd://<tool>` 查看六个工具各自的精简说明与 topic 指针。
 每个工具通过自己的 `docTopics()` 提供正文：
 
-- `xd://exec_command/interactive`：输入字节、输出监控与远程脚本引用。
-- `xd://exec_command/lifecycle`：终端回收与退出唤醒。
-- `xd://exec_command/waiting`：命令生命期、仅等待完成的 monitor 与不消费输出的读取。
+- `xd://bash/terminal`：终端的 shell、调用的返回、输入字节、输出监控与远程脚本引用。
+- `xd://bash/lifecycle`：终端回收与退出唤醒。
+- `xd://bash/waiting`：终端生命期、仅等待完成的 monitor 与不消费输出的读取。
 - `xd://write_stdin/input`：原样输入、空输入拒绝、取消与观察到退出。
 - `xd://set_on_exit/wake`：启用、解除与已排队的退出唤醒。
 - `xd://monitor/subscription`：后续输出匹配、judge monitor、取消、提醒与等待输入通知。
@@ -95,14 +98,20 @@ Markdown 文件随包放在 `src/topics/`；读取 topic 不依赖外部配置�
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `cmd` | string | — | Shell 命令。必填。 |
-| `title` | string | — | 必填的启动标题，在 `list_sessions`、Terminals 视图和每条有关通知里指明这个终端。折成一行，最多保留 80 个字符。缺失或全空白时调用在启动任何进程之前失败。 |
-| `workdir` | string | 宿主会话的 cwd | 工作目录。默认值在每次调用时从宿主读取；会话里的 `cd` 不会改变它。相对路径按该会话 cwd 解析。路径不存在或不是目录时，以 `Working directory does not exist: <路径>` / `Working directory is not a directory: <路径>`（与宿主 bash 相同的文案）失败，不启动任何进程。 |
-| `shell` | string | omp `shellPath`，否则 `SHELL`，否则 Windows 上的 pi-shell（`omp bash`），否则 `bash` | Shell 可执行文件，见 [Shell 选择](#shell-selection)。`cmd` 会被拒绝；`powershell` / `pwsh` 带 `-Command`；其他 shell（包括 pi-shell）一律使用 `-c`。 |
+| `command` | string | — | Shell 命令，按终端所用 shell 的语法书写。必填。 |
+| `pty` | boolean | 不传 | `true` 打开终端。不传或 `false`：omp 自己的 `bash`。 |
+| `title` | string | — | 带 `pty: true` 时必填：在 `list_sessions`、Terminals 视图和每条有关通知里指明这个终端。折成一行，最多保留 80 个字符。缺失或全空白时调用在启动任何进程之前失败。 |
+| `cwd` | string | 会话 cwd | 工作目录：宿主路径（相对路径按会话 cwd 解析），或 `local://…` 这类 URL 目录，后者只有本会话的 shell 能进入。默认值在每次调用时读取；会话里的 `cd` 不会改变它。路径不存在或不是目录时，以 `Working directory does not exist: <路径>` / `Working directory is not a directory: <路径>`（与 omp bash 相同的文案）失败，不启动任何进程。 |
+| `shell` | string | 本会话的 shell | 代替本会话 shell 的 shell 可执行文件，见 [Shell 选择](#shell-selection)。`cmd` 会被拒绝；`powershell` / `pwsh` 带 `-Command`；其他 shell 一律使用 `-c`。 |
+| `timeout` | number | 无 | 秒。不传或 `0`：终端没有截止时间。正值让终端在到时结束（SIGTERM，2 秒后 SIGKILL），并算作异常返回（`timeout=Ns`）。omp 的 300 秒默认值只适用于不带 `pty` 的调用。 |
+| `async` | boolean | `false` | `true`：立即返回终端的 `session_id`，不等待输出。 |
+| `notify` | string | 不传 | JavaScript 正则源码（不带 `/` 分隔符）：在终端上启动一个以它为 `condition` 的 [`monitor`](#monitor)。结果的 `monitor` 行写明 `started …` 或 monitor 没有启动的原因。 |
 | `cols` | number | `120` | PTY 宽度。限制在 [20, 500]。 |
 | `rows` | number | `80` | PTY 高度。限制在 [5, 300]。 |
 | `yield_time_ms` | number | `10_000` | 本次调用保持连接、等待输出的时长（不是命令的生命期），限制在 [250, 30_000]。 |
 | `on_exit` | `"none"` \| `"wake"` | `"none"` | 无人观察时进程退出的处理策略。`"wake"`：发一条后续提示唤醒 agent——仅在人明确希望自动恢复时使用。之后可用 `set_on_exit` 修改。 |
+
+`title`、`shell`、`cols`、`rows`、`yield_time_ms` 和 `on_exit` 只适用于终端：不带 `pty: true`、或同时带 `name` 的调用带了其中任何一个，都在运行任何内容之前失败。`ready` 只适用于命名服务，终端调用带了它同样失败。`async`、`notify` 和 `timeout` 在不带 `pty: true` 的调用和命名服务里保持 omp 的含义。
 
 响应体（运行中、输出较短、未截断时）：
 
@@ -114,7 +123,7 @@ signal: SIGTERM                     (optional, if killed)
 log_path: /tmp/omp-actual-terminal-41237-1-5cc5e104.log  (omp pid, session id, random)
 terminal_url: term://1-9f2c1a7e-…
 cwd: /home/you/project
-shell: /bin/zsh                     (absolute path of the shell the session started with)
+shell: pi-shell (session)          (the session's shell, or the absolute path of a named shell)
 wall_time_seconds: 0.502
 chunk_id: a4f2c1
 original_token_count: 37
@@ -136,44 +145,37 @@ history_lines: 2                   (running, optional: lines scrolled off above 
 
 #### 命令审批
 
-启动进程之前，omp 用与内置 `bash` 相同的审批逻辑检查原始 `cmd`：
-有序的 `bash.patterns`（`allow`、`deny`、`prompt`）、`bash.allowCompoundCommands`
-与危险命令模式。deny 阻止执行；确认详情显示 `Command: <命令>`（只为显示而截断）。
-允许 `true` 不会顺带允许 `true && echo x`，除非启用复合命令审批且每一段都被允许。
-项目设置只能收紧操作员的 `bash.patterns`，不能解除操作员的 `deny` 或 `prompt`。
-omp 的审批模式仍然生效：在 `yolo` 下，显式 deny/prompt 策略生效，
-但仅有危险模式 override 不会要求确认。
+每个 `bash` 调用，无论是否打开终端，都由 omp 自己的 bash 审批判定：有序的
+`bash.patterns`（`allow`、`deny`、`prompt`）、针对开头 `NAME=value` 赋值的
+`bash.allowedEnvVars`、`bash.allowCompoundCommands`、危险命令模式以及 omp 的审批模式。
+确认详情是 omp 自己的。deny 阻止执行。
 
 每次审批实时读取调用方会话的规则，包括子 agent 自己的 settings overlay。
 第一次 `session_start` 按 agent id 和 session-manager 身份绑定会话；
-switch 与 branch 只复核身份。绑定不可用或失败时，审批返回宿主默认的 `exec`
-级别，不读取其他会话的 settings，也不因此禁用执行。只有 `exec_command`
-增加这套逻辑；之后经 `write_stdin` 写入的输入不会被重新解释为待审批的新命令。
+switch 与 branch 只复核身份。omp 的 agent 注册表解析不到的会话按 omp 进程级的
+settings 判定。之后经 `write_stdin` 写入的输入不会被重新解释为待审批的新命令。
 
 <a id="shell-selection"></a>
 
 #### Shell 选择
 
-每个新进程使用下列第一个已设置的值；空白的 `shellPath` 或 `SHELL` 视为未设置：
+不传 `shell` 或传空白值时，终端运行本会话的 shell：omp 自己的 shell 进程（bash 5.3 语法，各平台相同），从本会话之前的 `bash` 调用在 omp 持久 shell 里留下的状态启动——export 的变量、函数和别名——并挂载本会话的 URL 路径（`local://`、`skill://`、`attachment://` 等）、进入工作目录（URL 目录也可以）。结果把它写作 `pi-shell (session)`。omp 报告不出这个状态时，调用以 `could not read the session shell's state: …` 失败，什么都不运行。
 
-1. 调用的 `shell` 参数；
-2. omp 的 `shellPath` 设置：每次启动进程时从 omp 的设置注册表读取，而不是在加载时复制一份；
-3. 环境变量 `SHELL`；
-4. 平台默认值：Windows 上是 omp 自带的 pi-shell，即 omp 可执行文件的 `bash` 子命令，没有任何 PATH 探测参与；其他平台是 `bash`（见 [Windows](#windows)）。
+传了 `shell` 时改为运行该可执行文件。它得到同样的 export 环境，但没有函数、别名和 URL 路径，因此 URL `cwd` 会失败。进程启动前，该可执行文件会被解析成绝对路径：裸名称经 `PATH` 查找，包含 `/` 或 `\` 的相对路径相对于实际生效的 `cwd` 解析。找不到或无法启动时，调用失败（`failure_message: spawn <file> ENOENT: …`；Windows 上若 `PATH` 中找不到该 shell，则报错并给出其名称）；命令绝不会改用其他 shell 执行。
 
-进程启动前，选中的 shell 可执行文件会被解析成绝对路径：裸名称经 `PATH` 查找，包含 `/` 或 `\` 的相对路径相对于实际生效的 `workdir` 解析。选中的 shell 找不到或无法启动时，调用失败（`failure_message: spawn <file> ENOENT: …`；Windows 上若 `PATH` 中找不到该 shell，则报错并给出其名称）；命令绝不会改用优先级更低的 shell 执行。
+显式指定的 `cmd` 会被拒绝：由 omp 自己的 shell 判定识别，调用不启动任何进程即失败，并给出一条通知，指向本会话的 shell 或 bash 路径。`omp-actual-terminal` 从不启动 cmd。
 
-显式指定的 `cmd` 会被拒绝：由 omp 自己的 shell 判定识别，调用不启动任何进程即失败，并给出一条通知，指明该选择来自哪个设置（`shell` 参数、`shellPath` 或 `SHELL`），并指向 pi-shell 或 bash 路径。`omp-actual-terminal` 从不启动 cmd。
+`powershell` / `pwsh` 使用 `-NoProfile -NoLogo -Command`；其他 shell 都以 `<shell> -c <command>` 运行。命令文本原样传入，所以要按结果中写明的 shell 的语法来写。
 
-`powershell` / `pwsh` 使用 `-NoProfile -NoLogo -Command`；其他 shell（包括 pi-shell）都以 `<shell> -c <cmd>` 运行。命令文本原样传入，所以要按结果中写明的 shell 的语法来写；pi-shell 就是 bash 5.3，POSIX 语法可直接运行。
+每个终端的环境是本会话 shell export 的变量，去掉 omp 为自己的 `bash` 设置的非交互覆盖值（如 `PAGER=cat`、`TERM=dumb`、`CI=true`），再加上 `TERM=xterm-256color`，以及指明调用方会话和调用的 `PI_SESSION_ID`、`PI_SESSION_FILE`、`PI_TOOL_CALL_ID`。
 
-结果头和 `details` 都以 `shell` 字段给出解析后的可执行文件：短命令、已启动的会话和启动失败都一样。`write_stdin` 结果、流式更新、`kill_session` 结果和 `list_sessions` 条目沿用会话启动时的 shell，不会重新选择。shell 只是元数据，从不加入 `output`。
+结果头和 `details` 都以 `shell` 字段给出 shell：短命令、已启动的会话和启动失败都一样。`write_stdin` 结果、流式更新、`kill_session` 结果和 `list_sessions` 条目沿用会话启动时的 shell，不会重新选择。shell 只是元数据，从不加入 `output`。
 
 <a id="init-file"></a>
 
 #### 初始化文件
 
-插件设置 `exec.initFile` 指定一个 POSIX shell 脚本，每个 `exec_command` 的 shell 在运行 `cmd` 之前先 source 它。脚本里的 export 和别名只作用于 `exec_command` 终端，不影响 omp 的 `bash` 工具和 omp 本身：
+插件设置 `exec.initFile` 指定一个 POSIX shell 脚本，每个终端的 shell 在运行 `command` 之前先 source 它。脚本里的 export 和别名只作用于终端，不影响不带 `pty` 的 `bash` 调用和 omp 本身：
 
 ```sh
 # ~/.config/omp-actual-terminal/init.sh
@@ -182,13 +184,13 @@ alias omp='omp --hide-thinking'
 ```
 
 - **用户级值：** 在 omp 的 `/settings` → Plugins 中设置，或执行 `omp plugin config set omp-actual-terminal exec.initFile ~/.config/omp-actual-terminal/init.sh`。请使用绝对路径或 `~/` 路径：相对路径在每个项目里会指向不同的文件。
-- **项目级值：** 手写在项目 `.omp/plugin-overrides.json` 的 `settings["omp-actual-terminal"]["exec.initFile"]` 中。omp 按键合并设置，所以项目值会取代用户值；项目脚本若也需要用户的预设，自己 source 用户文件即可。相对路径相对于发起调用的会话 cwd 解析，从不相对于 `workdir`。空白值让该项目关闭用户值。
+- **项目级值：** 手写在项目 `.omp/plugin-overrides.json` 的 `settings["omp-actual-terminal"]["exec.initFile"]` 中。omp 按键合并设置，所以项目值会取代用户值；项目脚本若也需要用户的预设，自己 source 用户文件即可。相对路径相对于发起调用的会话 cwd 解析，从不相对于 `cwd`。空白值让该项目关闭用户值。
 - 每次调用开始时读取设置，改动从下一次调用起生效。
 - 文件必须存在且是普通文件，设置必须可读，值必须是字符串；否则调用失败，`failure_message` 写明问题，什么都不运行。omp 自身遇到格式错误的 `.omp/plugin-overrides.json` 时只记日志警告并忽略它，此时用户值生效。
-- 只有 POSIX shell（`sh`、`bash`、`dash`、`ash`、`ksh`、`zsh`，即 omp 视为 POSIX 的名称）能 source 它。设置存在时，shell 为其他程序（如 `fish`、`pwsh`、`cmd`）的调用会失败，而不是不带该文件运行。
-- shell 先 source 文件，状态非零就以该状态退出（文件里的 `set -e` 保持原义），然后经 `eval` 运行 `cmd`：zsh 会先解析完整个 `-c` 字符串再运行，同一字符串里定义的别名不会展开。bash 另外启用 `shopt -s expand_aliases`。因此 `cmd` 的错误位置可能显示为 `(eval)`。结果、`list_sessions`、通知和审批仍显示原样的 `cmd`；文件打印的内容出现在终端和日志里。
-- 别名只在 `cmd` 把它当作命令词时生效，包括 `&&` 或 `;` 之后。嵌套 shell、脚本以及 `xargs`、`timeout` 这类包装命令看不到别名，但能看到 export 的变量。在终端里启动的 `omp` 会为它自己的 `exec_command` 调用再次 source 同一个用户文件，所以文件要保持幂等。
-- 该文件是受信任的启动代码。命令审批只检查 `cmd`，不检查文件内容，也不检查别名展开的结果，因此项目值会运行该仓库文件写的任何内容。
+- 只有本会话的 shell 和 POSIX shell（`sh`、`bash`、`dash`、`ash`、`ksh`、`zsh`，即 omp 视为 POSIX 的名称）能 source 它。设置存在时，shell 为其他程序（如 `fish`、`pwsh`、`cmd`）的调用会失败，而不是不带该文件运行。
+- shell 先 source 文件，状态非零就以该状态退出（文件里的 `set -e` 保持原义），然后经 `eval` 运行 `command`：zsh 会先解析完整个 `-c` 字符串再运行，同一字符串里定义的别名不会展开。本会话的 shell 和 bash 另外启用 `shopt -s expand_aliases`。因此 `command` 的错误位置可能显示为 `(eval)`。结果、`list_sessions`、通知和审批仍显示原样的 `command`；文件打印的内容出现在终端和日志里。
+- 别名只在 `command` 把它当作命令词时生效，包括 `&&` 或 `;` 之后。嵌套 shell、脚本以及 `xargs`、`timeout` 这类包装命令看不到别名，但能看到 export 的变量。在终端里启动的 `omp` 会为它自己的终端再次 source 同一个用户文件，所以文件要保持幂等。
+- 该文件是受信任的启动代码。命令审批只检查 `command`，不检查文件内容，也不检查别名展开的结果，因此项目值会运行该仓库文件写的任何内容。
 
 <a id="terminal-output"></a>
 
@@ -360,7 +362,7 @@ whiptail/dialog 前端到了 PTY 上只是普通的绘制（备用屏、隐藏�
 本机的进程状态也说明不了什么。因此每个运行中的会话在输出安静 5 秒后检查一次渲染后的屏幕，
 以下条件全部成立时发送一条唤醒模型的 `input_wait` [终端通知](#terminal-notices)：
 
-- 没有挂着的 `exec_command`/`write_stdin` 调用（它的结果会展示屏幕），也没有工具结果展示过这一屏；
+- 没有挂着的 `bash`/`write_stdin` 调用（它的结果会展示屏幕），也没有工具结果展示过这一屏；
 - 屏幕上是一个提示：
   - **dialog**——任意位置出现 `<Ok>`、`<Yes>`、`<No>` 或 `<Cancel>` 按钮（whiptail、dialog、debconf、needrestart）；
   - **inline**——光标停在一行末尾，该行含有 `[Y/n]` 这类选项、`(yes/no)` 或 `(Y/I/N/O/D/Z)`、`[default=…]`，
@@ -392,8 +394,8 @@ whiptail/dialog 前端到了 PTY 上只是普通的绘制（备用屏、隐藏�
 从交出 `session_id` 的那次结果起，到回收为止，终端归终端生命周期管理。命令**返回**指 shell 退出（后台进程可能仍持有终端），或终端关闭。
 
 - **正常返回且已没有任何进程**（终端已关闭，进程组也已清空）：终端**保留 5 分钟**后静默回收，读没读过都一样，不发 `unread`、`reclaim_due` 或 `reclaimed` 通知；读取不会延长这 5 分钟。后台任务比 shell 活得久时，从发现它们全部结束的那次检查起算。之后用这个 `session_id` 调用工具（`write_stdin`、`monitor`、`set_on_exit`、`kill_session`）时，回答会说明它已被回收、如何返回，并给出其 `term://` 地址和 `log_path`。
-- **异常返回**（非零退出、信号、启动/运行时失败）立即发送一条 `abnormal_return` 通知，读没读过都发。`kill_session`、HUD 或 `/omp-actual-terminal-sessions` 的 kill 算正常结束；agent 用 `write_stdin` 写入 Ctrl-C（`\x03`）或 Ctrl-\（`\x1c`）之后的返回也算正常结束。之后不含这两个字符的输入会清除这个标记，所以扛过中断、之后才失败的程序仍会被报告。
-- **读取**从返回起计：一次完整的 `read term://…`（文本或 `/screen.png`），或一次已定稿、展示了已返回终端的 `write_stdin`/`kill_session` 结果（shell 已退出时的 `exec_command` 结果也算）。出错或取消的结果不算。`list_sessions`、`monitor` 的 End 和唤醒只报告状态，不算读取。
+- **异常返回**（非零退出、信号、启动/运行时失败、调用的 `timeout`）立即发送一条 `abnormal_return` 通知，读没读过都发。`kill_session`、HUD 或 `/omp-actual-terminal-sessions` 的 kill 算正常结束；agent 用 `write_stdin` 写入 Ctrl-C（`\x03`）或 Ctrl-\（`\x1c`）之后的返回也算正常结束。之后不含这两个字符的输入会清除这个标记，所以扛过中断、之后才失败的程序仍会被报告。
+- **读取**从返回起计：一次完整的 `read term://…`（文本或 `/screen.png`），或一次已定稿、展示了已返回终端的 `write_stdin`/`kill_session` 结果（shell 已退出时的 `bash` 结果也算）。出错或取消的结果不算。`list_sessions`、`monitor` 的 End 和唤醒只报告状态，不算读取。
 - 异常返回的终端，或正常返回但仍有进程的终端，在返回或最近一次读取**30 分钟**后：
   - 从未读过：发一条 `unread` 通知；检查会一直保留终端到被读（只有[完成的工作](#finished-work)会回收未读终端；已完成的 agent 的终端不发提醒，直接回收）；
   - 读过：发一条 `reclaim_due` 通知，进入 **5 分钟反悔期**。反悔期内读取会重新开始 30 分钟；否则回收。
@@ -500,14 +502,14 @@ omp 的任务执行器收养（adopt）子 agent 时，它的任务已经完成�
 
 ## 呈现
 
-**在 omp 上，**`exec_command`、`write_stdin` 和 `kill_session` 通过 omp 导出的 bash 渲染器渲染，ANSI TUI 和 Tern 都一样：`$ cmd`，可用 omp 的展开快捷键展开的折叠输出，失败时的退出码标签和错误配色，运行中会话显示 `Backgrounded: session N`，最后一行是带日志路径的截断标记。`write_stdin` 和 `kill_session` 以 bash 注释的形式显示所做的动作（`# stdin → session N: "…"`、`# kill session N (SIGTERM)`）。`monitor`、`set_on_exit` 和 `list_sessions` 使用 omp 的默认卡片。如果 omp 的 bash 渲染器缺失或接口变了，插件会直接加载失败，而不是显示原始的结果包装。
+**在 omp 上，**`bash`、`write_stdin` 和 `kill_session` 通过 omp 导出的 bash 渲染器渲染，ANSI TUI 和 Tern 都一样。不打开终端的 `bash` 调用就是 omp 自己的调用和结果，按 omp 的方式渲染；终端调用显示 `$ command`，可用 omp 的展开快捷键展开的折叠输出，失败时的退出码标签和错误配色，运行中会话显示 `Backgrounded: session N`，最后一行是带日志路径的截断标记。`write_stdin` 和 `kill_session` 以 bash 注释的形式显示所做的动作（`# stdin → session N: "…"`、`# kill session N (SIGTERM)`）。`monitor`、`set_on_exit` 和 `list_sessions` 使用 omp 的默认卡片。如果 omp 的 bash 渲染器缺失或接口变了，插件会直接加载失败，而不是显示原始的结果包装。
 
 ## 常量
 
 ```
 MIN_YIELD_TIME_MS            = 250
 MAX_YIELD_TIME_MS            = 30_000
-DEFAULT_EXEC_YIELD_MS        = 10_000
+DEFAULT_TERMINAL_YIELD_MS    = 10_000
 DEFAULT_WRITE_STDIN_YIELD_MS = 250
 EARLY_EXIT_GRACE_PERIOD_MS   = 150
 TERMINAL_HISTORY_CELLS       = 240_000 (history between calls: cells / cols rows, at least one screen)
@@ -529,13 +531,13 @@ LIFECYCLE_SWEEP_MS           = 60_000 (lifecycle check interval)
 
 - **提前退出：**150 毫秒内结束的命令不会进入会话存储；结果带 `exit_code`，没有 `session_id`。
 - **已返回的终端**留在存储、HUD 和 `list_sessions` 里，直到其[生命周期](#terminal-lifecycle)回收；工具调用观察到退出时不会移除它。
-- **启动失败**（shell 或 `workdir` 不存在）在 PTY 启动前检查，以 `failure_message` 报告（`spawn <file> ENOENT: …`）。选中的 shell 不存在时，绝不会换用另一个 shell。
+- **启动失败**（shell 或 `cwd` 不存在）在 PTY 启动前检查，以 `failure_message` 报告（`spawn <file> ENOENT: …`）。选中的 shell 不存在时，绝不会换用另一个 shell。
 - **必须有 Bun PTY：**宿主缺少 `Bun.spawn` 或 `Bun.Terminal` 时，在扩展 factory 阶段、工具注册之前被拒绝。
-- **没有截止时间，也不重启：**本包从不因运行太久而结束命令，也从不重启已退出的进程。
+- **不要求就没有截止时间，也不重启：**本包只在调用设置的 `timeout` 到时才因运行太久而结束终端，也从不重启已退出的进程。
 - **shell 退出与终端关闭：**会话一直运行到其终端关闭。在 shell 退出后仍存活并持有 PTY 的后代进程（例如 `nohup` 或忽略 SIGHUP 的任务）会让终端保持打开；这类结果会带一条 `note`，说明如何把它分离出去（`setsid cmd >log 2>&1 </dev/null &`；Windows 上没有能执行这条配方的会话 shell，`note` 只给出 `kill_session`），运行中会话小部件会把该会话标为 `terminal held`。此时 `kill_session`、回收和关闭仍向 shell 的进程组发信号，仍在组内的后代会被结束；已离开该组的（`setsid`）不会。
 - **终端已关闭**不会让宿主崩溃；写入时报告 `failure_message`。
 - **Esc** 中断当前等待，但会话继续运行。
-- **关闭**时向每个会话发送 SIGTERM，1 秒后对仍存活的发送 SIGKILL。omp 停放空闲子 agent 不算关闭；它的终端一直保留到 omp 释放该 agent（见[已完成的子 agent](#finished-subagents-and-omps-idle-park)）。仍处于 150 ms 启动宽限期内的 `exec_command` 不会拿到 `session_id`：它等关闭结束进程后报告这次退出（进程撑过 SIGKILL 等待时报告 `running: true` 与 `exit not confirmed`），因此下一次 `session_start` 之后不会再看到该会话。其余终端已被关闭释放的进行中调用返回空输出，进程状态按实际报告：已退出，或在 SIGKILL 生效前仍在运行。
+- **关闭**时向每个会话发送 SIGTERM，1 秒后对仍存活的发送 SIGKILL。omp 停放空闲子 agent 不算关闭；它的终端一直保留到 omp 释放该 agent（见[已完成的子 agent](#finished-subagents-and-omps-idle-park)）。仍处于 150 ms 启动宽限期内的 `bash` 调用不会拿到 `session_id`：它等关闭结束进程后报告这次退出（进程撑过 SIGKILL 等待时报告 `running: true` 与 `exit not confirmed`），因此下一次 `session_start` 之后不会再看到该会话。其余终端已被关闭释放的进行中调用返回空输出，进程状态按实际报告：已退出，或在 SIGKILL 生效前仍在运行。
 - **LRU 淘汰**在达到 64 个会话时进行，淘汰最旧的非保护会话，优先选已退出的；最近使用的 8 个永不淘汰。被这样淘汰的受管终端会收到一条注明上限的 `reclaimed` 通知。
 - **观察**按会话串行执行；流式更新、`read term://`、monitor 与 Tern HUD 不消费普通观察。流式更新每 250 ms 检查一次，只在已解析屏幕、退出状态或字节计数自上一次更新后有变化时才发送。冻结终端资源的生命周期不受会话存储成员关系限制。
 - **日志**放在临时目录（`/tmp` 或 `%TEMP%`），文件名为 `omp-actual-terminal-<omp pid>-<会话 id>-<随机>.log`。本包从不删除日志内容。最后写入超过七天的日志，在确认写入方已不存在后，会被替换为标准 gzip 文件 `<log_path>.gz`，修改时间保持不变；写入方不存在指：本进程已关闭它，文件名中的 omp pid 已不存在，或它最后写入于本次开机之前。omp 在扩展加载时检查一次，之后每天检查一次。在 Linux 上用 `zcat <文件>` 查看归档；在 macOS 上用 `gzcat <文件>` 或 `zcat < <文件>`，因为 macOS 的 `zcat` 接收路径参数时会去找 `<文件>.Z`。请用不会执行控制序列的查看器查看原始 PTY 日志，不要用 `cat`。
@@ -545,7 +547,7 @@ LIFECYCLE_SWEEP_MS           = 60_000 (lifecycle check interval)
 ### 开发服务器
 
 ```
-> exec_command(cmd="npm run dev", title="dev server", yield_time_ms=5000)
+> bash(command="npm run dev", pty=true, title="dev server", yield_time_ms=5000)
 [still running]
 session_id: 1
 terminal_url: term://1-9f2c1a7e-…
@@ -565,7 +567,7 @@ Server listening on :3000
 ### 没有固定文本的状态
 
 ```
-> exec_command(cmd="./deploy.sh staging", title="staging deploy", yield_time_ms=5000)
+> bash(command="./deploy.sh staging", pty=true, title="staging deploy", yield_time_ms=5000)
 [still running]
 session_id: 2
 …
@@ -578,7 +580,7 @@ session_id: 2
 ### 交互式 Python REPL
 
 ```
-> exec_command(cmd="python3 -q", title="python repl", yield_time_ms=1500)
+> bash(command="python3 -q", pty=true, title="python repl", yield_time_ms=1500)
 [still running]
 session_id: 1
 terminal: normal screen 120x80, cursor row 1 col 5
@@ -597,7 +599,7 @@ terminal: normal screen 120x80, cursor row 3 col 5
 ### 带自动恢复的长任务（人要求时）
 
 ```
-> exec_command(cmd="npm test", title="npm test", yield_time_ms=1000, on_exit="wake")
+> bash(command="npm test", pty=true, title="npm test", yield_time_ms=1000, on_exit="wake")
 [still running]
 session_id: 2
 completion_notification: armed
@@ -610,11 +612,10 @@ completion_notification: armed
 
 每个会话都通过 Bun 原生的 `Bun.Terminal` 在 ConPTY 中运行。
 
-- **平台默认 shell**（没有 `shell` 参数、omp `shellPath` 或 `SHELL` 时）：omp 自带的 pi-shell，以 `<omp> bash -c <cmd>` 启动——omp 可执行文件里的 bash 5.3 引擎，凡能跑 omp 的机器上都有。不再探测 Git Bash，不再退回 PowerShell，也没有缓存。
-- **Shell 名称**在启动前解析成绝对路径：裸名称经 PATH 查找，bash 名称不会落到 System32 里的 WSL 存根上。`OMP_ACTUAL_TERMINAL_BASH` 指定 bash 选择所解析到的那个 bash。PATH 上找不到的裸名称会让调用失败，而不会在 workdir 中查找。
-- **`shell: cmd` 会被拒绝**，从环境继承的、指向 cmd.exe 的 `SHELL` 同样；调用失败并给出一条通知，指明来自哪个设置，并指向 pi-shell 或 bash 路径。
-- **从 Git Bash 或 MSYS 继承的 `SHELL`** 与其他选择一样生效，所以它必须是 Windows 能启动的路径；否则请传 `shell`、设置 omp 的 `shellPath`，或取消 `SHELL`。
-- **PowerShell**（`powershell`，或任何平台上的 `pwsh`）以 `-NoProfile -NoLogo -Command <cmd>` 运行，所以它的交互式提示可以用 `write_stdin` 回答。
+- **本会话的 shell**（没有 `shell` 参数时）在这里同样是 omp 自己的 shell 进程：omp 可执行文件里的 bash 5.3 引擎，凡能跑 omp 的机器上都有。不探测 Git Bash，不退回 PowerShell。
+- **Shell 名称**在启动前解析成绝对路径：裸名称经 PATH 查找，bash 名称不会落到 System32 里的 WSL 存根上。`OMP_ACTUAL_TERMINAL_BASH` 指定 bash 选择所解析到的那个 bash。PATH 上找不到的裸名称会让调用失败，而不会在 `cwd` 中查找。
+- **`shell: cmd` 会被拒绝**：调用失败并给出一条通知，指向本会话的 shell 或 bash 路径。
+- **PowerShell**（`powershell`，或任何平台上的 `pwsh`）以 `-NoProfile -NoLogo -Command <command>` 运行，所以它的交互式提示可以用 `write_stdin` 回答。
 - **没有 POSIX 信号：**每次 kill 都是结束整个进程树（`taskkill /T /F`）；被结束的进程报告 `exit_code: 1`，kill 失败会如实报告。
 
 ## 目录结构
@@ -630,17 +631,18 @@ src/
 ├── completion.ts         # on_exit "wake" coordination (exactly-once), monitor ownership
 ├── notify.ts             # Notify / Gate / sleep primitives
 ├── pty.ts                # Bun.Terminal backend, host admission, spawn preflight, shell-exit events, process-group signals, Windows tree-kill
-├── shell.ts              # shell choice (pi-shell, explicit shell, refused cmd) and argv; omp's POSIX-shell test
+├── bash-tool.ts          # the plugin's `bash` schema; splits a call between omp's bash and a terminal
+├── terminal-host.ts      # omp's bash, session-shell seed, shell process and URL mounts, loaded at factory time
+├── shell.ts              # shell choice (session shell, explicit shell, refused cmd) and argv; omp's POSIX-shell test
 ├── output-safety.ts      # terminal-control stripping
 ├── terminal-screen.ts    # headless terminal: observations, styled screens, query answers
 ├── tool-result.ts        # bounded envelopes + model-visible text
 ├── script-result.ts      # monitor result details
 ├── unescape.ts           # C-style escape decoder for `chars`
-├── omp-presentation.ts   # omp host detection, bash-renderer delegation, theme appearance, shellPath setting
-├── command-approval.ts   # built-in bash approval port and factory-loaded host helpers
+├── omp-presentation.ts   # omp host detection, bash-renderer delegation, theme appearance
 ├── shell-host.ts         # omp's cmd.exe test, loaded at factory time
 ├── agent-park.ts         # omp's agent registry/lifecycle reader; parked subagents' terminal runtimes
-├── session-binding.ts    # activation-local AgentSession identity for approval settings and stop detectors
+├── session-binding.ts    # activation-local AgentSession identity for bash settings and stop detectors
 ├── tern-terminal-hud.ts  # terminals segment in omp's pill, Terminals view, terminal page
 ├── terminal-resource.ts  # process-global terminal keys, live/frozen projections
 ├── terminal-url.ts       # omp `term://` read handler; reports reads to the terminal's owner
@@ -649,11 +651,11 @@ src/
 ├── terminal-lifecycle.ts # returned-terminal silent linger, TTL, read/reclaim reminders, grace, reclaim, reclaimed record, finished-work collection
 ├── stop-config.ts        # `omp-actual-terminal` omomp section: stop mode, judge prompt, notice template
 ├── plugin-settings.ts    # native plugin settings (`omp.settings`): `notice.graceReclaim`, read via omp's getPluginSettings
-├── exec-init.ts          # `exec.initFile`: resolve the init file, source it before `cmd` in POSIX shells
+├── exec-init.ts          # `exec.initFile`: resolve the init file, source it before `command` in POSIX shells
 ├── stop-gate.ts          # judge / @smol / todo stop detectors over factory-loaded omp modules
 ├── screen-judge.ts       # judge monitors' screen judgment through omp's judge role chain
 ├── stop-reasons.ts       # structured stop/config reasons; English/Chinese boundary rendering
-├── exec-command-docs.ts  # six tools' lazy documentation providers and topic pointers
+├── tool-docs.ts          # six tools' lazy documentation providers and topic pointers
 ├── topics/               # packaged body-only tool documentation
 ├── monitor-subscription.ts # monitor conditions, batching, judgments and reminders as terminal notices
 ├── input-wait.ts         # input prompt detection; input-wait alerts as terminal notices

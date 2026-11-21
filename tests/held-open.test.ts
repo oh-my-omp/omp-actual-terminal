@@ -26,6 +26,7 @@ let nextId = 1000;
 function spawnShell(cmd: string, workdir: string): ExecSession {
 	const opts: SessionSpawnOptions = {
 		title: "Held-open shell",
+		shell: "bash",
 		command: ["bash", "-c", cmd],
 		cwd: workdir,
 		env: process.env,
@@ -61,7 +62,7 @@ describe("held-open session diagnostics", { skip: IS_WINDOWS }, () => {
 
 	it("render: held-open sessions carry the explanatory note, exited sessions do not", () => {
 		const running = finalizeProcessResult({
-			operation: "exec_command",
+			operation: "bash",
 			wallTimeSec: 1,
 			collected: NO_OUTPUT,
 			sessionId: 7,
@@ -75,7 +76,7 @@ describe("held-open session diagnostics", { skip: IS_WINDOWS }, () => {
 		assert.match(runningText, /note: shell has exited, but background process/);
 
 		const exited = finalizeProcessResult({
-			operation: "exec_command",
+			operation: "bash",
 			wallTimeSec: 0.1,
 			collected: NO_OUTPUT,
 			sessionId: undefined,

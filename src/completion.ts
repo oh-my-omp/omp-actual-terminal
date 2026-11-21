@@ -173,7 +173,7 @@ export class CompletionCoordinator {
 	}
 
 	/**
-	 * Call ONLY once exec_command has
+	 * Call ONLY once a bash pty call has
 	 * committed to returning a background session_id.
 	 */
 	register(session: CompletionSessionLike): void {

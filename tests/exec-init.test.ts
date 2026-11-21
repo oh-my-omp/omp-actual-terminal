@@ -7,7 +7,7 @@ import { resolveInitPath, shellScript } from "../src/exec-init.ts";
 import type { PluginSettingsReader } from "../src/plugin-settings.ts";
 import { activate } from "../src/index.ts";
 import { findOnPath, IS_WINDOWS } from "../src/shell.ts";
-import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";
+import { STUB_SESSION, stubShellHost, stubTerminalHost } from "./stub-shell.ts";
 
 interface ExecDetails {
 	exit_code?: number | null;
@@ -24,7 +24,7 @@ interface ToolDef {
 type Handler = (event: object, ctx: object) => unknown;
 
 interface Harness {
-	exec(params: { cmd: string; shell?: string; workdir?: string }): Promise<ExecDetails>;
+	exec(params: { command: string; shell?: string; cwd?: string }): Promise<ExecDetails>;
 	shutdown(): Promise<void>;
 }
 
@@ -34,17 +34,17 @@ const roots: string[] = [];
 function makeHarness(cwd: string, settings: PluginSettingsReader): Harness {
 	const tools: Record<string, ToolDef> = {};
 	const handlers: Record<string, Handler[]> = {};
-	const ctx = { cwd, ui: { notify() {}, setStatus() {}, setWidget() {} }, hasUI: false };
+	const ctx = { cwd, ui: { notify() {}, setStatus() {}, setWidget() {} }, hasUI: false, ...STUB_SESSION };
 	const pi = {
 		registerTool: (def: ToolDef & { name: string }) => { tools[def.name] = def; },
 		on: (event: string, handler: Handler) => { (handlers[event] ??= []).push(handler); },
 		registerCommand() {}, registerShortcut() {}, registerFlag() {}, registerMessageRenderer() {},
 		getFlag: () => false, getActiveTools: () => ["bash"], setActiveTools() {}, sendMessage() {},
 	};
-	activate(pi as unknown as Parameters<typeof activate>[0], undefined, undefined, undefined, undefined, {}, undefined, settings, undefined, stubShellHost);
+	activate(pi as unknown as Parameters<typeof activate>[0], undefined, stubTerminalHost(), undefined, {}, undefined, settings, undefined, stubShellHost);
 	const harness: Harness = {
 		async exec(params) {
-			const result = await tools.exec_command!.execute("call", { title: "init test", yield_time_ms: 10_000, ...params }, undefined, undefined, ctx);
+			const result = await tools.bash!.execute("call", { pty: true, title: "init test", yield_time_ms: 10_000, ...params }, undefined, undefined, ctx);
 			return result.details;
 		},
 		async shutdown() {
@@ -72,14 +72,14 @@ afterEach(async () => {
 const POSIX_SHELLS = (IS_WINDOWS ? ["bash"] : ["bash", "zsh", "sh"]).filter((shell) => findOnPath(shell) !== undefined);
 
 describe("exec.initFile", () => {
-	for (const shell of POSIX_SHELLS) {
-		it(`brings the file's exports and aliases to commands under ${shell}`, async () => {
+	for (const shell of [undefined, ...POSIX_SHELLS]) {
+		it(`brings the file's exports and aliases to commands under ${shell ?? "the session's shell"}`, async () => {
 			const root = tempRoot();
 			mkdirSync(join(root, "sub"));
 			writeFileSync(join(root, "init.sh"), "export UE_PRESET=preset-ok\nalias greet='echo greeted --flag'\n");
 			const h = makeHarness(root, settingsOf({ "exec.initFile": "init.sh" }));
 			const cmd = `greet one; printf 'env=%s\\n' "$UE_PRESET"; printf '%s\\n' "it's quoted"`;
-			const r = await h.exec({ cmd, shell, workdir: "sub" });
+			const r = await h.exec({ command: cmd, ...(shell === undefined ? {} : { shell }), cwd: "sub" });
 			assert.equal(r.exit_code, 0, JSON.stringify(r));
 			assert.match(r.output, /greeted --flag one/);
 			assert.match(r.output, /env=preset-ok/);
@@ -93,7 +93,7 @@ describe("exec.initFile", () => {
 		writeFileSync(join(root, "init.sh"), "alias greet='echo greeted'\n");
 		for (const values of [{}, { "exec.initFile": "  " }]) {
 			const h = makeHarness(root, settingsOf(values));
-			const r = await h.exec({ cmd: "greet one", shell: "bash" });
+			const r = await h.exec({ command: "greet one", shell: "bash" });
 			assert.notEqual(r.exit_code, 0, JSON.stringify(r));
 			assert.doesNotMatch(r.output, /greeted/);
 		}
@@ -109,7 +109,7 @@ describe("exec.initFile", () => {
 		for (const { body, expected } of cases) {
 			writeFileSync(join(root, "init.sh"), body);
 			const h = makeHarness(root, settingsOf({ "exec.initFile": join(root, "init.sh") }));
-			const r = await h.exec({ cmd: "touch ran", shell: "bash" });
+			const r = await h.exec({ command: "touch ran", shell: "bash" });
 			assert.equal(r.exit_code, expected, `${body}: ${JSON.stringify(r)}`);
 			assert.equal(existsSync(marker), false, `${body}: the command must not run`);
 		}
@@ -126,7 +126,7 @@ describe("exec.initFile", () => {
 		];
 		for (const [settings, message] of failing) {
 			const h = makeHarness(root, settings);
-			const r = await h.exec({ cmd: "touch ran", shell: "bash" });
+			const r = await h.exec({ command: "touch ran", shell: "bash" });
 			assert.equal(r.failure_message, message, JSON.stringify(r));
 			assert.equal(r.session_id, undefined);
 			assert.equal(existsSync(join(root, "ran")), false, "nothing may run");
@@ -136,16 +136,16 @@ describe("exec.initFile", () => {
 	it("refuses non-POSIX shells while a file is configured", () => {
 		const file = { kind: "file", path: "/tmp/init.sh" } as const;
 		for (const shell of ["/usr/bin/fish", "pwsh", "powershell.exe"]) {
-			assert.equal(shellScript(file, { kind: "shell", shell }, "echo hi").kind, "unusable", shell);
+			assert.equal(shellScript(file, { kind: "explicit", shell }, "echo hi").kind, "unusable", shell);
 		}
 		for (const shell of ["/bin/bash", "/bin/zsh", "/bin/sh", "dash", "C:\\Git\\bin\\bash.exe"]) {
-			assert.equal(shellScript(file, { kind: "shell", shell }, "echo hi").kind, "ready", shell);
+			assert.equal(shellScript(file, { kind: "explicit", shell }, "echo hi").kind, "ready", shell);
 		}
 	});
 
-	it("sources the file and expands aliases in omp's pi-shell too", () => {
+	it("sources the file and expands aliases in the session's shell too", () => {
 		const file = { kind: "file", path: "/tmp/init.sh" } as const;
-		const script = shellScript(file, { kind: "pi-shell", shell: "C:\\omp\\omp.exe" }, "greet one");
+		const script = shellScript(file, { kind: "session" }, "greet one");
 		assert.equal(script.kind, "ready");
 		assert.match(script.kind === "ready" ? script.cmd : "", /shopt -s expand_aliases/);
 	});

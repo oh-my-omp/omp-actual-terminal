@@ -103,7 +103,7 @@ describe("CompletionCoordinator", () => {
 	it("register handles the boundary race: session already exited when registered", async () => {
 		const { coordinator, sent } = makeCoordinator();
 		const s = new FakeSession(1);
-		s.exit(3); // exits before register (exec_command decided while it was alive)
+		s.exit(3); // exits before register (the bash call decided while it was alive)
 		coordinator.register(s);
 		await settle();
 		assert.equal(sent.length, 1, "completion must not be lost");

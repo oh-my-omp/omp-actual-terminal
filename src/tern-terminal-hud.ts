@@ -316,7 +316,7 @@ export function describeTerminalsSheet(
 					c: [
 						{ k: "icon", key: "icon", p: { name: "terminal" } },
 						{ k: "text", key: "title", p: { text: tr("No terminals", "没有终端"), role: "omp.jobs.empty.title" } },
-						{ k: "text", key: "note", p: { text: tr("Sessions started with exec_command show up here while they are stored.", "使用 exec_command 启动的会话在存储期间会显示在这里。"), role: "omp.jobs.empty.note", wrap: "word" } },
+						{ k: "text", key: "note", p: { text: tr("Sessions started by bash with pty: true show up here while they are stored.", "bash 以 pty: true 启动的会话在存储期间会显示在这里。"), role: "omp.jobs.empty.note", wrap: "word" } },
 					],
 				},
 				actionsRow([SPACER, close]),

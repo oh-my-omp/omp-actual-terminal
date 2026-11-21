@@ -12,7 +12,9 @@ import { DEFAULT_PTY_COLS, DEFAULT_PTY_ROWS, type ProcessExit, type SpawnedChild
 import { type StyledScreen, type TerminalAppearance, TerminalScreen, type TerminalSnapshot } from "./terminal-screen.ts";
 
 export interface SessionSpawnOptions {
-	command: string[];
+	command: readonly string[];
+	/** The shell the terminal runs, as results name it. */
+	shell: string;
 	cwd: string;
 	env: NodeJS.ProcessEnv;
 	cols?: number;
@@ -38,10 +40,8 @@ export interface SessionState {
 
 export class ExecSession {
 	readonly id: number;
-	readonly command: string[];
-	get shell(): string | undefined {
-		return this.command[0];
-	}
+	readonly command: readonly string[];
+	readonly shell: string;
 	readonly displayCommand: string;
 	readonly title: string;
 	readonly cwd: string;
@@ -79,6 +79,7 @@ export class ExecSession {
 	private constructor(id: number, opts: SessionSpawnOptions) {
 		this.id = id;
 		this.command = opts.command;
+		this.shell = opts.shell;
 		this.displayCommand = opts.displayCommand ?? opts.command.join(" ");
 		this.title = opts.title;
 		this.cwd = opts.cwd;
@@ -210,6 +211,11 @@ export class ExecSession {
 			clearTimeout(quiet);
 			unsubscribe();
 		});
+	}
+
+	/** The call's `timeout` ran out; the caller ends the process. */
+	recordDeadline(seconds: number): void {
+		this.recordFailure(`timeout: ended after ${seconds}s`);
 	}
 
 	private recordFailure(message: string): void {

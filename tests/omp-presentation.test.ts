@@ -14,7 +14,6 @@ import { DEFAULT_MAX_LINES, type ExtensionAPI, type ToolDefinition } from "@oh-m
 import { Type } from "@oh-my-pi/omptype/typebox";
 
 import {
-	execShellArgs,
 	killShellArgs,
 	parseResultView,
 	toShellResult,
@@ -55,7 +54,7 @@ const exitedDetails: ProcessResultDetails = {
 	original_token_count: 1,
 	log_path: "/tmp/omp-presentation-exit.log",
 	output_bytes_total: 3,
-	operation: "exec_command",
+	operation: "bash",
 	status: "exited",
 	running: false,
 	exit_code: 0,
@@ -65,7 +64,7 @@ const exitedDetails: ProcessResultDetails = {
 };
 
 const processInput: FinalizeProcessInput = {
-	operation: "exec_command",
+	operation: "bash",
 	wallTimeSec: 0.25,
 	collected: finalScreen("last output\n"),
 	sessionId: undefined,
@@ -124,7 +123,7 @@ describe("omp shell result presentation", () => {
 		});
 	});
 
-	for (const operation of ["exec_command", "write_stdin"] as const) {
+	for (const operation of ["bash", "write_stdin"] as const) {
 		it(`presents a yielded live ${operation} result as backgrounded`, () => {
 			const details: ProcessResultDetails = {
 				chunk_id: "6cba2f",
@@ -325,13 +324,6 @@ describe("omp shell result presentation", () => {
 });
 
 describe("omp shell argument presentation", () => {
-	it("projects exec command and workdir without inventing a cwd for empty or absent args", () => {
-		assert.deepEqual(execShellArgs({ cmd: "echo ok", workdir: "/repo" }), { command: "echo ok", cwd: "/repo" });
-		assert.deepEqual(execShellArgs({ cmd: "echo ok", workdir: "" }), { command: "echo ok", cwd: undefined });
-		assert.deepEqual(execShellArgs({}), { command: undefined, cwd: undefined });
-		assert.deepEqual(execShellArgs(undefined), { command: undefined, cwd: undefined });
-	});
-
 	it("describes required input, escaped stdin, and base64 byte counts as shell comments", () => {
 		assert.deepEqual(writeStdinShellArgs({ session_id: 1 }), { command: "# stdin → session 1: (input required)" });
 		assert.deepEqual(writeStdinShellArgs({ session_id: 1, chars: "" }), { command: "# stdin → session 1: (input required)" });
@@ -349,9 +341,9 @@ describe("omp shell argument presentation", () => {
 });
 
 describe("host presentation activation", () => {
-	const parameters = Type.Object({ cmd: Type.Optional(Type.String()) });
+	const parameters = Type.Object({ command: Type.Optional(Type.String()) });
 	const definition: ToolDefinition<typeof parameters, ProcessResultDetails> = {
-		name: "exec_command",
+		name: "bash",
 		label: "Exec",
 		description: "Test registration",
 		parameters,
@@ -522,7 +514,7 @@ describe("host presentation activation", () => {
 			let registrations = 0;
 			const activate = withHostPresentation((host) => {
 				activations++;
-				host.registerTool({ name: "exec_command" });
+				host.registerTool({ name: "bash" });
 				return { store: () => null, kill: async () => false };
 			});
 			const result = activate({ arktype: {}, registerTool() { registrations++; } });

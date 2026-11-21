@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { activate } from "../src/index.ts";
-import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";
+import { STUB_SESSION, stubShellHost, stubTerminalHost } from "./stub-shell.ts";
 
 
 interface ToolDef {
@@ -29,6 +29,7 @@ function makeHarness() {
 			setStatus: (_k: string, _v: unknown) => {},
 		},
 		hasUI: false,
+		...STUB_SESSION,
 	};
 	const pi = {
 		registerTool: (def: ToolDef) => {
@@ -46,7 +47,7 @@ function makeHarness() {
 		setActiveTools: () => {},
 	};
 	const api = pi as unknown as Parameters<typeof activate>[0];
-	activate(api, undefined, STUB_SHELL_PATH, undefined, undefined, {}, undefined, undefined, undefined, stubShellHost);
+	activate(api, undefined, stubTerminalHost(), undefined, {}, undefined, undefined, undefined, stubShellHost);
 	return {
 		async call(toolName: string, params: any, signal?: AbortSignal) {
 			const def = tools[toolName];
@@ -64,7 +65,7 @@ type ExecCaller = {
 };
 
 async function startRawCat(h: ExecCaller, out: string): Promise<number> {
-	const r1 = await h.call("exec_command", { title: "Test command", cmd: `stty raw -echo; printf raw-ready; exec cat > '${out}'`,
+	const r1 = await h.call("bash", { pty: true, title: "Test command", command: `stty raw -echo; printf raw-ready; exec cat > '${out}'`,
 		yield_time_ms: 300, });
 	const { session_id: sid, log_path: logPath } = r1.details;
 	assert.ok(typeof sid === "number", `expected session_id; got ${JSON.stringify(r1.details)}`);
@@ -192,7 +193,7 @@ describe("write_stdin chars encoding", () => {
 	it("passing both chars and chars_b64 rejects the call", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
-		const r1 = await h.call("exec_command", { title: "Test command", cmd: "cat > /dev/null", yield_time_ms: 200 });
+		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "cat > /dev/null", yield_time_ms: 200 });
 		const sid = r1.details.session_id as number;
 		await assert.rejects(
 			() => h.call("write_stdin", { session_id: sid, chars: "hi", chars_b64: "aGk=" }),
@@ -205,7 +206,7 @@ describe("write_stdin chars encoding", () => {
 	it("malformed base64 rejects the call", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
-		const r1 = await h.call("exec_command", { title: "Test command", cmd: "cat > /dev/null", yield_time_ms: 200 });
+		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "cat > /dev/null", yield_time_ms: 200 });
 		const sid = r1.details.session_id as number;
 		await assert.rejects(
 			() => h.call("write_stdin", { session_id: sid, chars_b64: "not@valid!" }),

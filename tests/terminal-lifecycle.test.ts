@@ -3,7 +3,7 @@ import { afterEach, describe, it } from "node:test";
 import type { PluginSettingsReader } from "../src/plugin-settings.ts";
 import { noteTerminalRead, readTerminal } from "../src/terminal-resource.ts";
 import { activate } from "../src/index.ts";
-import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";
+import { STUB_SESSION, stubShellHost, stubTerminalHost } from "./stub-shell.ts";
 
 const MINUTE = 60_000;
 
@@ -62,7 +62,7 @@ function makeHarness(pluginSettings?: PluginSettingsReader): Harness {
 		notify(message: string, level: string) { if (level === "warning") warnings.push(message); },
 		setStatus() {}, setWidget() {},
 	};
-	const stubCtx = { cwd: process.cwd(), ui, hasUI: false };
+	const stubCtx = { cwd: process.cwd(), ui, hasUI: false, ...STUB_SESSION };
 	const pi = {
 		registerTool: (def: ToolDef) => { tools[def.name] = def; },
 		on: (event: string, handler: Handler) => { (handlers[event] ??= []).push(handler); },
@@ -70,7 +70,7 @@ function makeHarness(pluginSettings?: PluginSettingsReader): Harness {
 		getFlag: () => false, getActiveTools: () => ["bash"], setActiveTools() {},
 		sendMessage: (message: Sent["message"], options: Sent["options"]) => { sent.push({ message, options }); },
 	};
-	activate(pi as unknown as Parameters<typeof activate>[0], undefined, undefined, undefined, undefined, {
+	activate(pi as unknown as Parameters<typeof activate>[0], undefined, stubTerminalHost(), undefined, {
 		nowFn: () => now,
 		setIntervalFn: (cb) => { sweep = cb; return 1; },
 		clearIntervalFn: () => { sweep = undefined; },
@@ -132,7 +132,7 @@ function alive(pid: number): boolean {
 }
 
 async function startBackground(h: Harness, cmd: string, title: string, yieldMs = 250): Promise<{ sid: number; url: string; output: string }> {
-	const started = await h.call("exec_command", { cmd, title, shell: "/bin/sh", yield_time_ms: yieldMs });
+	const started = await h.call("bash", { pty: true, command: cmd, title, shell: "/bin/sh", yield_time_ms: yieldMs });
 	const { session_id: sid, terminal_url: url, output } = started.details;
 	assert.ok(sid !== undefined && url !== undefined, JSON.stringify(started.details));
 	return { sid, url, output: output ?? "" };
@@ -148,12 +148,12 @@ async function startHeld(h: Harness, title: string): Promise<{ sid: number; url:
 	return { sid, url, bg };
 }
 
-describe("exec_command title", { skip: process.platform === "win32" }, () => {
+describe("terminal title", { skip: process.platform === "win32" }, () => {
 	it("is required and must not be blank; nothing is spawned without one", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
-		await assert.rejects(h.call("exec_command", { cmd: "echo no-title" }), /title is required/);
-		await assert.rejects(h.call("exec_command", { cmd: "echo blank", title: " \n\t" }), /title is required/);
+		await assert.rejects(h.call("bash", { pty: true, command: "echo no-title" }), /`title` is required with `pty: true`/);
+		await assert.rejects(h.call("bash", { pty: true, command: "echo blank", title: " \n\t" }), /`title` is required with `pty: true`/);
 		const list = await h.call("list_sessions", {});
 		assert.deepEqual(list.details.sessions, []);
 	});

@@ -12,7 +12,7 @@ import type { OnExitPolicy } from "./completion.ts";
 import { sanitizeOutputText } from "./output-safety.ts";
 import type { TerminalObservation, TerminalScreenKind, TerminalView } from "./terminal-screen.ts";
 
-export type ProcessOperation = "exec_command" | "write_stdin";
+export type ProcessOperation = "bash" | "write_stdin";
 export type ProcessStatus = "running" | "exited";
 export type KillStatus = "killed" | "kill_failed";
 
@@ -69,6 +69,8 @@ export interface ProcessResultDetails extends OutputResultDetails {
 	completion_delivery?: "direct";
 	on_exit_wake?: "consumed";
 	tool_time_utc?: string;
+	/** The monitor `notify` started on the terminal, or why it did not start. */
+	monitor?: string;
 }
 
 export interface KillResultDetails extends OutputResultDetails {
@@ -311,6 +313,7 @@ export function renderProcessResultText(shape: ProcessResultDetails): string {
 	if (shape.completion_notification) lines.push(`completion_notification: ${safeMeta(shape.completion_notification)}`);
 	if (shape.completion_delivery) lines.push(`completion_delivery: ${safeMeta(shape.completion_delivery)}`);
 	if (shape.on_exit_wake) lines.push(`on_exit_wake: ${safeMeta(shape.on_exit_wake)}`);
+	if (shape.monitor) lines.push(`monitor: ${safeMeta(shape.monitor)}`);
 	if (shape.tool_time_utc) lines.push(`tool_time_utc: ${safeMeta(shape.tool_time_utc)}`);
 	if (shape.log_path) lines.push(`log_path: ${safeMeta(shape.log_path)}`);
 	if (shape.terminal_url) lines.push(`terminal_url: ${safeMeta(shape.terminal_url)}`);
