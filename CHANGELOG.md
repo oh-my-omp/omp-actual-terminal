@@ -26,6 +26,7 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Changed
 
+- Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@dcbf622.
 - Mounted the bound session's skills in terminals without `shell`, so `skill://` paths follow the session rather than the process
 - Switched host integration to the `@oh-my-pi/pi-*` packages and dropped the `@earendil-works` path aliases
 

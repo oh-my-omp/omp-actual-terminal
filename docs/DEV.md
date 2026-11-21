@@ -302,10 +302,10 @@ The host packages are the `@oh-my-pi/*` devDependencies and peerDependencies
 at `latest` / `*`; every type that describes the host, including the host
 modules the factory loads, comes from their exports, and TypeBox comes from
 `@oh-my-pi/omptype/typebox`. Two workflows check every PR, every push to
-`main` and a daily schedule. `omomp-check` calls oh-my-omp/.github's shared
-check in `bun` mode: the dependency convention, `bun install
---frozen-lockfile`, an upgrade of the `@oh-my-pi/*` packages to their newest
-release, `bun run check`, `bun run test` and the comparison of
+`main` and a daily schedule. `omomp-check` is this repository's own job: it
+checks out oh-my-omp/shared main and runs the dependency convention, `bun
+install --frozen-lockfile`, an upgrade of the `@oh-my-pi/*` packages to their
+newest release, `bun run check`, `bun run test` and the comparison of
 `src/omomp-shared/` with shared main. `ci.yml` runs the same install, upgrade,
 check and test on Linux, macOS and Windows, plus the Bun PTY runtime fixture
 from source and from a compiled executable. A host type change therefore fails

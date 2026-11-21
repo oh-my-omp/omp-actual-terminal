@@ -113,11 +113,11 @@ export function todoVerdict(todo: TodoReadResult): StopVerdict {
 		case "malformed":
 			return { kind: "undecided", cause: "unavailable", reason: { kind: "todo_malformed", detail: todo.reason } };
 		case "ok": {
-			const { pending, in_progress, completed, abandoned, blocked } = todo.counts;
-			if (pending + in_progress + completed + abandoned + blocked === 0) {
+			const { pending, in_progress, completed, abandoned } = todo.counts;
+			if (pending + in_progress + completed + abandoned === 0) {
 				return { kind: "undecided", cause: "unavailable", reason: { kind: "todo_empty" } };
 			}
-			return { kind: pending + in_progress + blocked === 0 ? "done" : "not_done", detector: "todo" };
+			return { kind: pending + in_progress === 0 ? "done" : "not_done", detector: "todo" };
 		}
 	}
 }
@@ -137,7 +137,7 @@ function todoText(todo: TodoReadResult): string {
 				lines.push(`done when: ${todo.goal.doneWhen}`);
 			}
 			const c = todo.counts;
-			lines.push(`items: ${c.completed} completed, ${c.abandoned} abandoned, ${c.blocked} blocked, ${c.in_progress} in progress, ${c.pending} pending`);
+			lines.push(`items: ${c.completed} completed, ${c.abandoned} abandoned, ${c.in_progress} in progress, ${c.pending} pending`);
 			for (const item of todo.openItems) {
 				lines.push(`open: ${item.phase}: ${item.title}${item.explanation === null ? "" : ` — ${item.explanation}`}`);
 			}
