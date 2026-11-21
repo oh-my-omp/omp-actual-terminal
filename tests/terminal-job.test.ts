@@ -3,6 +3,7 @@ import { afterEach, describe, it } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { activate } from "../src/index.ts";
+import { TerminalJob } from "../src/terminal-job.ts";
 import { STUB_SESSION, stubJobManager, stubShellHost, stubTerminalHost } from "./stub-shell.ts";
 
 interface Details {
@@ -105,6 +106,22 @@ describe("terminals as omp jobs", () => {
 		}
 		assert.equal(entry?.running, false, "the terminal ended and stays listed");
 		assert.equal(h.jobs.getJob(id)?.status, "cancelled");
+	});
+
+	it("keeps the job running while a terminal survives the plugin's end, and cancels it once it returns", async () => {
+		const jobs = stubJobManager();
+		let reentered = 0;
+		const job = TerminalJob.open(
+			{ manager: jobs, ownerId: STUB_SESSION.agent.id },
+			{ label: "survivor", command: "sleep 30", cwd: process.cwd(), pids: () => [], cancelled: () => { reentered++; } },
+		);
+		job.cancel();
+		job.killFailed();
+		assert.equal(jobs.getJob(job.id)?.status, "running");
+		job.cancel();
+		job.returned({ exitCode: null, signal: "SIGTERM" }, null);
+		assert.equal(await statusOf(jobs, job.id, "cancelled"), "cancelled");
+		assert.equal(reentered, 0, "the plugin's own end never comes back through the job's abort");
 	});
 
 	it("returns omp's limit error verbatim and starts nothing at capacity", async () => {

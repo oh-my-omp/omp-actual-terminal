@@ -64,18 +64,31 @@ export class TerminalJob {
 		return job;
 	}
 
-	/** The plugin ends the terminal (`kill_session`, a person's end, shutdown): the job shows cancelled. */
+	/**
+	 * The plugin is ending the terminal (`kill_session`, a person's end, shutdown): once it returns, its job
+	 * shows cancelled. Call before signalling it, so the job's abort never re-enters the end.
+	 */
 	cancel(): void {
 		if (this.state.kind !== "running") return;
 		this.state = { kind: "ended_by_plugin", settle: this.state.settle };
-		this.manager.cancel(this.id);
 	}
 
-	/** The terminal returned: exit 0 completes the job, anything else fails it; a cancelled job keeps its status. */
+	/** The terminal survived the plugin's end: its job keeps running. */
+	killFailed(): void {
+		if (this.state.kind !== "ended_by_plugin") return;
+		this.state = { kind: "running", settle: this.state.settle };
+	}
+
+	/**
+	 * The terminal returned: one the plugin ended shows cancelled; otherwise exit 0 completes the job and
+	 * anything else fails it. A job omp already cancelled keeps that status.
+	 */
 	returned(exit: ShellExit, failureMessage: string | null): void {
 		if (this.state.kind === "settled") return;
+		const endedByPlugin = this.state.kind === "ended_by_plugin";
 		const settle = this.state.settle;
 		this.state = { kind: "settled" };
+		if (endedByPlugin) this.manager.cancel(this.id);
 		const outcome = classifyReturn(exit, failureMessage, NATURAL_ENDING);
 		switch (outcome.kind) {
 			case "normal": settle({ kind: "completed" }); return;

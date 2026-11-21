@@ -741,7 +741,7 @@ async function terminateSessionById(
 	if (origin.kind !== "human") ctx.coordinator.cancelMonitor(sid);
 	const session = ctx.store.get(sid);
 	if (!session) return undefined;
-	// The model or a person ends it: its job shows cancelled, not as a failure of the command.
+	// The model or a person ends it: once it returns, its job shows cancelled, not as a failure of the command.
 	if (origin.kind !== "reclaim") ctx.jobs.get(sid)?.cancel();
 	// Explicit kill: suppress the wake BEFORE signaling so the induced exit can
 	// never race a wake enqueue, and mark the coming return as a normal ending.
@@ -767,6 +767,7 @@ async function terminateSessionById(
 		ctx.coordinator.restoreAfterFailedKill(sid);
 		ctx.coordinator.monitorEndReason(sid, "natural");
 		ctx.lifecycle.killFailed(sid);
+		ctx.jobs.get(sid)?.killFailed();
 	}
 	return { session, escalated, collected, killed };
 }

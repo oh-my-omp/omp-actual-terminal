@@ -443,7 +443,8 @@ reloads of the same version do not.
 returns the `bg_N` id, calls `run` with an abort `signal`, and throws its own
 error at the running-job limit; `acknowledgeDeliveries(ids)` must keep a job's
 result out of delivery and out of the run's awaited work, and `cancel(id)`
-must abort `run` and keep the job `cancelled` whatever `run` returns. The bound
+must abort `run` and keep the job `cancelled` whatever `run` returns, and
+change nothing for a job that is no longer running. The bound
 AgentSession must still expose `asyncJobManager`, a subagent's being its
 root's, and `AgentRegistry` entries `parentId`. Through real omp, in a main
 agent and a subagent: a terminal's `bash` result must carry `job_id: bg_N`
