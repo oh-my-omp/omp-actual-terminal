@@ -22,7 +22,7 @@ import { loadPluginSettingsReader, type PluginSettingsReader } from "./plugin-se
 import { loadStopHost, type StopHost } from "./stop-gate.ts";
 import type { LifecycleClock } from "./terminal-lifecycle.ts";
 import { scheduleLogArchive } from "./log-archive.ts";
-import { loadTernHudHost, mountTerminalHud } from "./tern-terminal-hud.ts";
+import { loadConsoleHost, mountConsole } from "./console.ts";
 import { initializeTerminalUrls } from "./terminal-url.ts";
 import type * as TernPluginRemoval from "./tern-plugin-removal.ts";
 
@@ -468,9 +468,9 @@ export function withHostPresentation(
 		}
 		requireBunRuntime();
 		return Promise.all([
-			presentOnOmp(host), loadTernHudHost(), loadOmpAppearance(), loadTerminalHost(),
+			presentOnOmp(host), loadConsoleHost(), loadOmpAppearance(), loadTerminalHost(),
 			loadGithubCacheInvalidation(), loadStopHost(), loadPluginSettingsReader(), loadAgentHost(), loadShellHost(),
-		]).then(async ([pi, hud, appearance, terminalHost, invalidateGithubCache, stopHost, pluginSettings, agentHost, shellHost]) => {
+		]).then(async ([pi, consoleHost, appearance, terminalHost, invalidateGithubCache, stopHost, pluginSettings, agentHost, shellHost]) => {
 			// The specifier
 			// is non-literal so bundlers leave it deferred: inlining it would hoist
 			// those imports into the bundle and fail module loading before the
@@ -479,7 +479,7 @@ export function withHostPresentation(
 			await removal.retireTernPlugin();
 			await initializeTerminalUrls();
 			const activated = activate(pi, appearance, terminalHost, invalidateGithubCache, {}, stopHost, pluginSettings, agentHost, shellHost);
-			mountTerminalHud(pi, activated.store, hud, activated.kill);
+			mountConsole(pi, activated.store, consoleHost, activated.kill);
 			scheduleLogArchive();
 		});
 	};

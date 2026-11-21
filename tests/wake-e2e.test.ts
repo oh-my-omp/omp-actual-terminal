@@ -20,11 +20,9 @@ interface ToolDef {
 function makeHarness() {
 	const tools: Record<string, ToolDef> = {};
 	const handlers: Record<string, Array<(event: any, ctx: any) => any>> = {};
-	const commands: Record<string, { handler: (args: string, ctx: any) => Promise<void> }> = {};
 	const sentMessages: Array<{ message: any; options: any }> = [];
 	const uiEvents = {
 		notifications: [] as Array<{ message: string; type?: string }>,
-		selectResponses: [] as Array<(options: string[]) => string | undefined>,
 	};
 
 	const stubCtx = {
@@ -33,10 +31,6 @@ function makeHarness() {
 			notify: (message: string, type?: string) => uiEvents.notifications.push({ message, type }),
 			setStatus: () => {},
 			setWidget: () => {},
-			select: (_title: string, options: string[]) => {
-				const responder = uiEvents.selectResponses.shift();
-				return Promise.resolve(responder ? responder(options) : undefined);
-			},
 		},
 		hasUI: false,
 		...STUB_SESSION,
@@ -49,9 +43,7 @@ function makeHarness() {
 		on: (event: string, handler: (e: any, ctx: any) => any) => {
 			(handlers[event] ??= []).push(handler);
 		},
-		registerCommand: (name: string, options: any) => {
-			commands[name] = options;
-		},
+		registerCommand: () => {},
 		registerShortcut: () => {},
 		registerFlag: () => {},
 		registerMessageRenderer: () => {},
@@ -64,7 +56,7 @@ function makeHarness() {
 	};
 
 	const api = pi as unknown as Parameters<typeof activate>[0];
-	activate(api, undefined, stubTerminalHost(), undefined, {}, undefined, undefined, undefined, stubShellHost);
+	const activated = activate(api, undefined, stubTerminalHost(), undefined, {}, undefined, undefined, undefined, stubShellHost);
 
 	let nextCallId = 1;
 	let shutDown = false;
@@ -76,8 +68,9 @@ function makeHarness() {
 			const result = await def.execute(toolCallId, params, signal, onUpdate, stubCtx);
 			return { ...result, toolCallId };
 		},
-		async invokeCommand(name: string, args = "") {
-			return commands[name].handler(args, stubCtx);
+		/** The Console's End: a person ending the terminal. */
+		endAsHuman(id: string) {
+			return activated.kill(id);
 		},
 		async emit(event: string, evt: any = {}) {
 			for (const h of handlers[event] ?? []) await h(evt, stubCtx);
@@ -305,13 +298,12 @@ describe("bash pty on_exit", () => {
 		assert.equal(h.sentMessages.length, 0);
 	});
 
-	it("human slash-command kill suppresses the wake", async () => {
+	it("a person ending the terminal suppresses the wake", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 30", yield_time_ms: 250, on_exit: "wake" });
 		const sid = r1.details.job_id;
-		h.uiEvents.selectResponses.push((options) => options.find((o) => o.startsWith(`${sid} `)));
-		await h.invokeCommand("omp-actual-terminal-sessions");
+		assert.equal(await h.endAsHuman(sid), true);
 		assert.ok(!(await waitFor(() => h.sentMessages.length > 0, 600)));
 		assert.equal(h.sentMessages.length, 0);
 	});

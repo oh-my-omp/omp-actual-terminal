@@ -32,12 +32,10 @@ function makeHarness(host: TerminalHost = stubTerminalHost()) {
 	const tools: Record<string, ToolDef> = {};
 	const handlers: Record<string, Array<(event: any, ctx: any) => any>> = {};
 	const sentMessages: Array<{ customType: string; content: string }> = [];
-	const commands: Record<string, { description?: string; handler: (args: string, ctx: any) => Promise<void> }> = {};
 	const uiEvents = {
 		notifications: [] as Array<{ message: string; type?: string }>,
 		statuses: new Map<string, string | undefined>(),
 		widgets: new Map<string, { content: string[] | undefined; options?: unknown }>(),
-		selectResponses: [] as Array<(options: string[]) => string | undefined>,
 	};
 
 	const stubCtx = {
@@ -47,10 +45,6 @@ function makeHarness(host: TerminalHost = stubTerminalHost()) {
 			setStatus: (key: string, value: string | undefined) => uiEvents.statuses.set(key, value),
 			setWidget: (key: string, content: string[] | undefined, options?: unknown) =>
 				uiEvents.widgets.set(key, { content, options }),
-			select: (_title: string, options: string[]) => {
-				const responder = uiEvents.selectResponses.shift();
-				return Promise.resolve(responder ? responder(options) : undefined);
-			},
 		},
 		hasUI: false,
 		...STUB_SESSION,
@@ -63,9 +57,7 @@ function makeHarness(host: TerminalHost = stubTerminalHost()) {
 		on: (event: string, handler: (e: any, ctx: any) => any) => {
 			(handlers[event] ??= []).push(handler);
 		},
-		registerCommand: (name: string, options: any) => {
-			commands[name] = options;
-		},
+		registerCommand: () => {},
 		registerShortcut: () => {},
 		registerFlag: () => {},
 		registerMessageRenderer: () => {},
@@ -83,11 +75,6 @@ function makeHarness(host: TerminalHost = stubTerminalHost()) {
 			const def = tools[toolName];
 			if (!def) throw new Error(`no such tool: ${toolName}`);
 			return def.execute("test-call-id", params, signal, onUpdate, stubCtx);
-		},
-		async invokeCommand(name: string, args = "") {
-			const cmd = commands[name];
-			if (!cmd) throw new Error(`no such command: ${name}`);
-			return cmd.handler(args, stubCtx);
 		},
 		stubCtx,
 		tools,
@@ -983,50 +970,6 @@ describe("omp-actual-terminal e2e", () => {
 		}
 		assert.ok(updates.length <= 3, `silence streams no repeats; got ${updates.length} updates`);
 		await h.call("kill_session", { job_id: r.details.job_id });
-		await h.emit("session_shutdown");
-	});
-
-	it("/omp-actual-terminal-sessions command kills a selected session", async () => {
-		const h = makeHarness();
-		await h.emit("session_start");
-		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 30", yield_time_ms: 250 });
-		const sid = r1.details.job_id;
-		assert.ok(typeof sid === "string");
-
-		h.uiEvents.selectResponses.push((options) => options.find((o) => o.startsWith(`${sid} `)));
-		await h.invokeCommand("omp-actual-terminal-sessions");
-
-		const l = await h.call("list_sessions", {});
-		assert.equal(l.details.running_count, 0, JSON.stringify(l.details));
-		assert.ok(
-			h.uiEvents.notifications.some((n) => n.message.includes("killed 1")),
-			JSON.stringify(h.uiEvents.notifications),
-		);
-		await h.emit("session_shutdown");
-	});
-
-	it("/omp-actual-terminal-sessions command can kill all sessions", async () => {
-		const h = makeHarness();
-		await h.emit("session_start");
-		await h.call("bash", { pty: true, title: "Test command", command: "sleep 30", yield_time_ms: 250 });
-		await h.call("bash", { pty: true, title: "Test command", command: "sleep 31", yield_time_ms: 250 });
-
-		h.uiEvents.selectResponses.push((options) => options.find((o) => o.startsWith("Kill all")));
-		await h.invokeCommand("omp-actual-terminal-sessions");
-
-		const l = await h.call("list_sessions", {});
-		assert.equal(l.details.running_count, 0, JSON.stringify(l.details));
-		await h.emit("session_shutdown");
-	});
-
-	it("/omp-actual-terminal-sessions notifies when there is nothing to kill", async () => {
-		const h = makeHarness();
-		await h.emit("session_start");
-		await h.invokeCommand("omp-actual-terminal-sessions");
-		assert.ok(
-			h.uiEvents.notifications.some((n) => n.message.includes("no live sessions")),
-			JSON.stringify(h.uiEvents.notifications),
-		);
 		await h.emit("session_shutdown");
 	});
 });

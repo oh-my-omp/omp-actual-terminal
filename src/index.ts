@@ -1271,61 +1271,6 @@ export function activate(
 		await parked.settled();
 	});
 
-	pi.registerCommand("omp-actual-terminal-sessions", {
-		description: tr(
-			"List live omp-actual-terminal sessions and optionally kill one (or all)",
-			"列出正在运行的 omp-actual-terminal 会话，并可结束其中一个（或全部）",
-		),
-		handler: async (_args, cmdCtx) => {
-			ctx.ui = cmdCtx.ui;
-			updateRunningSessionsUi(ctx);
-			const sessions = runningSessions(ctx);
-			if (sessions.length === 0) {
-				cmdCtx.ui.notify(
-					tr("omp-actual-terminal: no live sessions", "omp-actual-terminal：没有正在运行的会话"),
-					"info",
-				);
-				return;
-			}
-			const now = Date.now();
-			const labels = sessions.map((s) => {
-				const wake = ctx.coordinator.isArmed(s.id) ? tr(" [wake]", " [已唤醒]") : "";
-				const held = s.shellExited ? tr(" (shell exited, terminal held)", "（shell 已退出，终端仍被占用）") : "";
-				const elapsed = formatElapsedUi(now - s.startedAt);
-				return `${s.id} ${elapsed}${wake}${held} ${oneLineCommand(s.title, 40)} — ${oneLineCommand(s.displayCommand, 60)}`;
-			});
-			const KILL_ALL = tr(
-				`Kill all ${sessions.length} ${sessionWord(sessions.length)}`,
-				`结束全部 ${sessions.length} 个会话`,
-			);
-			const choice = await cmdCtx.ui.select(
-				tr(
-					`omp-actual-terminal: ${sessions.length} live ${sessionWord(sessions.length)} — select to kill (Esc to cancel)`,
-					`omp-actual-terminal：${sessions.length} 个正在运行的会话——选择要结束的会话（Esc 取消）`,
-				),
-				[...labels, KILL_ALL],
-			);
-			if (!choice) return;
-			const targets = choice === KILL_ALL ? sessions : sessions.filter((s) => choice.startsWith(`${s.id} `));
-			let killed = 0;
-			let failed = 0;
-			for (const s of targets) {
-				const outcome = await terminateSessionById(ctx, s.id, "SIGTERM", { kind: "human" });
-				if (outcome?.killed) killed++;
-				else if (outcome) failed++;
-			}
-			updateRunningSessionsUi(ctx);
-			cmdCtx.ui.notify(
-				tr(
-					`omp-actual-terminal: killed ${killed} ${sessionWord(killed)}${failed ? `; ${failed} did not confirm exit (still listed)` : ""}`,
-					`omp-actual-terminal：已结束 ${killed} 个会话${failed ? `；${failed} 个会话未确认退出（仍在列表中）` : ""}`,
-				),
-				failed ? "warning" : "info",
-			);
-		},
-	});
-
-
 	// A session the registry resolves reads its own settings; one it does not, the process settings.
 	const sessionSettings = (): Settings => (binding.kind === "bound" ? binding.session.settings : terminalHost.settings);
 	// `formatApprovalDetails` is a member of the tool omp builds from this definition, not of

@@ -26,6 +26,8 @@ export interface SpawnedChild {
 	readonly processExited: boolean;
 	readonly processExit: ProcessExit | undefined;
 	write(data: Uint8Array): boolean;
+	/** Changes the terminal's size the child sees; false once the terminal is gone. */
+	resize(cols: number, rows: number): boolean;
 	onData(handler: (chunk: Uint8Array) => void): () => void;
 	onExit(handler: ExitCallback): void;
 	onProcessExit(handler: (exit: ProcessExit) => void): () => void;
@@ -36,6 +38,7 @@ export interface SpawnedChild {
 type BunTerminal = {
 	readonly closed: boolean;
 	write(data: Uint8Array): number;
+	resize(cols: number, rows: number): void;
 	close(): void;
 };
 
@@ -265,6 +268,16 @@ export function spawnBunPty(runtime: BunRuntime, opts: SpawnOptions): SpawnedChi
 			if (finalized || processExited || !activeTerminal || activeTerminal.closed) return false;
 			try {
 				activeTerminal.write(data);
+				return true;
+			} catch {
+				return false;
+			}
+		},
+		resize(cols, rows) {
+			const activeTerminal = terminal;
+			if (finalized || processExited || !activeTerminal || activeTerminal.closed) return false;
+			try {
+				activeTerminal.resize(cols, rows);
 				return true;
 			} catch {
 				return false;

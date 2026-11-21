@@ -6,16 +6,19 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Breaking Changes
 
+- Removed the `/omp-actual-terminal-sessions` command and the Tern terminals segment, Terminals view and terminal page: a person opens, types into and ends a terminal from omp's jobs page and its Console instead
 - Replaced the `exec_command` tool with terminals opened through `bash` with `pty: true` (`cmd` and `workdir` became `command` and `cwd`), while `bash` calls without `pty`, named services included, still run as omp's own `bash`
 - Ran terminals without `shell` in the session's shell, omp's shell process started with the session's exports, functions, aliases and URL paths, instead of omp's `shellPath`, `SHELL` or the platform default
 - Approved terminal calls with omp's own `bash` approval, `bash.allowedEnvVars` included, instead of the plugin's copy of its rules
 - Renamed the plugin to `omp-actual-terminal`: install it from `https://github.com/oh-my-omp/omp-actual-terminal#release` and uninstall `omp-unified-exec`
 - Renamed the omomp section `omp-unified-exec` to `omp-actual-terminal`
 - Renamed `PI_UNIFIED_EXEC_BASH` to `OMP_ACTUAL_TERMINAL_BASH`
-- Renamed the notice message type to `omp-actual-terminal-notice`, the `/unified-exec-sessions` command to `/omp-actual-terminal-sessions`, and session logs to `omp-actual-terminal-<pid>-<job_id>-<hex>.log`
+- Renamed the notice message type to `omp-actual-terminal-notice` and session logs to `omp-actual-terminal-<pid>-<job_id>-<hex>.log`
 
 ### Added
 
+- Added an Open action on omp's jobs page that opens a terminal in a full Console view
+- Ended a terminal from the Console's End action, which kills it and stops forwarding input
 - Registered each terminal as an omp background job under its title in the root agent's job manager, counting toward `async.maxJobs` so a call at the limit fails
 - Surfaced terminals on omp's jobs page, where cancelling a job ends the terminal and marks its job cancelled
 - Let terminals without `shell` read a bound session's attached images through their `attachment://` paths
@@ -28,12 +31,12 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Changed
 
+- Resized the terminal to the Console's size while it is open and restored its previous size on leaving
 - Updated the shared copy of `tern-plugin.ts` to oh-my-omp/shared@a88403a.
 - Sent SIGKILL to an LRU-evicted running terminal that had not exited 2s after its SIGTERM, and marked its job cancelled only once it ended, keeping the job running when it outlived the SIGKILL
 - Ended the main agent's terminals, its subagents' included, when `/new` or a session switch cancels its jobs
 - Reported the terminal's job as completed on exit 0, failed on failure or timeout, and cancelled with a normal return, not a failure, once a terminal ended by `kill_session`, a person or a job cancel actually returned, keeping it running when the kill failed
 - Identified terminals by a string `job_id` (`bg_N`) in results, notices and session listings, and took `job_id` in `write_stdin`, `kill_session`, `set_on_exit` and monitor calls
-- Ordered the HUD's terminal list by start time and dropped the `#` prefix from terminal ids
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@dcbf622.
 - Mounted the bound session's skills in terminals without `shell`, so `skill://` paths follow the session rather than the process
 - Switched host integration to the `@oh-my-pi/pi-*` packages and dropped the `@earendil-works` path aliases

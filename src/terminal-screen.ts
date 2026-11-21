@@ -204,8 +204,9 @@ function isBlankCell(cell: IBufferCell): boolean {
 }
 
 export class TerminalScreen {
-	readonly cols: number;
-	readonly rows: number;
+	private size: { cols: number; rows: number };
+	/** The size the last `resize` asked for; it becomes `size` once the writes queued before it are parsed. */
+	private requested: { cols: number; rows: number };
 	private readonly scrollback: number;
 	private readonly term: Terminal;
 	private pendingWrites = 0;
@@ -230,8 +231,8 @@ export class TerminalScreen {
 		reply: (bytes: Uint8Array) => void,
 		appearance: () => TerminalAppearance = () => "dark",
 	) {
-		this.cols = cols;
-		this.rows = rows;
+		this.size = { cols, rows };
+		this.requested = this.size;
 		this.appearance = appearance;
 		this.scrollback = Math.max(rows, Math.floor(TERMINAL_HISTORY_CELLS / cols));
 		this.term = new Terminal({ cols, rows, scrollback: this.scrollback, allowProposedApi: true });
@@ -266,6 +267,32 @@ export class TerminalScreen {
 			start = index + 1;
 		}
 		this.enqueue(chunk.subarray(start), this.notifyChange);
+	}
+
+	get cols(): number {
+		return this.size.cols;
+	}
+
+	get rows(): number {
+		return this.size.rows;
+	}
+
+	/** Reflows the grid to `cols`×`rows`; queued after pending writes so they parse at the size they were written for. */
+	resize(cols: number, rows: number): void {
+		if (this.disposed || (cols === this.requested.cols && rows === this.requested.rows)) return;
+		const size = { cols, rows };
+		this.requested = size;
+		this.enqueue(NO_BYTES, () => {
+			if (this.disposed) return;
+			this.size = size;
+			this.term.resize(cols, rows);
+			this.notifyChange();
+		});
+	}
+
+	/** Whether the program asked for application cursor keys (DECCKM); arrow keys a person types must follow it. */
+	applicationCursorKeys(): boolean {
+		return this.term.modes.applicationCursorKeysMode;
 	}
 
 	onChange(listener: () => void): () => void {
