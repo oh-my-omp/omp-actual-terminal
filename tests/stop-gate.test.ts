@@ -227,11 +227,12 @@ describe("stop configuration", () => {
 
 describe("stop detectors", () => {
 	const read = (counts: TodoReadCounts): TodoReadResult => ({ kind: "ok", goal: null, openItems: [], counts });
-	const zero = { pending: 0, in_progress: 0, completed: 0, abandoned: 0, blocked: 0 };
+	const zero = { pending: 0, in_progress: 0, completed: 0, abandoned: 0 };
 
 	it("todo: done only when every item is completed or abandoned", () => {
 		assert.deepEqual(todoVerdict(read({ ...zero, completed: 2, abandoned: 1 })), { kind: "done", detector: "todo" });
-		assert.deepEqual(todoVerdict(read({ ...zero, completed: 2, blocked: 1 })), { kind: "not_done", detector: "todo" });
+		assert.deepEqual(todoVerdict(read({ ...zero, completed: 2, pending: 1 })), { kind: "not_done", detector: "todo" });
+		assert.deepEqual(todoVerdict(read({ ...zero, completed: 2, in_progress: 1 })), { kind: "not_done", detector: "todo" });
 		assert.equal(todoVerdict(read(zero)).kind, "undecided");
 		assert.equal(todoVerdict({ kind: "malformed", reason: "counts" }).kind, "undecided", "a reply without counts is malformed");
 		assert.equal(todoVerdict({ kind: "no_reply" }).kind, "undecided");

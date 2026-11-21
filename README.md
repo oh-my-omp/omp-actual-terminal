@@ -811,7 +811,7 @@ once omp adopts its task, see
 | `auto` (default) | `judge` when OMP's judge role resolves a model, else `llm` when `@smol` resolves one, else `todo` |
 | `judge` | One done / not-done choice through OMP's judge role chain, billed to the session like OMP's own judgments |
 | `llm` | The chat models of the `@smol` role in order, each answering `DONE` or `NOT_DONE` on its first line; a provider error moves to the next |
-| `todo` | Done when omp-todo-more's list has items and every one is completed or abandoned; a pending, in-progress or blocked item keeps it open; an empty list or no omp-todo-more gives no decision |
+| `todo` | Done when omp-todo-more's list has items and every one is completed or abandoned; a pending or in-progress item keeps it open; an empty list or no omp-todo-more gives no decision |
 | `off` | No decision; lifecycle notices (`abnormal_return`, `unread`, `reclaim_due`, `reclaimed`) are not delivered, while monitor, wake and input-wait notices are |
 
 An explicitly chosen detector that is unavailable gives no decision; one that
