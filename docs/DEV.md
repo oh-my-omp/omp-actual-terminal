@@ -616,8 +616,8 @@ ffmpeg -i NAME.mp4 -i palette.png -lavfi \
 ```
 
 Check every frame for account names, home-directory paths and tokens before
-committing. GitHub does not play a repository-relative MP4 inline, so the
-READMEs show the GIF and link the MP4.
+committing. GitHub does not play a repository-relative MP4 inline, so a README
+shows a demo's GIF and links its MP4.
 
 ## Package delivery
 
