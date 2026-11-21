@@ -62,7 +62,7 @@ parse the HUD's parameter properties; it runs against stub packages for the
 names the bundle imports, because the host packages ship TypeScript source.
 The missing-renderer regression runs the built presentation module in a child
 `bun --no-install` whose staged `@oh-my-pi/pi-tui` re-exports the real package
-root but has no `./tools` subpath.
+root and `./tools/streaming-output` but has no `./tools` subpath.
 
 ## Repo layout
 
@@ -230,7 +230,7 @@ in `src/terminal-screen.ts`, `DEFAULT_REMIND_AFTER_MS` and
 `JUDGE_DEADLINE_MS` in `src/screen-judge.ts`, `RECLAIM_TTL_MS`,
 `RECLAIM_GRACE_MS`, `RECLAIM_LINGER_MS` and `LIFECYCLE_SWEEP_MS` in
 `src/terminal-lifecycle.ts`, the output caps in the host's
-`DEFAULT_MAX_BYTES` / `DEFAULT_MAX_LINES`. When you touch one:
+`DEFAULT_MAX_BYTES` / `DEFAULT_MAX_LINES` (`@oh-my-pi/pi-tui/tools/streaming-output`). When you touch one:
 
 1. Update the value in its owning module.
 2. Update `## Constants` (and any prose quoting the value) in `README.md` and
@@ -350,8 +350,9 @@ both, a `bash` call without `pty` must show neither, and a project
 
 ### Session shell
 
-`loadTerminalHost` imports `BashTool`, `settings` and `AgentRegistry` from the
-root, `exec/bash-executor`'s `executeBash`, `exec/settings`'s
+`loadTerminalHost` imports `tools/bash`'s `BashTool`, `config/settings`'s
+`settings`, `registry/agent-registry`'s `AgentRegistry`,
+`exec/bash-executor`'s `executeBash`, `exec/settings`'s
 `cfgBashGitGuard`, `exec/non-interactive-env`'s `buildNonInteractiveEnv`,
 `exec/shell-process`'s `shellProcessCommand` and `shellMounts`,
 `internal-urls/router`'s `InternalUrlRouter`, `internal-urls/url-filesystem`'s
@@ -509,7 +510,7 @@ ready screen that triggers a turn, and appear in `list_sessions` as
 
 ### Agent park
 
-`@oh-my-pi/pi-coding-agent` must still export `AgentRegistry` with `global()`,
+`@oh-my-pi/pi-coding-agent/registry/agent-registry` must still export `AgentRegistry` with `global()`,
 `get(id)` and `onChange()` emitting `removed` and `status_changed` with the
 entry as `ref`, and `@oh-my-pi/pi-coding-agent/registry/agent-lifecycle` must
 stay mapped for plugins with `AgentLifecycleManager.global()`,
