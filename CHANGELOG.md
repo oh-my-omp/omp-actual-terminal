@@ -43,6 +43,7 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Fixed
 
+- Reset terminals on a session switch to a different session: the previous session's running and returned terminals end, and their notices and wakes no longer reach the new session
 - Started terminals from the session's shell while the Spotlight experiment is on; they had started from a fresh shell without the session's exports, functions and aliases
 - Described `notify`'s regex syntax by `name`: a `pty: true` call with `name` is omp's own service and takes its Rust syntax, while a terminal takes JavaScript regex source
 - Sent `on_exit` of `bash` and `set_on_exit`, and `action` of `monitor`, to the model with their allowed values and descriptions, and rejected other values; their schemas had reached omp as an unconstrained field

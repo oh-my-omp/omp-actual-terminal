@@ -722,6 +722,61 @@ describe("omp-actual-terminal e2e", () => {
 		await h.emit("session_shutdown");
 	});
 
+	it("session_switch to a new or different session clears running and returned terminals and suppresses old notices, while session_branch and same-session reload keep them", async () => {
+		const h = makeHarness();
+		let currentSessionFile = "/tmp/omp-session-a.jsonl";
+		const mgr = h.stubCtx.sessionManager as { getSessionFile?: () => string | undefined };
+		const prevGetSessionFile = mgr.getSessionFile;
+		mgr.getSessionFile = () => currentSessionFile;
+		await h.emit("session_start");
+		try {
+			const exited = await h.call("bash", { pty: true, title: "PrevExited", command: "sleep 0.4; exit 3", yield_time_ms: 250, on_exit: "wake" });
+			assert.equal(exited.details.status, "running");
+			assert.ok(await waitFor(async () => {
+				const l = await h.call("list_sessions", {});
+				return l.details.running_count === 0 && l.details.returned_count === 1;
+			}));
+			const live = await h.call("bash", { pty: true, title: "PrevLive", command: "sleep 15", yield_time_ms: 250, on_exit: "wake" });
+			assert.equal(live.details.status, "running");
+			const livePid = (await h.call("list_sessions", {})).details.sessions.find((s: { job_id: string }) => s.job_id === live.details.job_id)?.pid;
+
+			// session_branch keeps current session's terminals intact.
+			await h.emit("session_branch", { type: "session_branch" });
+			assert.equal((await h.call("list_sessions", {})).details.sessions.length, 2);
+
+			// Same-session reload (resume to same sessionFile) keeps terminals intact.
+			await h.emit("session_switch", { type: "session_switch", reason: "resume", previousSessionFile: currentSessionFile });
+			assert.equal((await h.call("list_sessions", {})).details.sessions.length, 2);
+
+			// /new (session_switch reason="new") resets the runtime completely.
+			const prevFile = currentSessionFile;
+			currentSessionFile = "/tmp/omp-session-b.jsonl";
+			h.sentMessages.length = 0;
+			await h.emit("session_switch", { type: "session_switch", reason: "new", previousSessionFile: prevFile });
+			const afterNew = await h.call("list_sessions", {});
+			assert.deepEqual(afterNew.details.sessions, [], JSON.stringify(afterNew.details));
+			if (typeof livePid === "number" && !IS_WINDOWS) {
+				assert.throws(() => process.kill(livePid, 0), /ESRCH/, `old live pid ${livePid} must be terminated on /new`);
+			}
+			// No notice or wake leaks from the previous session into the new one.
+			await h.emit("agent_end", { willContinue: false, awaitingAsyncWork: false });
+			await delay(300);
+			assert.deepEqual(h.sentMessages, [], JSON.stringify(h.sentMessages));
+
+			// Switching to another existing session (reason="resume" with different file) also resets.
+			const sessB = await h.call("bash", { pty: true, title: "SessBLive", command: "sleep 15", yield_time_ms: 250 });
+			assert.equal(sessB.details.status, "running");
+			const prevFileB = currentSessionFile;
+			currentSessionFile = "/tmp/omp-session-c.jsonl";
+			await h.emit("session_switch", { type: "session_switch", reason: "resume", previousSessionFile: prevFileB });
+			const afterResume = await h.call("list_sessions", {});
+			assert.deepEqual(afterResume.details.sessions, [], JSON.stringify(afterResume.details));
+		} finally {
+			mgr.getSessionFile = prevGetSessionFile;
+			await h.emit("session_shutdown");
+		}
+	});
+
 	for (const reason of ["quit", "reload", "new", "resume", "fork"] as const) {
 		it(`session_shutdown reason=${reason} terminates live sessions`, async () => {
 			const h = makeHarness();
