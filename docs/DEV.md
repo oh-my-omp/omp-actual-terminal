@@ -74,7 +74,7 @@ indexed by concern:
 | Tool schemas and orchestration | `src/index.ts` (`bash`, `write_stdin`, `set_on_exit`, `monitor`, `kill_session`, `list_sessions`) |
 | `bash` schema and the split between omp's own bash (`ctx.invokeTool`) and a terminal | `src/bash-tool.ts` (`parseBashCall`); registration and `runTerminal` in `src/index.ts` |
 | omp's bash for approval and description, the session-shell seed, shell process, URL mounts and terminal environment | `src/terminal-host.ts` (`loadTerminalHost`) |
-| Tool-owned topics (`read xd://<tool>/<topic>`) and full-description pointers for all six PTY tools | `src/tool-docs.ts`, `src/topics/*.md`; typed definitions in `src/index.ts` |
+| Tool-owned topics (`read help://<tool>/<topic>`) and full-description pointers for all six PTY tools | `src/tool-docs.ts`, `src/topics/*.md`; typed definitions in `src/index.ts` |
 | Session lifecycle (spawn, write, kill, log-stream) | `src/session.ts` |
 | Session registry, LRU eviction, shutdown | `src/session-store.ts` |
 | Terminals as omp jobs: registration before spawn, the screen as the job's progress, the job's status and last screen at the return, cancels from omp's jobs page; the root agent as owner | `src/terminal-job.ts`; `runTerminal`, `terminateSessionById` and `endRuntime` in `src/index.ts`; `rootAgentOf` in `src/session-binding.ts` |
@@ -326,8 +326,8 @@ check the named exports and run the listed real-omp scenario.
 
 ### Tool text and topics
 
-On omp upgrades, read every installed tool's bare full description, all
-advertised `xd://<tool>/<topic>` addresses, and an unknown topic per tool
+On omp upgrades, read every installed tool's topic index (`help://<tool>`), all
+advertised `help://<tool>/<topic>` addresses, and an unknown topic per tool
 through real `read`; known topics must return body-only Markdown and unknown
 ones an error. Stop/config diagnostic changes must retain structured reasons
 until human notification generation and preserve environment-only language
@@ -336,9 +336,8 @@ selection; requalify a malformed section warning in both English and Chinese.
 ### Top-level mount
 
 In a real `omp --mode rpc` session, `get_state` `dumpTools` (top-level
-definitions only) must list all six tools, the system prompt's `xd://` device
-section must list none of them, and omp must still read no
-`promptSnippet`/`promptGuidelines`.
+definitions only) must list all six tools, none of them may be mounted as tool
+commands, and omp must still read no `promptSnippet`/`promptGuidelines`.
 
 ### `exec.initFile`
 

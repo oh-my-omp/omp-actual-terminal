@@ -4,4 +4,4 @@
 - `none` disarms as soon as auto-resume is unwanted, including after eviction. `wake` arms auto-resume while running, only when the human explicitly asked; never use it for servers or watchers.
 - An exit observed by a tool result consumes an armed wake. A follow-up already queued cannot be recalled.
 
-See `xd://bash/lifecycle` for terminal lifetime and `xd://kill_session/termination` for termination effects.
+See `help://bash/lifecycle` for terminal lifetime and `help://kill_session/termination` for termination effects.

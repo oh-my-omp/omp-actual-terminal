@@ -4,4 +4,4 @@
 - Reporting an exit here directly observes completion and suppresses a wake not yet sent. It does not read terminal output or reset the output-read lifecycle.
 - A returned terminal stays listed until reclaim; a listed terminal need not still have a running command. Read `terminal_url` for retained output instead of starting the command again.
 
-See `xd://bash/lifecycle` for return, read and reclaim phases and `xd://set_on_exit/wake` for exit-wake policy.
+See `help://bash/lifecycle` for return, read and reclaim phases and `help://set_on_exit/wake` for exit-wake policy.
