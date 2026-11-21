@@ -218,7 +218,7 @@ describe("CompletionCoordinator", () => {
 		const { coordinator, sent } = makeCoordinator();
 		const s = new FakeSession("bg_1");
 		coordinator.register(s);
-		coordinator.suppress("bg_1"); // kill_session / slash command, before signaling
+		coordinator.suppress("bg_1"); // kill_session / the Console's End, before signaling
 		s.exit(143);
 		coordinator.confirmKill("bg_1");
 		await settle();

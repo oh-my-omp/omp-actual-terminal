@@ -118,7 +118,15 @@ describe("terminals as omp jobs", () => {
 		let reentered = 0;
 		const job = TerminalJob.open(
 			{ manager: jobs, ownerId: STUB_SESSION.agent.id },
-			{ label: "survivor", command: "sleep 30", cwd: process.cwd(), pids: () => [], cancelled: () => { reentered++; } },
+			{
+				label: "survivor",
+				command: "sleep 30",
+				cwd: process.cwd(),
+				pids: () => [],
+				cancelled: () => { reentered++; },
+				screen: () => undefined,
+				settledScreen: () => Promise.resolve(undefined),
+			},
 		);
 		job.cancel();
 		job.killFailed();
@@ -127,6 +135,30 @@ describe("terminals as omp jobs", () => {
 		job.returned({ exitCode: null, signal: "SIGTERM" }, null);
 		assert.equal(await statusOf(jobs, job.id, "cancelled"), "cancelled");
 		assert.equal(reentered, 0, "the plugin's own end never comes back through the job's abort");
+	});
+
+	it("shows the terminal's current screen as the job's progress while it runs", async () => {
+		const h = await makeHarness();
+		const id = await start(h, "printf 'first screen line\\n'; read line; printf 'got %s\\n' \"$line\"; sleep 30");
+		const deadline = Date.now() + 8000;
+		while (Date.now() < deadline && !h.jobs.getJob(id)?.progressText?.includes("first screen line")) await delay(25);
+		assert.equal(h.jobs.getJob(id)?.progressText, "first screen line");
+		await h.call("write_stdin", { job_id: id, chars: "typed\n" });
+		while (Date.now() < deadline && !h.jobs.getJob(id)?.progressText?.includes("got typed")) await delay(25);
+		assert.equal(h.jobs.getJob(id)?.progressText, "first screen line\ntyped\ngot typed");
+	});
+
+	it("settles with the last screen followed by how the terminal returned, in the tray's progress too", async () => {
+		const h = await makeHarness();
+		const ok = await start(h, "sleep 0.4; printf 'done here\\n'; exit 0");
+		// The first line reaches the progress before the second is printed, so a stale progress would show it alone.
+		const bad = await start(h, "printf 'started\\n'; sleep 0.8; printf 'broke here\\n'; exit 3");
+		assert.equal(await statusOf(h.jobs, ok, "completed"), "completed");
+		assert.equal(await statusOf(h.jobs, bad, "failed"), "failed");
+		assert.equal(h.jobs.getJob(ok)?.resultText, "done here\n\nreturned normally");
+		assert.equal(h.jobs.getJob(ok)?.progressText, "done here\n\nreturned normally");
+		assert.match(h.jobs.getJob(bad)?.errorText ?? "", /^started\nbroke here\n\nreturned abnormally \(/);
+		assert.equal(h.jobs.getJob(bad)?.progressText, h.jobs.getJob(bad)?.errorText);
 	});
 
 	it("returns omp's limit error verbatim and starts nothing at capacity", async () => {

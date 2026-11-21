@@ -3,35 +3,14 @@
 English | [简体中文](README.zh-CN.md)
 
 Long-lived terminal sessions for [oh-my-pi](https://github.com/can1357/oh-my-pi)
-(omp), with a terminal HUD in Tern. The plugin takes over omp's `bash` with
+(omp), with a Console in Tern. The plugin takes over omp's `bash` with
 `pty: true`: long commands, interactive programs (REPLs, TUIs, `ssh`, `sudo`),
 concurrent computation and dev-time daemons run in a PTY session of the
 session's own shell, which the model drives with input, reads and monitors
 instead of a single blocking call. Every other `bash` call stays omp's own.
 Sessions keep running between turns, with no deadline unless the call sets
-one, in main agents, subagents and `omp -p` alike, and a human can watch and
-type into them from Tern.
-
-[![omp-actual-terminal demo in Tern](docs/assets/demo.gif)](docs/assets/demo.mp4)
-
-The agent starts `python3 -q` in a terminal and runs `x = 21` through
-`write_stdin`. The human opens that session from the terminals segment of
-omp's pill and types `y = x * 2` on its terminal page; the agent then prints
-`y` in the same session and gets 42. Kill in the Terminals view ends the
-session. Recorded in Tern with omp 18.12.6 and Gemini 4 Argon; model turns
-play at 3× speed. Full-resolution video:
-[docs/assets/demo.mp4](docs/assets/demo.mp4).
-
-[![lazygit driven by omp in Tern](docs/assets/demo-lazygit.gif)](docs/assets/demo-lazygit.mp4)
-
-A full-screen TUI works the same way. With GPT-6.1 Sol, the agent opens
-lazygit in a terminal and drives it with `write_stdin` alone: it
-stages only `src/todos.ts` and commits it as `feat: toggle todos`, leaving
-`README.md` unstaged. The human opens the same lazygit on its terminal page,
-in colour, focuses the commits panel with `4` to read the new commit's patch,
-and quits with `q`; the Terminals view then shows the session's `Exit 0`.
-Model turns play at 3× speed. Full-resolution video:
-[docs/assets/demo-lazygit.mp4](docs/assets/demo-lazygit.mp4).
+one, in main agents, subagents and `omp -p` alike, and a human can open any of
+them from omp's jobs page in Tern, watch it and type into it.
 
 ## Install
 
@@ -61,13 +40,13 @@ that same factory before omp modules load or any tools register.
 
 ## UI language
 
-Human-facing notifications, widgets, command labels, the omp bash card annotations,
-and the Tern terminal HUD follow `OMOMP_LANG` (`en` or `zh`, case-insensitive).
+Human-facing notifications, widgets, the omp bash card annotations,
+and the Tern Console follow `OMOMP_LANG` (`en` or `zh`, case-insensitive).
 When it is unset or invalid, the plugin uses the first non-empty `LC_ALL`,
 `LC_MESSAGES`, or `LANG` value (`zh*` selects Chinese); otherwise it uses English.
-For language selection this plugin does not read an `omomp` file. Command descriptions and
-tool labels resolve the environment once when registered for each session;
-notifications, widgets, renderers, and the HUD resolve it when generating their
+For language selection this plugin does not read an `omomp` file. Tool labels
+resolve the environment once when registered for each session;
+notifications, widgets, renderers, and the Console resolve it when generating their
 display text. Tool descriptions, prompts, protocol values, and model-facing tool
 results remain in English.
 
@@ -84,7 +63,7 @@ results remain in English.
   job before its process starts, and the job id (`bg_N`) is its only id in
   every tool, result, notice, log name and `term://` address. omp's jobs page
   lists it, a subagent's under its main agent; cancelling the job there ends
-  the terminal the way the HUD's Kill does. The job ends when the terminal
+  the terminal the way the Console's End does. The job ends when the terminal
   returns: exit 0 completes it, a non-zero exit, signal, `timeout` or failure
   fails it, and `kill_session` or a human's kill cancels it. It never delivers
   a job result to the model (terminal notices report the terminal), and a
@@ -150,59 +129,58 @@ results remain in English.
 - **omp-native presentation.** `bash`, `write_stdin` and `kill_session`
   render through omp's own bash card (command line, output, exit chip, error
   tone), in the ANSI TUI and in Tern alike.
-- **A terminal HUD in Tern.** Watch, scroll back through, type into and kill
-  the model's sessions without a tool call.
+- **A Console in Tern.** Open any of the model's terminals from omp's jobs
+  page, scroll back through it, type into it and leave it running, or end it,
+  without a tool call.
 
-## Tern terminal HUD
+## Tern Console
 
-When omp renders natively in Tern and a session exists:
+When omp renders natively in Tern:
 
-- **Terminals segment.** A terminal icon and the stored session count join
-  omp's own running-work pill, after its agents and jobs segments, in the same
-  capsule; the hover label also gives how many still run. Tern draws the pill,
-  its dividers and every chat style and color theme. Removing the last
-  session removes the segment; with no agents or jobs either, the pill goes.
-- **Terminals view.** Clicking the segment opens a view built like omp's
-  Background jobs view, styled by Tern's own rules for that view in every
-  theme and chat style: a centered card listing the sessions (terminal icon,
-  title, elapsed time, tinted by state) beside the selected session's
-  detail: a status row (Running / Exit N, elapsed, `exec · bg_N`, Kill while it
-  runs, Open), the whole command, its directory, PID, size, start time and
-  linked log, and its coloured output following the newest line. The footer
-  shows how many run and are stored, and Close. ↑/↓ or a click picks a
-  session, `x` / Kill ends it the way `kill_session` does, Esc / Close leaves.
-  The card's header icon is the one Tern draws for the jobs view.
-- **Terminal page.** Enter / Open (or a double click) shows the session as a
-  full-pane page framed like omp's Console, headed by its title: its retained
-  history and current screen in colour, at its own width, following new output and scrollable
-  back. Typed keys go to the session (as `write_stdin` writes them, so the
-  model sees their effect); Esc / Back returns to the view; Kill ends the
-  session.
+- **The screen in the tray and on the jobs page.** Each terminal's job
+  carries its current screen, updated within half a second of a change: the
+  tray card shows its last lines, the card's closer look more of them, and
+  the jobs page's output pane the whole screen. Once the terminal returns,
+  the tray and the jobs page show its last screen followed by how it
+  returned. The tray card's Open goes to the jobs page with that terminal
+  selected.
+- **Open from the jobs page.** omp's jobs page lists every terminal as a job.
+  With a terminal selected, a subagent's included, its status row offers Open
+  (key `o`) before Cancel job; every other job keeps only omp's own actions.
+- **Console.** Open closes the jobs page and shows the terminal full-pane in
+  the frame of omp's own Console, headed by its job id, title and state: its
+  retained history and current screen in colour, following new output and
+  scrollable back. Typed keys go to the terminal as omp's Console sends them,
+  so the model sees their effect, and what the model writes with
+  `write_stdin` shows here at once. Esc / Leave closes the Console and leaves
+  the terminal running; End ends it as a person's kill, and its job shows as
+  cancelled.
+- **Size.** While the Console is open the terminal takes the Console's grid,
+  which the model then reads as well; leaving gives the terminal back the
+  `cols`/`rows` its call started it with.
 
-The HUD reads the sessions in place. The Terminals view reads only the
-selected session's screen, and reads it again only after new output was
-parsed; the page reads its one session's screen. It only exists
-while omp renders natively, so omp's ANSI TUI gains no row. Tool results stay
+omp's ANSI TUI has no jobs page, so it offers no Console. Tool results stay
 plain text; explicit `read term://…/screen.png` requests return images.
 
-**How the segment joins omp's pill.** omp has no extension API for pill
-segments, so the HUD wraps omp's `InteractiveMode.prototype.describeHudPills`
-once per process and appends its own segment component as the pill's last
-child, creating the pill when omp has none. omp's own row object is never
-changed. A reloaded extension replaces the decorator rather than wrapping
-again. If omp no longer has that method, or it returns a row of another
-shape, loading or describing fails with a "requalify" error instead of
-silently dropping the segment.
+**How Open joins omp's jobs page.** omp has no extension point for job
+actions, so the extension wraps omp's `JobsSheet.prototype` (`describe`,
+`handleInput`, `handleNativeEvent`) once per process. It puts the Open button
+into a copy of the selected terminal's status row and leaves omp's own nodes
+unchanged; any other job's page is the one omp built. If a selected
+terminal's status row loses the spacer before its actions, describing fails
+with a "requalify" error instead of silently dropping Open. The page cannot
+tell a job that is not a terminal from a detail omp no longer keys by its job
+id, so such an omp change leaves Open absent; omp upgrades requalify that key.
 
-**No Tern plugin.** The view and page use omp's own overlay roles
-(`omp.overlay.jobs`, `omp.overlay.console`), so Tern's built-in styles draw
-them and the segment. Those roles are presentation contracts of omp and Tern,
-requalified on upgrades. The extension removes the `omp-unified-exec` Tern
-plugin that earlier versions installed, because its stylesheet still moved
-omp's shared widget container: during omp's awaited factory it asks Tern's
-`plugin list`, then `plugin remove` (or `plugin unlink` when Tern answers that
-it is linked), and confirms Tern no longer lists it. Without `tern` nothing
-runs; if an available Tern fails, loading fails with its diagnostics.
+**No Tern plugin.** The Console uses omp's own overlay role
+(`omp.overlay.console`), so Tern's built-in styles draw it. That role is a
+presentation contract of omp and Tern, requalified on upgrades. The extension
+removes the `omp-unified-exec` Tern plugin that earlier versions installed,
+because its stylesheet still moved omp's shared widget container: during
+omp's awaited factory it asks Tern's `plugin list`, then `plugin remove` (or
+`plugin unlink` when Tern answers that it is linked), and confirms Tern no
+longer lists it. Without `tern` nothing runs; if an available Tern fails,
+loading fails with its diagnostics.
 
 ## Tools
 
@@ -242,7 +220,7 @@ configuration extension. An unknown topic returns a missing-topic error.
 |---|---|---|---|
 | `command` | string | — | Shell command, in the syntax of the terminal's shell. Required. |
 | `pty` | boolean | omitted | `true` opens a terminal. Omitted or `false`: omp's own `bash`. |
-| `title` | string | — | Required with `pty: true`: names the terminal in `list_sessions`, the Terminals view and every notice about it. Folded to one line; at most 80 characters are kept. A missing or blank title fails the call before anything starts. |
+| `title` | string | — | Required with `pty: true`: names the terminal in `list_sessions`, omp's jobs page, the Console and every notice about it. Folded to one line; at most 80 characters are kept. A missing or blank title fails the call before anything starts. |
 | `cwd` | string | session cwd | Working directory: a host path, relative paths resolving against the session cwd, or a URL directory such as `local://…`, which only the session's shell can enter. The default is read for each call; a `cd` inside a session never changes it. A missing path or a non-directory fails with `Working directory does not exist: <path>` / `Working directory is not a directory: <path>` (omp's bash wording) and starts nothing. |
 | `shell` | string | the session's shell | Shell executable instead of the session's shell; see [Shell selection](#shell-selection). `cmd` is refused; `powershell` / `pwsh` get `-Command`; every other shell gets `-c`. |
 | `timeout` | number | none | Seconds. Omitted or `0`: the terminal has no deadline. A positive value ends the terminal at that time (SIGTERM, SIGKILL after 2 s) and its return is abnormal (`timeout=Ns`). omp's 300-second default applies only to calls without `pty`. |
@@ -417,7 +395,7 @@ size; the raw stream goes only to `log_path`.
 - **The child sees `TERM=xterm-256color`**, the terminal it actually draws on,
   whatever terminal omp itself runs in; a command can still set its own `TERM`.
 - **Plain text and cursor in tool results.** Colours stay out of exec/write/kill
-  text; Tern's terminal page and explicit `read term://…/screen.png` show them.
+  text; Tern's Console and explicit `read term://…/screen.png` show them.
 - **Terminal queries are answered** on the child's input: cursor position and
   device attributes, and the default foreground/background colours (OSC 10/11).
   The colours follow omp's theme (light or dark, which in Tern follows
@@ -560,7 +538,7 @@ follow-up already queued to the host.
 - The wake is an `exit_wake` [terminal notice](#terminal-notices): bounded
   metadata only (job id, title, exit code/signal, command, cwd, elapsed
   time, terminal reading address, log path, failure) — never raw output.
-- `kill_session`, the `/omp-actual-terminal-sessions` command, LRU eviction of a live
+- `kill_session`, the Console's End, LRU eviction of a live
   process and `session_shutdown` suppress the wake; a kill that fails restores
   it. A naturally exited wake session evicted before notification keeps a
   bounded tombstone so its wake is still delivered.
@@ -613,7 +591,8 @@ and intent without a model call. While omp has the agent parked, judgments wait
 for its revival.
 
 Actual output closure sends End (a `monitor_end` notice) with pending matches and exit code/signal;
-human HUD/slash and LRU terminations identify their reason. End merges an
+terminations by a person (the Console's End or a jobs-page cancel) and by LRU
+eviction identify their reason. End merges an
 already-armed ordinary completion wake. Model `kill_session`, explicit cancel,
 replacement, reset and shutdown end monitoring silently, including a failed
 model kill. Already-enqueued follow-ups cannot be recalled. Unknown/ended
@@ -678,8 +657,8 @@ stays registered and reports `running: true`. A confirmed kill is a normal
 ending: the terminal stays listed (`running: false`) and its
 [lifecycle](#terminal-lifecycle) reclaims it, after the 5-minute linger once
 nothing of it runs; the kill result shows its final screen, which counts as
-reading it, and its job shows as cancelled. The Tern HUD's Kill and a cancel
-of the job from omp's jobs page use the same path and count as read as well.
+reading it, and its job shows as cancelled. The Console's End and a cancel of
+the job from omp's jobs page use the same path and count as read as well.
 
 ### `list_sessions`
 
@@ -712,7 +691,7 @@ background processes may still hold the terminal — or the terminal closes.
 - **Abnormal return** (non-zero exit, signal, spawn/runtime failure, the
   call's `timeout`) sends an
   `abnormal_return` notice at once, read or not. A kill by `kill_session`, the
-  HUD or `/omp-actual-terminal-sessions` is a normal ending, and so is a return after
+  Console's End or a jobs-page cancel is a normal ending, and so is a return after
   the agent wrote Ctrl-C (`\x03`) or Ctrl-\ (`\x1c`) with `write_stdin`. Later
   input without one of them clears that mark, so a program that survived the
   interrupt and fails afterwards is reported.
@@ -731,7 +710,7 @@ background processes may still hold the terminal — or the terminal closes.
 - **Reclaim** kills whatever is left of the terminal's process group —
   background jobs holding the terminal on Linux, and jobs that outlived the
   closed terminal on macOS (SIGTERM, SIGKILL after 2 s) — and removes the
-  terminal from `list_sessions` and the HUD. The `term://` address and
+  terminal from `list_sessions`, and its job no longer offers Open. The `term://` address and
   `log_path` stay readable. A terminal whose processes cannot be ended stays
   and is retried at the next check (on Windows a tree whose root has exited
   cannot be reached).
@@ -907,12 +886,6 @@ no timer of its own for this; it reads omp's agent registry and lifecycle.
   the shutdown treatment (SIGTERM, SIGKILL after 1 s), and the main session's
   shutdown waits for that.
 
-## Command
-
-- `/omp-actual-terminal-sessions` — lists running sessions with their titles in a
-  selector (armed wakes show `[wake]`) and kills the chosen one, or all,
-  without the model, with the same SIGTERM → 2s → SIGKILL escalation.
-
 ## Presentation
 
 **On omp,** `bash`, `write_stdin` and `kill_session` render through omp's
@@ -955,8 +928,8 @@ LIFECYCLE_SWEEP_MS           = 60_000 (lifecycle check interval)
 - **Early exit:** commands that finish within 150 ms never enter the session
   store; the result has `exit_code` and no `job_id`, and the job registered
   before the process started has already completed or failed.
-- **Returned terminals** stay in the store, the HUD and `list_sessions`
-  until their [lifecycle](#terminal-lifecycle) reclaims them; no tool call
+- **Returned terminals** stay in the store and `list_sessions`, and their jobs
+  keep offering Open, until their [lifecycle](#terminal-lifecycle) reclaims them; no tool call
   removes them on observing the exit.
 - **Spawn failures** (missing shell or `cwd`) are checked before the PTY
   starts and surface as `failure_message` (`spawn <file> ENOENT: …`). A
@@ -991,7 +964,7 @@ LIFECYCLE_SWEEP_MS           = 60_000 (lifecycle check interval)
   SIGTERM, then SIGKILL if it has not exited after 2s, and its job shows as
   cancelled once it ends.
 - **Observations** are serialized per session; streaming updates, `read term://`,
-  monitor and the Tern HUD never consume ordinary observations. A streaming
+  monitor and the Tern Console never consume ordinary observations. A streaming
   update is sent every 250 ms only when the parsed screen, the exit state or
   the byte count changed since the last one. Frozen terminal resources outlive
   session-store membership.
@@ -1099,7 +1072,7 @@ src/
 ├── index.ts              # tool registration, event handlers
 ├── session.ts            # ExecSession: spawn, read, write, kill, log file, state
 ├── session-store.ts      # SessionStore + LRU eviction
-├── terminal-job.ts       # a terminal as an omp job: registration, its status at the return, cancels from omp
+├── terminal-job.ts       # a terminal as an omp job: registration, its screen as progress, its status and last screen at the return, cancels from omp
 ├── collect.ts            # CollectResult: screen, final screen or none
 ├── long-wait.ts          # event-driven waits (collection, shutdown, kill)
 ├── format-time.ts        # elapsed labels and host UTC time
@@ -1118,7 +1091,7 @@ src/
 ├── shell-host.ts         # omp's cmd.exe test, loaded at factory time
 ├── agent-park.ts         # omp's agent registry/lifecycle reader; parked subagents' terminal runtimes
 ├── session-binding.ts    # activation-local AgentSession identity for bash settings, stop detectors and the terminals' job owner
-├── tern-terminal-hud.ts  # terminals segment in omp's pill, Terminals view, terminal page
+├── tern-terminal-hud.ts  # Open on omp's jobs page for a terminal job; the full-pane Console
 ├── terminal-resource.ts  # process-global terminal keys, live/frozen projections
 ├── terminal-url.ts       # omp `term://` read handler; reports reads to the terminal's owner
 ├── terminal-image.ts     # terminal screenshots (SVG → PNG)
@@ -1138,8 +1111,7 @@ src/
 ├── tern-plugin-removal.ts# removes the Tern plugin earlier versions installed
 └── omomp-shared/         # copies of oh-my-omp/shared files declared in omomp-shared.json
 docs/
-├── DEV.md                # maintainer guide
-└── assets/               # README demos (demo*.gif, demo*.mp4)
+└── DEV.md                # maintainer guide
 ```
 
 ## Tests
@@ -1152,7 +1124,7 @@ bun test ./tests/tern-terminal-hud.test.ts ./tests/omp-presentation.test.ts
 ```
 
 The full suite runs with Bun's native `bun test` runner, including real PTY
-session and HUD lifecycle tests; PTY availability is mandatory, not a skip
+session and Console tests; PTY availability is mandatory, not a skip
 condition. Node remains a test prerequisite because the standalone
 `tests/bun-pty-runtime.mjs` fixture starts `node` as an ordinary child program,
 not as the plugin host. CI runs the full suite and the source/compiled fixture
@@ -1162,6 +1134,6 @@ as described in [docs/DEV.md](docs/DEV.md).
 ## Development
 
 [docs/DEV.md](docs/DEV.md) covers the dev loop, focused test recipes, omp
-compatibility checks and re-recording the README demos.
+compatibility checks and recording README demos.
 
 Licensed [MIT](./LICENSE).

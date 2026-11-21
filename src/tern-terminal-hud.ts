@@ -1,12 +1,9 @@
-import { homedir } from "node:os";
-import { isAbsolute, relative, sep } from "node:path";
-
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import type { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import type * as NativeState from "@oh-my-pi/pi-tui/native/state";
-import { matchesKey, type Component, type NativeNode } from "@oh-my-pi/pi-tui";
+import { matchesKey, stableKey, type Component, type DescribeContext, type NativeNode, type NativeUiEvent } from "@oh-my-pi/pi-tui";
+import type * as Overlay from "@oh-my-pi/pi-tui/native/overlay";
+import type * as JobsPanel from "@oh-my-pi/pi-tui/overlays/jobs-panel";
+import type * as BashInteractive from "@oh-my-pi/pi-tui/tools/bash-interactive";
 
-import { formatElapsedUi } from "./format-time.ts";
 import { sanitizeOutputText } from "./output-safety.ts";
 import { tr } from "./omomp-shared/i18n.ts";
 import type { ExecSession } from "./session.ts";
@@ -17,48 +14,49 @@ function requalify(change: string): Error {
 	return new Error(`omp-actual-terminal: ${change}; requalify src/tern-terminal-hud.ts for this omp version`);
 }
 
-export type NativeRenderingState = Pick<typeof NativeState, "isNativeRendering" | "onNativeRenderingChange">;
+/** The jobs page's methods the Open action wraps. */
+export type JobsSheetPrototype = Pick<JobsPanel.JobsSheet, "describe" | "handleInput" | "handleNativeEvent">;
 
-function parseNativeRenderingState(value: Partial<NativeRenderingState>): NativeRenderingState {
-	const { isNativeRendering, onNativeRenderingChange } = value;
-	if (typeof isNativeRendering !== "function" || typeof onNativeRenderingChange !== "function") {
-		throw requalify("@oh-my-pi/pi-tui/native/state no longer provides isNativeRendering/onNativeRenderingChange");
-	}
-	return { isNativeRendering, onNativeRenderingChange };
-}
-
-export type HudPillsPrototype = Pick<InteractiveMode, "describeHudPills">;
-
-function isHudPillsPrototype(value: unknown): value is HudPillsPrototype {
-	return typeof value === "object" && value !== null && "describeHudPills" in value && typeof value.describeHudPills === "function";
-}
-
-export function parseInteractiveModeModule(value: { readonly InteractiveMode?: unknown }): HudPillsPrototype {
-	const mode = value.InteractiveMode;
-	const prototype: unknown = typeof mode === "function" ? mode.prototype : undefined;
-	if (!isHudPillsPrototype(prototype)) {
-		throw requalify("@oh-my-pi/pi-coding-agent/modes/interactive-mode no longer provides InteractiveMode.prototype.describeHudPills");
-	}
-	return prototype;
+function isJobsSheetPrototype(value: unknown): value is JobsSheetPrototype {
+	return typeof value === "object" && value !== null &&
+		"describe" in value && typeof value.describe === "function" &&
+		"handleInput" in value && typeof value.handleInput === "function" &&
+		"handleNativeEvent" in value && typeof value.handleNativeEvent === "function";
 }
 
 export interface TernHudHost {
-	readonly native: NativeRenderingState;
-	readonly pills: HudPillsPrototype;
+	readonly sheet: JobsSheetPrototype;
+	readonly actionButton: typeof Overlay.actionButton;
+	readonly actionBar: typeof Overlay.actionBar;
+	readonly normalizeInput: typeof BashInteractive.normalizeInputForPty;
 }
 
-export const OPEN_ACTION = "omp-actual-terminal.terminals.open";
+export function parseTernHudHost(
+	panel: Partial<Pick<typeof JobsPanel, "JobsSheet">>,
+	overlay: Partial<Pick<typeof Overlay, "actionButton" | "actionBar">>,
+	interactive: Partial<Pick<typeof BashInteractive, "normalizeInputForPty">>,
+): TernHudHost {
+	const prototype: unknown = typeof panel.JobsSheet === "function" ? panel.JobsSheet.prototype : undefined;
+	if (!isJobsSheetPrototype(prototype)) {
+		throw requalify("@oh-my-pi/pi-tui/overlays/jobs-panel no longer provides JobsSheet with describe/handleInput/handleNativeEvent");
+	}
+	const { actionButton, actionBar } = overlay;
+	if (typeof actionButton !== "function" || typeof actionBar !== "function") {
+		throw requalify("@oh-my-pi/pi-tui/native/overlay no longer provides actionButton/actionBar");
+	}
+	const { normalizeInputForPty } = interactive;
+	if (typeof normalizeInputForPty !== "function") {
+		throw requalify("@oh-my-pi/pi-tui/tools/bash-interactive no longer provides normalizeInputForPty");
+	}
+	return { sheet: prototype, actionButton, actionBar, normalizeInput: normalizeInputForPty };
+}
+
 export const OPEN_TERMINAL_ACTION = "omp-actual-terminal.terminal.open";
+export const OPEN_KEY = "o";
 export const KILL_ACTION = "kill";
-export const CLOSE_ACTION = "close";
-export const BACK_ACTION = "back";
-export const VIEW_FRAME = { role: "omp.overlay.jobs", size: "lg", anchor: "center", head: "Terminals" } as const;
-
-function viewFrame(): Readonly<Record<string, unknown>> {
-	return { ...VIEW_FRAME, head: tr("Terminals", "终端") };
-}
-const COMMAND_MAX = 120;
-const SGR = /\x1b\[[0-9;:]*m/g;
+export const LEAVE_ACTION = "leave";
+/** omp's own Console (`@oh-my-pi/pi-tui/tools/bash-interactive`) insets its grid from the sheet's width by the same columns. */
+const CONSOLE_INSET_COLS = 8;
 
 export type TerminalState =
 	| { readonly kind: "running" }
@@ -67,46 +65,30 @@ export type TerminalState =
 			readonly exitCode: number | null;
 			readonly signal: string | null;
 			readonly failure: string | null;
-			readonly exitedAt: number;
 	  };
 
 export interface TerminalSummary {
 	readonly id: string;
 	readonly title: string;
-	readonly command: string;
-	readonly script: string;
 	readonly state: TerminalState;
-	readonly cwd: string;
-	readonly pid: number | undefined;
-	readonly startedAt: number;
-	readonly logPath: string;
 }
 
 export interface TerminalEntry extends TerminalSummary {
 	readonly screen: StyledScreen;
 }
 
-function oneLine(command: string): string {
-	const line = sanitizeOutputText(command).replace(/\s+/g, " ").trim();
-	return line.length <= COMMAND_MAX ? line : `${line.slice(0, COMMAND_MAX - 1)}…`;
+const TITLE_MAX = 120;
+
+function oneLine(text: string): string {
+	const line = sanitizeOutputText(text).replace(/\s+/g, " ").trim();
+	return line.length <= TITLE_MAX ? line : `${line.slice(0, TITLE_MAX - 1)}…`;
 }
 
 function terminalSummary(session: ExecSession): TerminalSummary {
-	const exitedAt = session.exitedAt;
-	const state: TerminalState = exitedAt === null
-		? { kind: "running" }
-		: { kind: "exited", exitCode: session.exitCode, signal: session.signal, failure: session.failureMessage, exitedAt };
-	return {
-		id: session.id,
-		title: oneLine(session.title),
-		command: oneLine(session.displayCommand),
-		script: sanitizeOutputText(session.displayCommand),
-		state,
-		cwd: sanitizeOutputText(session.cwd),
-		pid: session.pid,
-		startedAt: session.startedAt,
-		logPath: sanitizeOutputText(session.logPath),
-	};
+	const state: TerminalState = session.hasExited
+		? { kind: "exited", exitCode: session.exitCode, signal: session.signal, failure: session.failureMessage }
+		: { kind: "running" };
+	return { id: session.id, title: oneLine(session.title), state };
 }
 
 function exitSucceeded(state: Extract<TerminalState, { kind: "exited" }>): boolean {
@@ -125,232 +107,58 @@ function stateTone(state: TerminalState): string {
 	return exitSucceeded(state) ? "success" : "error";
 }
 
-interface StateLook {
-	readonly label: string;
-	readonly tone: "pending" | "success" | "error";
-	readonly glyph: { readonly t: string; readonly fx?: "pulse" };
-}
+const DETAIL_ROLE = "omp.jobs.detail";
+const STATUS_ROLE = "omp.jobs.status";
 
-function stateLook(state: TerminalState): StateLook {
-	if (state.kind === "running") return { label: tr("Running", "运行中"), tone: "pending", glyph: { t: "●", fx: "pulse" } };
-	if (exitSucceeded(state)) return { label: tr("Exit 0", "退出 0"), tone: "success", glyph: { t: "✓" } };
-	const label = state.failure !== null
-		? tr("Failed", "失败")
-		: state.signal ?? (state.exitCode === null ? tr("Exited", "已退出") : tr(`Exit ${state.exitCode}`, `退出 ${state.exitCode}`));
-	return { label, tone: "error", glyph: { t: "✕" } };
-}
-
-function elapsedMs(entry: TerminalSummary, now: number): number {
-	const end = entry.state.kind === "running" ? now : entry.state.exitedAt;
-	return Math.max(0, Math.round(end - entry.startedAt));
-}
-
-function itemId(id: string): string {
-	return `s${id}`;
-}
-
-function parseItemId(item: unknown): string | undefined {
-	return typeof item === "string" && item.length > 1 && item.startsWith("s") ? item.slice(1) : undefined;
-}
-
-export function describeTerminalSegment(count: number, running: number): NativeNode {
-	const label = tr(
-		`${count} terminal${count === 1 ? "" : "s"} · ${running} running`,
-		`${count} 个终端 · ${running} 个运行中`,
-	);
-	return {
-		k: "row",
-		key: "terminals",
-		p: { role: "omp.hud.seg", gap: "xs", align: "center", title: label, aria: label, actions: { click: OPEN_ACTION } },
-		c: [
-			{ k: "icon", key: "icon", p: { name: "terminal", tone: "success" } },
-			{ k: "text", key: "count", p: { spans: [{ t: String(count), s: "num" }], wrap: "none" } },
-		],
-	};
-}
-
-type NodeProps<K extends NativeNode["k"]> = NonNullable<Extract<NativeNode, { readonly k: K }>["p"]>;
-type RowNode = Extract<NativeNode, { readonly k: "row" }>;
-type Tone = NonNullable<NodeProps<"row">["tone"]>;
-type KvItem = NodeProps<"kv">["items"][number];
-
-function isRow(value: unknown, role: string): value is RowNode {
-	return typeof value === "object" && value !== null && "k" in value && value.k === "row"
-		&& "p" in value && typeof value.p === "object" && value.p !== null && "role" in value.p && value.p.role === role;
-}
-
-const EMPTY_PILL: RowNode = { k: "row", key: "running", p: { role: "omp.hud.pill", align: "center" }, c: [] };
-
-export function parseHudPillsNode(value: unknown): RowNode {
-	if (!isRow(value, "omp.hud") || (value.c?.length ?? 0) > 1) {
-		throw requalify("InteractiveMode.describeHudPills no longer returns an omp.hud row with one omp.hud.pill");
-	}
-	const pill = value.c?.[0];
-	if (pill !== undefined && !isRow(pill, "omp.hud.pill")) {
-		throw requalify("InteractiveMode.describeHudPills no longer returns an omp.hud row with one omp.hud.pill");
-	}
-	return value;
-}
-
-export function withTerminalSegment(hud: RowNode, segment: Component): RowNode {
-	const existing = hud.c?.[0];
-	const pill = isRow(existing, "omp.hud.pill") ? existing : EMPTY_PILL;
-	return { ...hud, p: { ...hud.p, hidden: undefined }, c: [{ ...pill, c: [...(pill.c ?? []), segment] }] };
-}
-
-function actionButton(label: string, act: string, keys?: string, tone?: Tone): NativeNode {
-	return {
-		k: "row",
-		key: act,
-		p: { role: "omp.btn", gap: "xs", align: "center", title: keys ? `${label}  ${keys}` : label, actions: { click: act }, ...(tone ? { tone } : {}) },
-		c: [{ k: "text", p: { text: label } }, ...(keys ? [{ k: "kbd", p: { keys: [keys] } } satisfies NativeNode] : [])],
-	};
+function isNode(child: unknown): child is NativeNode {
+	return typeof child === "object" && child !== null && "k" in child;
 }
 
 /**
- * omp's own `shortenPath`
- * lives in `@oh-my-pi/pi-tui/render`, which ships TypeScript source; importing it would
- * stop this module from loading on a Node host before the factory can reject that host.
+ * The jobs page's status row of the selected job with the Open button after its spacer, so it sits
+ * before Cancel job. Undefined when the row lost the spacer the host puts before its actions.
  */
-function shortenHome(path: string): string {
-	const below = relative(homedir(), path);
-	if (below === "") return "~";
-	return below === ".." || below.startsWith(`..${sep}`) || isAbsolute(below) ? path : `~${sep}${below}`;
+function withOpenButton(status: NativeNode, button: NativeNode): NativeNode | undefined {
+	const children = status.c ?? [];
+	const spacer = children.findIndex((child) => isNode(child) && child.k === "spacer");
+	if (spacer < 0) return undefined;
+	return { ...status, c: [...children.slice(0, spacer + 1), button, ...children.slice(spacer + 1)] };
 }
 
-function localDateTime(at: number): string {
-	const d = new Date(at);
-	const pad = (n: number) => String(n).padStart(2, "0");
-	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-
-function actionsRow(children: readonly NativeNode[]): NativeNode {
-	return { k: "row", key: "actions", p: { role: "omp.actions", gap: "sm", align: "center" }, c: children };
-}
-
-const SPACER: NativeNode = { k: "spacer", p: { grow: 1 } };
-
-function describeListItem(entry: TerminalSummary, now: number): NativeNode {
-	const look = stateLook(entry.state);
-	const elapsed = formatElapsedUi(elapsedMs(entry, now));
-	return {
-		k: "item",
-		key: itemId(entry.id),
-		p: {
-			label: [{ t: entry.title }],
-			value: [{ t: elapsed, s: "mono" }],
-			icon: "terminal",
-			tone: look.tone,
-			title: `${entry.title}\n${entry.command}\n${look.label} · exec · ${entry.id}`,
-			aria: tr(
-				`${entry.title}, ${look.label.toLowerCase()}, ${elapsed}`,
-				`${entry.title}，${look.label}，${elapsed}`,
-			),
-		},
+/**
+ * `described` with the Open button on the selected job's status row when that job is a terminal,
+ * and which terminal that is. The jobs page keys the selected job's detail by the host's
+ * `stableKey(job id)`, so the terminal is found by that key, not by reading the row's text.
+ */
+export function decorateJobsPage(
+	described: NativeNode,
+	terminalFor: (detailKey: string) => string | undefined,
+	button: () => NativeNode,
+): { readonly node: NativeNode; readonly terminal: string | undefined } {
+	let terminal: string | undefined;
+	const visit = (current: NativeNode): NativeNode => {
+		if (current.p?.role === DETAIL_ROLE) {
+			terminal = current.key === undefined ? undefined : terminalFor(current.key);
+			if (terminal === undefined) return current;
+			const children = current.c ?? [];
+			const index = children.findIndex((child) => isNode(child) && child.p?.role === STATUS_ROLE);
+			const status = children[index];
+			const decorated = isNode(status) ? withOpenButton(status, button()) : undefined;
+			if (decorated === undefined) throw requalify("the jobs page's selected job no longer has a status row with a spacer before its actions");
+			return { ...current, c: children.map((child, at) => (at === index ? decorated : child)) };
+		}
+		const children = current.c;
+		if (children === undefined) return current;
+		let changed = false;
+		const next = children.map((child) => {
+			if (!isNode(child)) return child;
+			const visited = visit(child);
+			if (visited !== child) changed = true;
+			return visited;
+		});
+		return changed ? { ...current, c: next } : current;
 	};
-}
-
-function describeDetail(entry: TerminalEntry, now: number): NativeNode {
-	const look = stateLook(entry.state);
-	const running = entry.state.kind === "running";
-	const age = elapsedMs(entry, now);
-	const facts: KvItem[] = [
-		{ k: tr("Directory", "目录"), v: [{ t: shortenHome(entry.cwd), s: "path" }] },
-		...(entry.pid !== undefined ? [{ k: "PID", v: [{ t: String(entry.pid), s: "num" }] }] : []),
-		{ k: tr("Size", "大小"), v: [{ t: `${entry.screen.view.cols} × ${entry.screen.view.rows}`, s: "num" }] },
-		{ k: tr("Started", "启动时间"), v: [{ t: localDateTime(entry.startedAt), s: "dim" }] },
-		{ k: tr("Log", "日志"), v: [{ t: entry.logPath, s: "path", href: `file://${entry.logPath}` }] },
-	];
-	const hasOutput = entry.screen.text.replace(SGR, "").trim() !== "";
-	return {
-		k: "col",
-		key: itemId(entry.id),
-		p: { role: "omp.jobs.detail" },
-		c: [
-			{
-				k: "row",
-				key: "status",
-				p: { role: "omp.jobs.status", gap: "sm", align: "center" },
-				c: [
-					{ k: "text", key: "state", p: { spans: [look.glyph, { t: ` ${look.label}` }], role: "omp.jobs.state", tone: look.tone, wrap: "none" } },
-					{ k: "elapsed", key: "age", p: { age, ...(running ? {} : { stopped: age }), format: "short", role: "omp.jobs.age", title: running ? tr("Running for", "运行时长") : tr("Ran for", "运行时长") } },
-					{ k: "text", key: "id", p: { spans: [{ t: `exec · ${entry.id}`, s: "mono" }], role: "omp.jobs.id", wrap: "none", truncate: "end" } },
-					SPACER,
-					...(running ? [actionButton(tr("Kill", "结束"), KILL_ACTION, "x", "error")] : []),
-					actionButton(tr("Open", "打开"), OPEN_TERMINAL_ACTION, "enter"),
-				],
-			},
-			{ k: "code", key: "command", p: { text: entry.script, lang: "bash", wrap: true, preview: { lines: 4 }, role: "omp.jobs.command" } },
-			{ k: "kv", key: "facts", p: { items: facts, role: "omp.jobs.facts" } },
-			{
-				k: "col",
-				key: "out",
-				p: { role: "omp.jobs.out", gap: "sm" },
-				c: [
-					{ k: "text", key: "label", p: { text: tr("Output", "输出"), role: "omp.jobs.label" } },
-					hasOutput
-						? { k: "ansi", key: `output-${itemId(entry.id)}`, p: { text: entry.screen.text, follow: running, role: "omp.jobs.output", max: { h: "16lines" } } }
-						: { k: "text", key: "none", p: { text: running ? tr("No output yet", "暂无输出") : tr("No output", "无输出"), role: "omp.jobs.nooutput" } },
-				],
-			},
-		],
-	};
-}
-
-export function describeTerminalsSheet(
-	entries: readonly TerminalSummary[],
-	selected: TerminalEntry | undefined,
-	now = Date.now(),
-): NativeNode {
-	const close = actionButton(tr("Close", "关闭"), CLOSE_ACTION, "esc");
-	if (!selected) {
-		return {
-			k: "col",
-			c: [
-				{
-					k: "col",
-					key: "empty",
-					p: { role: "omp.jobs.empty", align: "center" },
-					c: [
-						{ k: "icon", key: "icon", p: { name: "terminal" } },
-						{ k: "text", key: "title", p: { text: tr("No terminals", "没有终端"), role: "omp.jobs.empty.title" } },
-						{ k: "text", key: "note", p: { text: tr("Sessions started by bash with pty: true show up here while they are stored.", "bash 以 pty: true 启动的会话在存储期间会显示在这里。"), role: "omp.jobs.empty.note", wrap: "word" } },
-					],
-				},
-				actionsRow([SPACER, close]),
-			],
-		};
-	}
-	const running = entries.filter((entry) => entry.state.kind === "running").length;
-	return {
-		k: "col",
-		c: [
-			{
-				k: "row",
-				key: "split",
-				p: { role: "omp.jobs.split" },
-				c: [
-					{
-						k: "col",
-						key: "master",
-						p: { role: "omp.jobs.master" },
-						c: [{
-							k: "list",
-							key: "terminals",
-							p: { selected: itemId(selected.id), max: { lines: 12 }, actions: { click: "select", dblclick: "activate" } },
-							c: entries.map((entry) => describeListItem(entry, now)),
-						}],
-					},
-					describeDetail(selected, now),
-				],
-			},
-			actionsRow([
-				{ k: "text", key: "summary", p: { role: "omp.jobs.summary", text: tr(`${running} running · ${entries.length} stored`, `${running} 个运行中 · ${entries.length} 个已存储`), wrap: "none" } },
-				SPACER,
-				close,
-			]),
-		],
-	};
+	return { node: visit(described), terminal };
 }
 
 export function terminalPageFrame(entry: TerminalSummary | undefined, id: string): Readonly<Record<string, unknown>> {
@@ -358,21 +166,22 @@ export function terminalPageFrame(entry: TerminalSummary | undefined, id: string
 		role: "omp.overlay.console",
 		size: "full",
 		head: [
-			{ t: tr("Terminals · ", "终端 · "), s: "muted" },
+			{ t: tr("Console · ", "控制台 · "), s: "muted" },
 			{ t: `${id} ` },
 			...(entry ? [{ t: entry.title }, { t: "  " }, { t: stateText(entry.state), s: stateTone(entry.state) }] : [{ t: tr("removed", "已移除"), s: "muted" }]),
 		],
 	};
 }
 
-export function describeTerminalPage(entry: TerminalEntry | undefined): NativeNode {
+export function describeTerminalPage(entry: TerminalEntry | undefined, host: Pick<TernHudHost, "actionButton" | "actionBar">): NativeNode {
+	const leave = host.actionButton(tr("Leave", "离开"), LEAVE_ACTION, { keys: "escape" });
 	if (!entry) {
 		return {
 			k: "col",
 			p: { gap: "sm" },
 			c: [
 				{ k: "text", key: "gone", p: { spans: [{ t: tr("This terminal is no longer stored.", "此终端已不再存储。"), s: "dim" }] } },
-				{ k: "row", key: "actions", p: { role: "omp.actions", gap: "sm", align: "center" }, c: [{ k: "spacer", p: { grow: 1 } }, actionButton(tr("Back", "返回"), BACK_ACTION, "esc")] },
+				host.actionBar([null, leave]),
 			],
 		};
 	}
@@ -383,7 +192,7 @@ export function describeTerminalPage(entry: TerminalEntry | undefined): NativeNo
 		c: [
 			{
 				k: "ansi",
-				key: `page-${itemId(entry.id)}`,
+				key: `page-s${entry.id}`,
 				p: {
 					text: entry.screen.text,
 					cols: entry.screen.view.cols,
@@ -392,23 +201,14 @@ export function describeTerminalPage(entry: TerminalEntry | undefined): NativeNo
 					max: { h: 1 },
 				},
 			},
-			{
-				k: "row",
-				key: "actions",
-				p: { role: "omp.actions", gap: "sm", align: "center" },
-				c: [
-					{ k: "text", key: "note", p: { spans: [{ t: running ? tr("Keys go to the terminal", "按键将发送到终端") : tr("Session finished", "会话已结束"), s: "dim" }] } },
-					{ k: "spacer", p: { grow: 1 } },
-					...(running ? [actionButton(tr("Kill", "结束"), KILL_ACTION, undefined, "error")] : []),
-					actionButton(tr("Back", "返回"), BACK_ACTION, "esc"),
-				],
-			},
+			host.actionBar([
+				{ k: "text", key: "note", p: { spans: [{ t: running ? tr("Keys go to the terminal", "按键将发送到终端") : tr("Terminal finished", "终端已结束"), s: "dim" }] } },
+				null,
+				...(running ? [host.actionButton(tr("End", "结束"), KILL_ACTION, { tone: "error" })] : []),
+				leave,
+			]),
 		],
 	};
-}
-
-function sortedSessions(store: SessionStore): ExecSession[] {
-	return store.values().sort((a, b) => a.startedAt - b.startedAt);
 }
 
 function summaryOf(session: ExecSession | undefined): TerminalSummary | undefined {
@@ -420,140 +220,17 @@ function entryOf(session: ExecSession | undefined): TerminalEntry | undefined {
 	return session && screen ? { ...terminalSummary(session), screen } : undefined;
 }
 
-type HudEvent =
-	| { readonly kind: "action"; readonly act: string }
-	| { readonly kind: "select"; readonly id: string; readonly activate: boolean };
-
-function parseHudEvent(event: unknown): HudEvent | undefined {
-	if (typeof event !== "object" || event === null || !("type" in event)) return undefined;
-	if (event.type === "action" && "act" in event && typeof event.act === "string") return { kind: "action", act: event.act };
-	if ((event.type === "select" || event.type === "activate") && "item" in event) {
-		const id = parseItemId(event.item);
-		if (id !== undefined) return { kind: "select", id, activate: event.type === "activate" };
-	}
-	return undefined;
-}
-
 export type KillSession = (id: string) => Promise<boolean>;
 
-export type SheetResult = { readonly kind: "closed" } | { readonly kind: "open"; readonly id: string };
-
-interface RenderTarget {
-	requestRender(): void;
-}
-
-function renderTargetOf(mode: object): RenderTarget {
-	const ui: unknown = "ui" in mode ? mode.ui : undefined;
-	const request: unknown = typeof ui === "object" && ui !== null && "requestRender" in ui ? ui.requestRender : undefined;
-	if (typeof request !== "function") throw requalify("InteractiveMode no longer has ui.requestRender");
-	return { requestRender: () => request.call(ui) };
-}
-
-/**
- * Each mode gets its own
- * component: omp skips a component described twice in one frame.
- */
-class TerminalSegment implements Component {
-	constructor(private readonly provider: SegmentProvider) {}
-
-	describe(): NativeNode {
-		return this.provider.segment();
-	}
-
-	handleNativeEvent(event: unknown): void {
-		const parsed = parseHudEvent(event);
-		if (parsed?.kind === "action" && parsed.act === OPEN_ACTION) this.provider.open();
-	}
-
-	render(): string[] {
-		return [];
-	}
-
-	invalidate(): void {}
-}
-
-class SegmentProvider {
-	private node: NativeNode | undefined;
-	private readonly modes = new WeakMap<object, { readonly segment: TerminalSegment; decorated?: { readonly base: NativeNode; readonly node: NativeNode } }>();
-	private readonly targets = new Map<object, RenderTarget>();
-	private readonly watch: SessionWatch;
-
-	constructor(
-		private readonly store: SessionStore,
-		readonly open: () => void,
-	) {
-		this.watch = new SessionWatch(store, this.changed);
-	}
-
-	private changed = (): void => {
-		this.node = undefined;
-		this.requestRender();
-	};
-
-	requestRender(): void {
-		for (const target of this.targets.values()) target.requestRender();
-	}
-
-	segment(): NativeNode {
-		if (!this.node) {
-			let running = 0;
-			for (const session of this.store.values()) if (!session.hasExited) running++;
-			this.node = describeTerminalSegment(this.store.size, running);
-		}
-		return this.node;
-	}
-
-	decorate = (mode: object, base: NativeNode): NativeNode => {
-		if (!this.targets.has(mode)) this.targets.set(mode, renderTargetOf(mode));
-		if (this.store.size === 0) return base;
-		let entry = this.modes.get(mode);
-		if (!entry) {
-			entry = { segment: new TerminalSegment(this) };
-			this.modes.set(mode, entry);
-		}
-		const memo = entry.decorated;
-		if (memo && memo.base === base) return memo.node;
-		const node = withTerminalSegment(parseHudPillsNode(base), entry.segment);
-		entry.decorated = { base, node };
-		return node;
-	};
-
-	dispose(): void {
-		this.watch.dispose();
-		this.requestRender();
-		this.targets.clear();
-	}
-}
-
-type DecoratePills = (mode: object, base: NativeNode) => NativeNode;
-
-interface PillsRegistry {
-	decorate: DecoratePills | undefined;
-	readonly wrapped: WeakSet<object>;
-}
-
-const pillsRegistrySymbol = Symbol.for("omp-actual-terminal.tern-hud-pills");
-const processGlobal = globalThis as typeof globalThis & { [pillsRegistrySymbol]?: PillsRegistry };
-const pillsRegistry: PillsRegistry = processGlobal[pillsRegistrySymbol] ??= { decorate: undefined, wrapped: new WeakSet() };
-
-export function wrapHudPills(prototype: HudPillsPrototype): void {
-	if (pillsRegistry.wrapped.has(prototype)) return;
-	const original = prototype.describeHudPills;
-	prototype.describeHudPills = function describeHudPills(this: object): NativeNode {
-		const base = original.call(this);
-		return pillsRegistry.decorate ? pillsRegistry.decorate(this, base) : base;
-	};
-	pillsRegistry.wrapped.add(prototype);
-}
-
+/** Watches one stored terminal: its removal from the store, its exit, and its screen. */
 class SessionWatch {
-	private readonly watches = new Map<string, { readonly exit: () => void; screen: (() => void) | undefined }>();
+	private watched: { readonly session: ExecSession; readonly unsubscribe: readonly (() => void)[] } | undefined;
 	private readonly unsubscribeStore: () => void;
 
 	constructor(
 		private readonly store: SessionStore,
+		private readonly id: string,
 		private readonly changed: () => void,
-		private readonly shown?: () => string | undefined,
 	) {
 		this.unsubscribeStore = store.subscribe(() => {
 			this.sync();
@@ -562,169 +239,47 @@ class SessionWatch {
 		this.sync();
 	}
 
-	sync(): void {
-		const sessions = sortedSessions(this.store);
-		const shownId = this.shown ? (this.shown() ?? sessions[0]?.id) : undefined;
-		const live = new Set<string>();
-		for (const session of sessions) {
-			live.add(session.id);
-			let watch = this.watches.get(session.id);
-			if (!watch) {
-				watch = { exit: session.onExit(this.changed), screen: undefined };
-				this.watches.set(session.id, watch);
-			}
-			const wantScreen = session.id === shownId;
-			if (wantScreen && !watch.screen) watch.screen = session.onScreenChange(this.changed);
-			if (!wantScreen && watch.screen) {
-				watch.screen();
-				watch.screen = undefined;
-			}
-		}
-		for (const [id, watch] of this.watches) {
-			if (live.has(id)) continue;
-			watch.exit();
-			watch.screen?.();
-			this.watches.delete(id);
-		}
+	private sync(): void {
+		const session = this.store.get(this.id);
+		if (this.watched?.session === session) return;
+		this.unwatch();
+		if (session) this.watched = { session, unsubscribe: [session.onExit(this.changed), session.onScreenChange(this.changed)] };
+	}
+
+	private unwatch(): void {
+		for (const unsubscribe of this.watched?.unsubscribe ?? []) unsubscribe();
+		this.watched = undefined;
 	}
 
 	dispose(): void {
 		this.unsubscribeStore();
-		for (const watch of this.watches.values()) {
-			watch.exit();
-			watch.screen?.();
-		}
-		this.watches.clear();
-	}
-}
-
-const VIEW_TICK_MS = 1000;
-
-class TerminalsSheet implements Component {
-	get nativeOverlay(): Readonly<Record<string, unknown>> {
-		return viewFrame();
-	}
-	private described: NativeNode | undefined;
-	private shown: { readonly id: string; readonly revision: number; readonly screen: StyledScreen } | undefined;
-	private readonly watch: SessionWatch;
-	private readonly tick: NodeJS.Timeout;
-
-	constructor(
-		private readonly store: SessionStore,
-		private readonly requestRender: () => void,
-		private selectedId: string | undefined,
-		private readonly done: (result: SheetResult) => void,
-		private readonly kill: KillSession,
-	) {
-		this.watch = new SessionWatch(store, this.changed, () => this.selectedId);
-		this.tick = setInterval(() => {
-			if (store.values().some((session) => !session.hasExited)) this.changed();
-		}, VIEW_TICK_MS);
-		this.tick.unref?.();
-	}
-
-	private changed = (): void => {
-		this.described = undefined;
-		this.requestRender();
-	};
-
-	private selected(): ExecSession | undefined {
-		const sessions = sortedSessions(this.store);
-		return sessions.find((session) => session.id === this.selectedId) ?? sessions[0];
-	}
-
-	private select(id: string): void {
-		if (id === this.selectedId) return;
-		this.selectedId = id;
-		this.watch.sync();
-		this.changed();
-	}
-
-	private move(delta: number): void {
-		const sessions = sortedSessions(this.store);
-		if (sessions.length === 0) return;
-		const index = Math.max(0, sessions.findIndex((session) => session.id === this.selectedId));
-		this.select(sessions[Math.min(sessions.length - 1, Math.max(0, index + delta))]!.id);
-	}
-
-	private openSelected(): void {
-		const session = this.selected();
-		if (session) this.done({ kind: "open", id: session.id });
-	}
-
-	private killSelected(): void {
-		const session = this.selected();
-		if (!session || session.hasExited) return;
-		void this.kill(session.id).then(this.changed);
-	}
-
-	describe(): NativeNode {
-		if (!this.described) {
-			const sessions = sortedSessions(this.store).filter((session) => session.screenRevision() !== undefined);
-			const selected = sessions.find((session) => session.id === this.selectedId) ?? sessions[0];
-			this.described = describeTerminalsSheet(sessions.map(terminalSummary), selected && this.entry(selected));
-		}
-		return this.described;
-	}
-
-	private entry(session: ExecSession): TerminalEntry | undefined {
-		const revision = session.screenRevision();
-		const shown = this.shown;
-		const screen = shown?.id === session.id && shown.revision === revision ? shown.screen : session.styledScreen();
-		if (revision === undefined || !screen) return undefined;
-		this.shown = { id: session.id, revision, screen };
-		return { ...terminalSummary(session), screen };
-	}
-
-	handleNativeEvent(event: unknown): void {
-		const parsed = parseHudEvent(event);
-		if (!parsed) return;
-		if (parsed.kind === "select") {
-			this.select(parsed.id);
-			if (parsed.activate) this.openSelected();
-			return;
-		}
-		if (parsed.act === CLOSE_ACTION) this.done({ kind: "closed" });
-		else if (parsed.act === OPEN_TERMINAL_ACTION) this.openSelected();
-		else if (parsed.act === KILL_ACTION) this.killSelected();
-	}
-
-	handleInput(data: string): void {
-		if (matchesKey(data, "escape")) this.done({ kind: "closed" });
-		else if (matchesKey(data, "up")) this.move(-1);
-		else if (matchesKey(data, "down")) this.move(1);
-		else if (matchesKey(data, "enter")) this.openSelected();
-		else if (data === "x") this.killSelected();
-	}
-
-	render(): string[] {
-		return [];
-	}
-
-	invalidate(): void {
-		this.described = undefined;
-	}
-
-	dispose(): void {
-		clearInterval(this.tick);
-		this.watch.dispose();
+		this.unwatch();
 	}
 }
 
 const encoder = new TextEncoder();
 
+/**
+ * A person's view of one terminal: its screen with history, keys typed straight into it, Esc to
+ * leave it running, End to end it as a person would. While it is open the terminal takes the
+ * Console's size; leaving gives it back the size its call started it with.
+ */
 class TerminalPage implements Component {
 	private described: NativeNode | undefined;
+	private applied: { readonly session: ExecSession; readonly cols: number; readonly rows: number } | undefined;
+	private left = false;
 	private readonly watch: SessionWatch;
 
 	constructor(
 		private readonly store: SessionStore,
 		private readonly id: string,
+		private readonly host: TernHudHost,
+		private readonly terminalRows: () => number,
 		private readonly requestRender: () => void,
 		private readonly back: () => void,
 		private readonly kill: KillSession,
 	) {
-		this.watch = new SessionWatch(store, this.changed, () => id);
+		this.watch = new SessionWatch(store, id, this.changed);
 	}
 
 	private changed = (): void => {
@@ -740,25 +295,53 @@ class TerminalPage implements Component {
 		return terminalPageFrame(summaryOf(this.session()), this.id);
 	}
 
-	describe(): NativeNode {
-		this.described ??= describeTerminalPage(entryOf(this.session()));
+	describe(cx: DescribeContext): NativeNode {
+		const session = this.session();
+		if (session && !session.hasExited) {
+			this.follow(session, Math.max(20, cx.cols - CONSOLE_INSET_COLS), Math.max(1, Math.max(5, Math.floor(this.terminalRows() * 0.8)) - 4));
+		}
+		this.described ??= describeTerminalPage(entryOf(session), this.host);
 		return this.described;
 	}
 
-	handleNativeEvent(event: unknown): void {
-		const parsed = parseHudEvent(event);
-		if (parsed?.kind !== "action") return;
-		if (parsed.act === BACK_ACTION || parsed.act === CLOSE_ACTION) this.back();
-		else if (parsed.act === KILL_ACTION && this.session() && !this.session()!.hasExited) void this.kill(this.id).then(this.changed);
+	/** The terminal takes the Console's grid; the model reads the same, resized screen meanwhile. */
+	private follow(session: ExecSession, cols: number, rows: number): void {
+		const applied = this.applied;
+		if (applied?.session === session && applied.cols === cols && applied.rows === rows) return;
+		if (session.resize(cols, rows)) this.applied = { session, cols, rows };
+	}
+
+	handleNativeEvent(event: NativeUiEvent): void {
+		if (event.type !== "action") return;
+		if (event.act === LEAVE_ACTION) this.leave();
+		else if (event.act === KILL_ACTION && this.session() && !this.session()!.hasExited) void this.kill(this.id).then(this.changed);
 	}
 
 	handleInput(data: string): void {
 		if (matchesKey(data, "escape")) {
-			this.back();
+			this.leave();
 			return;
 		}
 		const session = this.session();
-		if (session && !session.hasExited) session.write(encoder.encode(data));
+		if (!session || session.hasExited) return;
+		const input = this.host.normalizeInput(data, session.applicationCursorKeys());
+		if (input) session.write(encoder.encode(input));
+	}
+
+	private leave(): void {
+		if (this.left) return;
+		this.left = true;
+		this.release();
+		this.back();
+	}
+
+	/** Gives the terminal back its own size and stops watching it. */
+	private release(): void {
+		this.watch.dispose();
+		const applied = this.applied;
+		if (applied === undefined) return;
+		this.applied = undefined;
+		applied.session.resize(applied.session.size.cols, applied.session.size.rows);
 	}
 
 	render(): string[] {
@@ -770,82 +353,158 @@ class TerminalPage implements Component {
 	}
 
 	dispose(): void {
-		this.watch.dispose();
+		this.release();
 	}
 }
 
-export async function loadTernHudHost(): Promise<TernHudHost> {
-	const [state, modes] = await Promise.all([
-		import("@oh-my-pi/pi-tui/native/state"),
-		import("@oh-my-pi/pi-coding-agent/modes/interactive-mode"),
-	]);
-	return { native: parseNativeRenderingState(state), pills: parseInteractiveModeModule(modes) };
+/** One plugin activation: its terminals, how a person ends one, and its UI when it has one. */
+interface HudActivation {
+	readonly store: () => SessionStore;
+	readonly kill: KillSession;
+	ui: ExtensionContext["ui"] | undefined;
 }
 
-export function mountTerminalHud(pi: ExtensionAPI, store: () => SessionStore, host: TernHudHost, kill: KillSession): void {
-	let ui: ExtensionContext["ui"] | undefined;
-	let provider: SegmentProvider | undefined;
-	let sheetOpen = false;
+interface HudRegistry {
+	/** Weak: a session that ends drops its activation with it (the handlers it registered hold it). */
+	readonly activations: Set<WeakRef<HudActivation>>;
+	readonly wrapped: WeakSet<object>;
+	/** The terminal each open jobs page has selected, for its key handler. */
+	readonly selected: WeakMap<object, string>;
+	readonly decorated: WeakMap<NativeNode, { readonly terminal: string; readonly node: NativeNode }>;
+	host: TernHudHost | undefined;
+}
 
-	const openSheet = async (): Promise<void> => {
-		const host = ui;
-		if (!host || sheetOpen) return;
-		sheetOpen = true;
-		try {
-			let selected: string | undefined;
-			while (ui === host) {
-				const result = await host.custom<SheetResult>(
-					(tui, _theme, _keybindings, done) =>
-						new TerminalsSheet(store(), () => tui.requestRender(), selected, done, kill),
-					{ overlay: true },
-				);
-				if (result.kind === "closed" || ui !== host) return;
-				selected = result.id;
-				await host.custom<void>(
-					(tui, _theme, _keybindings, done) =>
-						new TerminalPage(store(), result.id, () => tui.requestRender(), () => done(), kill),
-					{ overlay: true },
-				);
-			}
-		} finally {
-			sheetOpen = false;
+const registrySymbol = Symbol.for("omp-actual-terminal.tern-hud");
+const processGlobal = globalThis as typeof globalThis & { [registrySymbol]?: HudRegistry };
+const registry: HudRegistry = processGlobal[registrySymbol] ??= {
+	activations: new Set(),
+	wrapped: new WeakSet(),
+	selected: new WeakMap(),
+	decorated: new WeakMap(),
+	host: undefined,
+};
+
+function liveActivations(): HudActivation[] {
+	const live: HudActivation[] = [];
+	for (const ref of registry.activations) {
+		const activation = ref.deref();
+		if (activation === undefined) registry.activations.delete(ref);
+		else live.push(activation);
+	}
+	return live;
+}
+
+const detailKeys = new Map<string, string>();
+
+function detailKeyOf(id: string): string {
+	let key = detailKeys.get(id);
+	if (key === undefined) {
+		key = stableKey(id);
+		detailKeys.set(id, key);
+	}
+	return key;
+}
+
+function terminalForDetail(detailKey: string): string | undefined {
+	for (const activation of liveActivations()) {
+		for (const session of activation.store().values()) {
+			if (detailKeyOf(session.id) === detailKey) return session.id;
 		}
-	};
+	}
+	return undefined;
+}
 
-	const deactivate = (): void => {
-		const ended = provider;
-		if (!ended) return;
-		provider = undefined;
-		// A later activation may already own the wrapper; only withdraw this one's decorator.
-		if (pillsRegistry.decorate === ended.decorate) pillsRegistry.decorate = undefined;
-		ended.dispose();
-	};
+function ownerOf(id: string): HudActivation | undefined {
+	return liveActivations().find((activation) => activation.store().get(id) !== undefined);
+}
 
-	const sync = (): void => {
-		if (ui === undefined || !host.native.isNativeRendering()) {
-			deactivate();
+function decorate(sheet: object, described: NativeNode): NativeNode {
+	const host = registry.host;
+	if (host === undefined) return described;
+	const cached = registry.decorated.get(described);
+	if (cached !== undefined && ownerOf(cached.terminal) !== undefined) {
+		registry.selected.set(sheet, cached.terminal);
+		return cached.node;
+	}
+	const { node, terminal } = decorateJobsPage(described, terminalForDetail, () =>
+		host.actionButton(tr("Open", "打开"), OPEN_TERMINAL_ACTION, { keys: OPEN_KEY }));
+	if (terminal === undefined) {
+		registry.selected.delete(sheet);
+		return described;
+	}
+	registry.selected.set(sheet, terminal);
+	registry.decorated.set(described, { terminal, node });
+	return node;
+}
+
+/**
+ * Wraps the jobs page once per process: its selected terminal gets Open (`o` or the button), which
+ * closes the page and opens that terminal's Console. Every other job keeps the page's own keys and
+ * actions.
+ */
+export function wrapJobsSheet(prototype: JobsSheetPrototype): void {
+	if (registry.wrapped.has(prototype)) return;
+	registry.wrapped.add(prototype);
+	const { describe, handleInput, handleNativeEvent } = prototype;
+	const open = (sheet: JobsSheetPrototype): boolean => {
+		const id = registry.selected.get(sheet);
+		if (id === undefined) return false;
+		const opened = openTerminalPage(id);
+		// The page's own Close action, whatever key closes it; the Console takes the focus the page had.
+		if (opened) handleNativeEvent.call(sheet, { type: "action", key: "", act: "close", mods: [] });
+		return opened;
+	};
+	prototype.describe = function (this: JobsSheetPrototype, cx: DescribeContext): NativeNode {
+		return decorate(this, describe.call(this, cx));
+	};
+	prototype.handleInput = function (this: JobsSheetPrototype, data: string): void {
+		if (matchesKey(data, OPEN_KEY) && open(this)) return;
+		handleInput.call(this, data);
+	};
+	prototype.handleNativeEvent = function (this: JobsSheetPrototype, event: NativeUiEvent): void {
+		if (event.type === "action" && event.act === OPEN_TERMINAL_ACTION) {
+			open(this);
 			return;
 		}
-		if (provider) return;
-		provider = new SegmentProvider(store(), () => void openSheet());
-		wrapHudPills(host.pills);
-		pillsRegistry.decorate = provider.decorate;
+		handleNativeEvent.call(this, event);
 	};
+}
 
-	// The native-rendering listener set is process-global: a listener left behind
-	// keeps this activation, and through it the disposed (e.g. parked) session,
-	// reachable for the life of the process. Subscribe for each session period only.
-	let unsubscribeNative: (() => void) | undefined;
+function openTerminalPage(id: string): boolean {
+	const host = registry.host;
+	const owner = ownerOf(id);
+	const ui = liveActivations().find((activation) => activation.ui !== undefined)?.ui;
+	if (host === undefined || owner === undefined || ui === undefined) return false;
+	void ui.custom<void>(
+		(tui, _theme, _keybindings, done) =>
+			new TerminalPage(owner.store(), id, host, () => tui.terminal.rows, () => tui.requestRender(), () => done(), owner.kill),
+		{ overlay: true },
+	);
+	return true;
+}
+
+export async function loadTernHudHost(): Promise<TernHudHost> {
+	const [panel, overlay, interactive] = await Promise.all([
+		import("@oh-my-pi/pi-tui/overlays/jobs-panel"),
+		import("@oh-my-pi/pi-tui/native/overlay"),
+		import("@oh-my-pi/pi-tui/tools/bash-interactive"),
+	]);
+	return parseTernHudHost(panel, overlay, interactive);
+}
+
+/**
+ * Offers each of this activation's terminals on omp's jobs page and opens its Console from there.
+ * The UI comes from the activation that has one: a subagent's terminals open in its main session.
+ */
+export function mountTerminalHud(pi: ExtensionAPI, store: () => SessionStore, host: TernHudHost, kill: KillSession): void {
+	registry.host = host;
+	wrapJobsSheet(host.sheet);
+	const activation: HudActivation = { store, kill, ui: undefined };
+	registry.activations.add(new WeakRef(activation));
 	pi.on("session_start", async (_event, eventCtx) => {
-		deactivate();
-		ui = eventCtx.hasUI ? eventCtx.ui : undefined;
-		unsubscribeNative ??= host.native.onNativeRenderingChange(sync);
-		sync();
+		activation.ui = eventCtx.hasUI ? eventCtx.ui : undefined;
 	});
 	pi.on("session_shutdown", async () => {
-		unsubscribeNative?.();
-		unsubscribeNative = undefined;
-		deactivate();
-		ui = undefined;
+		activation.ui = undefined;
 	});
 }

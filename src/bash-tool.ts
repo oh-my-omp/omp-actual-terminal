@@ -28,7 +28,7 @@ const baseFields = {
 		description: "Regex. Without `pty: true`, or with `name` (Rust syntax): each matching output line arrives as a follow-up while the command or service runs; a command without `name` becomes a background job like `async`. With `pty: true` and no `name` (JavaScript regex source, no `/` delimiters): starts a `monitor` on the terminal with it as `condition`.",
 	})),
 	title: Type.Optional(Type.String({
-		description: `${PTY_ONLY}, and required there: terminal name in list_sessions, the Terminals view and every notice; one nonblank line, at most ${MAX_TITLE_CHARS} characters kept.`,
+		description: `${PTY_ONLY}, and required there: terminal name in list_sessions, omp's jobs page, the Console and every notice; one nonblank line, at most ${MAX_TITLE_CHARS} characters kept.`,
 	})),
 	shell: Type.Optional(Type.String({
 		description: `${PTY_ONLY}: shell executable to run instead of the session's shell; the terminal keeps the session shell's environment but not its functions, aliases or URL paths. cmd is refused. Write \`command\` in that shell's syntax.`,

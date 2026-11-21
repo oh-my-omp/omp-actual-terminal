@@ -58,7 +58,7 @@ three. Platform-specific cases and the explicit omp install gate may skip; PTY
 availability never does.
 The Node admission regression compiles the actual
 TypeScript entry before executing it in Node, whose strip-only loader cannot
-parse the HUD's parameter properties; it runs against stub packages for the
+parse the Console's parameter properties; it runs against stub packages for the
 names the bundle imports, because the host packages ship TypeScript source.
 The missing-renderer regression runs the built presentation module in a child
 `bun --no-install` whose staged `@oh-my-pi/pi-tui` re-exports the real package
@@ -77,7 +77,7 @@ indexed by concern:
 | Tool-owned topics (`read xd://<tool>/<topic>`) and full-description pointers for all six PTY tools | `src/tool-docs.ts`, `src/topics/*.md`; typed definitions in `src/index.ts` |
 | Session lifecycle (spawn, write, kill, log-stream) | `src/session.ts` |
 | Session registry, LRU eviction, shutdown | `src/session-store.ts` |
-| Terminals as omp jobs: registration before spawn, the job's status at the return, cancels from omp's jobs page; the root agent as owner | `src/terminal-job.ts`; `runTerminal`, `terminateSessionById` and `endRuntime` in `src/index.ts`; `rootAgentOf` in `src/session-binding.ts` |
+| Terminals as omp jobs: registration before spawn, the screen as the job's progress, the job's status and last screen at the return, cancels from omp's jobs page; the root agent as owner | `src/terminal-job.ts`; `runTerminal`, `terminateSessionById` and `endRuntime` in `src/index.ts`; `rootAgentOf` in `src/session-binding.ts` |
 | Per-call observation (`CollectResult`: screen, final screen or none) | `src/collect.ts`; produced by `ExecSession.collect` in `src/session.ts` |
 | Event-driven, monotonic waits: collection, shutdown and kill confirmation | `src/long-wait.ts` |
 | Human duration labels and host UTC time | `src/format-time.ts` |
@@ -96,7 +96,7 @@ indexed by concern:
 | Shell selection & argv construction; omp's cmd.exe test loaded at factory time | `src/shell.ts`; `src/shell-host.ts` |
 | `exec.initFile` plugin setting: parse, path resolution, the source-then-`eval` script for POSIX shells | `src/exec-init.ts`; omp's POSIX-shell test in `src/shell.ts` (`isPosixShell`); read per call in `runTerminal` (`src/index.ts`); `tests/exec-init.test.ts` |
 | omp-only host admission, top-level `loadMode`, bash delegation, argument/result display adapters | `src/omp-presentation.ts` |
-| Tern terminal HUD: pill segment, Terminals view, terminal page | `src/tern-terminal-hud.ts` |
+| Console from omp's jobs page: Open on a terminal job, the full-pane Console, the terminal's size while it is open | `src/tern-terminal-hud.ts`; `resize` in `src/session.ts`, `src/terminal-screen.ts` and `src/pty.ts` (`SpawnedChild`) |
 | Removal of the `omp-unified-exec` Tern plugin that versions up to 0.14.7 installed | `src/tern-plugin-removal.ts` |
 | `term://` resources, read handler and screenshots | `src/terminal-resource.ts`, `src/terminal-url.ts`, `src/terminal-image.ts` |
 | Monitors: conditions, judge monitors, batching, End/match/judgment/reminder notices | `src/monitor-subscription.ts`; screen judgment through omp's judge chain in `src/screen-judge.ts`, reached per judgment through `RuntimeHost.judge` in `src/index.ts`; subscriptions owned by `src/completion.ts` (`startMonitor`) |
@@ -140,8 +140,8 @@ Ask the model to start a long-running command through `bash` with
 `kill_session`. Bash/write/kill must use omp's bash cards, and a `bash` call
 without `pty` must look exactly as without the plugin; monitor/set-on-exit/list
 use omp's default cards.
-For Tern, exercise the pill segment, Terminals view, typed input and Kill in a
-real window as [Tern HUD](#tern-hud) describes.
+For Tern, open a terminal from omp's jobs page and drive its Console in a real
+window as [Tern Console](#tern-console) describes.
 
 For a fresh non-interactive tool execution:
 
@@ -176,7 +176,7 @@ bun test ./tests/long-wait.test.ts ./tests/wake-e2e.test.ts ./tests/terminal-lif
 # Display adapters and direct host-admission checks
 bun test ./tests/omp-presentation.test.ts
 
-# Native Bun PTY-backed HUD lifecycle
+# Console from omp's real jobs page over real Bun PTY sessions
 bun test ./tests/tern-terminal-hud.test.ts ./tests/omp-presentation.test.ts
 ```
 
@@ -269,10 +269,9 @@ actual omp ANSI TUI and Tern path. A missing or reshaped required omp module
 must fail factory loading before tools register, not fall back to another
 rendering.
 
-Tern terminal HUD (pill segment, Terminals view, terminal page):
-`src/tern-terminal-hud.ts`, covered by the real-PTY
-`tests/tern-terminal-hud.test.ts`; requalify in a real Tern window as
-[Tern HUD](#tern-hud) describes.
+The Console and the jobs page's Open: `src/tern-terminal-hud.ts`, covered by
+`tests/tern-terminal-hud.test.ts` on omp's real `JobsSheet` and real PTY sessions;
+requalify in a real Tern window as [Tern Console](#tern-console) describes.
 
 ## Debugging aids
 
@@ -441,19 +440,24 @@ reloads of the same version do not.
 
 `@oh-my-pi/pi-coding-agent/async/job-manager` must still export
 `AsyncJobManagerApi` whose `register(type, label, run, {ownerId, process})`
-returns the `bg_N` id, calls `run` with an abort `signal`, and throws its own
-error at the running-job limit; `acknowledgeDeliveries(ids)` must keep a job's
-result out of delivery and out of the run's awaited work, and `cancel(id)`
-must abort `run` and keep the job `cancelled` whatever `run` returns, and
+returns the `bg_N` id, calls `run` with an abort `signal` and a
+`reportProgress(text)` that sets the job's `progressText`, and throws its own
+error at the running-job limit; `run`'s returned text must become the job's
+`resultText` and its thrown message its `errorText`;
+`acknowledgeDeliveries(ids)` must keep a job's result out of delivery and out
+of the run's awaited work, and `cancel(id)` must abort `run` and keep the job
+`cancelled` whatever `run` returns, and
 change nothing for a job that is no longer running. The bound
 AgentSession must still expose `asyncJobManager`, a subagent's being its
 root's, and `AgentRegistry` entries `parentId`. Through real omp, in a main
 agent and a subagent: a terminal's `bash` result must carry `job_id: bg_N`
 that `write_stdin` and `kill_session` accept; the main session's jobs page and
 `/jobs` must list the terminal under its `title`; an exit 0 must show the job
-completed, a non-zero exit failed and `kill_session` cancelled; cancelling the
-job from the jobs page must end the terminal as the HUD's Kill does; and a
-running terminal alone must not keep the run awaiting background work.
+completed, a non-zero exit failed and `kill_session` cancelled, each with the
+last screen above how it returned on the jobs page and the tray card, whose
+`progressText` takes that text too; cancelling the job from the jobs page must
+end the terminal as the Console's End does; and a running terminal alone must
+not keep the run awaiting background work.
 
 ### Notice delivery, monitors, input waits and lifecycle
 
@@ -532,32 +536,32 @@ render omp's own `bash` results passed to it unchanged.
 Package installation validation must still await the extension factory and
 propagate its rejection.
 
-### Tern HUD
+### Tern Console
 
-`@oh-my-pi/pi-tui/native/state` must still export
-`isNativeRendering`/`onNativeRenderingChange`;
-`@oh-my-pi/pi-coding-agent/modes/interactive-mode` must still export
-`InteractiveMode` whose prototype `describeHudPills` returns an `omp.hud` row
-holding at most one `omp.hud.pill` row (`hidden` when empty) and whose
-instances keep `ui.requestRender`; omp's dock must still describe that row on
-every native frame, describe a component child in a node's children in place
-(no wrapper element) and route its events to that component's
-`handleNativeEvent`, and Tern must still draw a divider between sibling
-`omp.hud.seg` rows of one pill. A custom overlay's `nativeOverlay` role and
-head must still reach Tern's overlay frame with `select`/`activate`/`action`
-events and `handleInput` keys reaching the component, and the view's action
-ids (`omp-actual-terminal.terminal.open`, `kill`, `close`, `back`) must not be
-one of Tern's own actions (0.9.5 consumes `open`, `copy` and `zoom` itself, so
-a button sending `open` without `href`/`path` does nothing); Tern must still
-scope the Background jobs layout under
-`.sf-overlay[data-role='omp.overlay.jobs']` with the `omp.jobs.*` inner roles
-(split, master, detail, status, state, age, id, command, facts, out, label,
-output, nooutput, summary, empty) and key no behavior on them, and draw
-`omp.overlay.console` as a full-pane overlay. In Tern, a `full` overlay's
-`ansi` must still fill the height its action bar leaves under `grow` and a
-fractional `max.h`, and scroll inside itself, and an `ansi` with role
-`omp.jobs.output` must keep colors and follow its newest row within
-`max.h: "16lines"`. Tern's `plugin list --json` (`plugins[].id`),
+`@oh-my-pi/pi-tui/overlays/jobs-panel` must still export `JobsSheet` whose
+prototype holds `describe`, `handleInput` and `handleNativeEvent`; its
+`describe` must still key the selected job's detail (role `omp.jobs.detail`)
+by `stableKey(job id)` and put a spacer before Cancel job in its status row
+(role `omp.jobs.status`), and its `close` action must still close the page
+through its source whatever key `tui.select.cancel` is bound to.
+`@oh-my-pi/pi-tui/native/overlay` must still export
+`actionButton`/`actionBar`, and `@oh-my-pi/pi-tui/tools/bash-interactive`
+`normalizeInputForPty(data, applicationCursorKeys)`. The Console insets the
+terminal's grid 8 columns from the sheet as omp's own Console does
+(`NATIVE_SHEET_INSET_COLS` in `tools/bash-interactive.ts`, not exported):
+compare it on every upgrade. A custom overlay's `nativeOverlay` role and head
+must still reach Tern's overlay frame with `action` events and `handleInput`
+keys reaching the component, and the action ids
+`omp-actual-terminal.terminal.open`, `kill` and `leave` must not be one of
+Tern's own actions (0.9.5 consumes `open`, `copy` and `zoom` itself). omp's
+tray (`@oh-my-pi/pi-coding-agent/modes/tray`) must still draw a job card's
+output from the job's `progressText` and open the jobs page on the card's job
+from its Open, and the jobs page's output pane must still read `progressText`
+while the job runs and `resultText`/`errorText` once it settles
+(`inspectAsyncJob` in `session/async-job-views`). Tern must still draw
+`omp.overlay.console` as a full-pane overlay whose `ansi`
+fills the height its action bar leaves under `grow` and a fractional `max.h`
+and scrolls inside itself. Tern's `plugin list --json` (`plugins[].id`),
 `remove ID --json`, its exact `is linked; use unlink` answer and
 `unlink ID --json` must retain their contract for the removal of the old
 `omp-unified-exec` Tern plugin, with a 75-second timeout covering Tern's
@@ -566,39 +570,35 @@ fractional `max.h`, and scroll inside itself, and an `ansi` with role
 Check it in a real Tern window (`tern --control`, plugins load only in
 windows, not in `tern serve`) with the owner's settings, isolated
 `TERN_CONFIG_DIR` and `TERN_DAEMON_SOCKET`, a running turn, a background agent
-and a background bash job, at 1100×850 and 700px width, in Reader, Spine and
-Console with a light and a dark appearance (`palette "Dark appearance"`;
-`theme dark NAME` only picks the dark theme), both with no Tern plugin and
-with omp-todo-more's extension and Tern plugin. The terminals segment must be
-the last `omp.hud.seg` of omp's single `omp.hud.pill`, with the same height
-and font as the agents and jobs segments and Tern's segment divider at its
-left edge (Tern drops that 1px line at some sub-pixel boundary positions,
-native boundaries included; compare the boundary x with a native-only pill
-before blaming the segment), and no second `omp.hud` row. The Terminals view
-must match the native Background jobs view's card, master and detail widths
-and layout in the same window, and pick a session by click and ↑/↓. Kill and
-`x` must end only the selected running session after confirmed exit; Open /
-Enter must show the full-pane page at the session's full width, with retained
-history still scrollable after model observations and typed keys reaching a
-running `cat`. Esc / Back must return to the view; Close and Esc must leave
-processes alive and the composer usable. Removing the last session removes the
-segment; starting another session immediately adds it again. A Tern config
-holding the old `omp-unified-exec` plugin must list no `omp-unified-exec`
-after loading.
+and a background bash job, at 1100×850 and 700px width, with a light and a
+dark appearance (`palette "Dark appearance"`; `theme dark NAME` only picks the
+dark theme), both with no Tern plugin and with omp-todo-more's extension and
+Tern plugin. A terminal's tray card, its closer look and the jobs page's output
+pane must show its current screen and follow a change within a second; the
+card's Open must show the jobs page with the terminal selected. omp's jobs page
+must offer Open (`o` and a button before Cancel
+job) on a selected terminal job, a subagent's included, and on no other job.
+Open must close the page and show the full-pane Console with the terminal's
+history, typed keys reaching a running `cat`, and the terminal's grid
+following the Console (`stty size`) and returning to its own `cols`/`rows`
+after Esc. Esc must leave the process alive and the composer usable; End must
+end the terminal as a person does; a model `write_stdin` while the Console is
+open must show in it. Other jobs must keep the page's list, detail, Cancel
+job and Close unchanged. A Tern config holding the old `omp-unified-exec`
+plugin must list no `omp-unified-exec` after loading.
 
-## Re-recording the README demos
+## Recording README demos
 
-`docs/assets/demo.*` (Python REPL, Gemini 4 Argon) and
-`docs/assets/demo-lazygit.*` (lazygit, GPT-6.1 Sol) are real omp turns in a
-headless Tern session, filmed by Tern's own `record` scenario command.
-Re-record them when the HUD, the Terminals view or omp's tool cards change
-visibly.
+A README demo is a real omp turn in a headless Tern session, filmed by Tern's
+own `record` scenario command and stored as `docs/assets/OUT.mp4` and
+`OUT.gif`. Record it again when the Console, the jobs page's Open or omp's
+tool cards change visibly.
 
 1. Start an isolated headless Tern with the owner's settings:
    `TERN_CONFIG_DIR=$D/config TERN_DAEMON_SOCKET=$D/daemon.sock tern serve
    --control $D/control.sock --out $D/out`, `$D` under `/tmp`, with
    `settings.json` copied into `$D/config`. omp's native rendering and the
-   HUD need no Tern plugin, so `serve` shows them.
+   Console need no Tern plugin, so `serve` shows them.
 2. Drive it with `tern ctl --control $D/control.sock …`: `size 1120 760`, then
    `run "cd DIR; TMPDIR=/tmp omp --no-extensions -e $PWD/src/index.ts
    --no-session --no-title --model MODEL"` so session logs show `/tmp` rather
@@ -613,12 +613,13 @@ visibly.
 3. Type prompts one character per `type` with `wait 28` between them (a
    prompt cannot contain `"`, which ends the scenario string), and switch to
    `record speed 3` while a model turn runs. A turn has ended when the last
-   `… this turn` text in `tern ctl tree` changes. Locate the terminals segment
-   with `tern ctl dump '[data-role^="omp.hud"]'` and `click` its centre;
-   Enter opens the terminal page, where typed keys reach the session, Escape
-   goes back, and `x` in the view kills the selected session.
-4. `record stop`, then encode `$D/out/serve/NAME.mp4` into
-   `docs/assets/OUT.mp4` and `OUT.gif` (`OUT` is `demo` or `demo-lazygit`):
+   `… this turn` text in `tern ctl tree` changes. Open omp's jobs page with
+   `/jobs`, select the terminal's job and press `o` (or `click` the Open
+   button, located with `tern ctl dump '[data-role="omp.jobs.status"]'`): in
+   the Console typed keys reach the terminal, Escape leaves it running, and
+   End ends it.
+4. `record stop`, then `mkdir -p docs/assets` and encode
+   `$D/out/serve/NAME.mp4` into `docs/assets/OUT.mp4` and `OUT.gif`:
 
 ```bash
 ffmpeg -i NAME.mp4 -vf "scale=1680:-2:flags=lanczos,fps=30" -c:v libx264 \
@@ -629,8 +630,8 @@ ffmpeg -i NAME.mp4 -i palette.png -lavfi \
 ```
 
 Check every frame for account names, home-directory paths and tokens before
-committing. GitHub does not play a repository-relative MP4 inline, so the
-READMEs show the GIF and link the MP4.
+committing. GitHub does not play a repository-relative MP4 inline, so a README
+shows a demo's GIF and links its MP4.
 
 ## Package delivery
 

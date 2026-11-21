@@ -48,6 +48,8 @@ export class ExecSession {
 	readonly startedAt: number;
 	readonly pid: number | undefined;
 	readonly logPath: string;
+	/** The size the call started the terminal with; a Console that resized it restores this size on leaving. */
+	readonly size: { readonly cols: number; readonly rows: number };
 	private log: SessionLog | undefined;
 
 	private screen: TerminalScreen | undefined;
@@ -88,6 +90,7 @@ export class ExecSession {
 		this.lastOutputAtMs = this.startedAt;
 		this.pid = undefined; // set in `start`
 		this.logPath = join(tmpdir(), sessionLogName(id));
+		this.size = { cols: opts.cols ?? DEFAULT_PTY_COLS, rows: opts.rows ?? DEFAULT_PTY_ROWS };
 	}
 
 	static spawn(id: string, opts: SessionSpawnOptions): ExecSession {
@@ -109,8 +112,7 @@ export class ExecSession {
 			return self;
 		}
 
-		const cols = opts.cols ?? DEFAULT_PTY_COLS;
-		const rows = opts.rows ?? DEFAULT_PTY_ROWS;
+		const { cols, rows } = self.size;
 		try {
 			self.child = spawnChild({
 				command: opts.command,
@@ -268,8 +270,17 @@ export class ExecSession {
 		return this.screen?.snapshot();
 	}
 
+	/** The visible screen once the output read so far is parsed; undefined once the screen is released. */
+	settledSnapshot(): Promise<TerminalSnapshot | undefined> {
+		return this.screen?.settledSnapshot() ?? Promise.resolve(undefined);
+	}
+
 	styledScreen(): StyledScreen | undefined {
 		return this.screen?.styledScreen();
+	}
+
+	applicationCursorKeys(): boolean {
+		return this.screen?.applicationCursorKeys() ?? false;
 	}
 
 	screenRevision(): number | undefined {
@@ -385,6 +396,13 @@ export class ExecSession {
 	write(data: Uint8Array): boolean {
 		if (this.state.hasExited) return false;
 		return this.child.write(data);
+	}
+
+	/** Gives the child and the screen model `cols`×`rows`; false once the terminal is gone. */
+	resize(cols: number, rows: number): boolean {
+		if (this.state.hasExited || !this.child.resize(cols, rows)) return false;
+		this.screen?.resize(cols, rows);
+		return true;
 	}
 
 	kill(signal: NodeJS.Signals = "SIGTERM"): void {

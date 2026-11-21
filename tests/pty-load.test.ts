@@ -5,6 +5,7 @@ import { requireBunRuntime, spawnBunPty } from "../src/pty.ts";
 type FakeTerminal = {
 	closed: boolean;
 	write(): number;
+	resize(): void;
 	close(): void;
 };
 
@@ -67,7 +68,7 @@ describe("Bun host admission", () => {
 
 describe("Bun PTY lifecycle", () => {
 	it("replays data and exit when Bun invokes callbacks before spawn returns", () => {
-		const terminal: FakeTerminal = { closed: true, write: () => 0, close() {} };
+		const terminal: FakeTerminal = { closed: true, write: () => 0, resize() {}, close() {} };
 		const subprocess: FakeSubprocess = { pid: 123, terminal, kill() {} };
 		const runtime = {
 			spawn(_command: string[], options: FakeBunSpawnOptions) {
@@ -91,6 +92,7 @@ describe("Bun PTY lifecycle", () => {
 		const terminal: FakeTerminal = {
 			closed: false,
 			write: () => 0,
+			resize() {},
 			close() { this.closed = true; },
 		};
 		const subprocess: FakeSubprocess = { pid: 123, terminal, kill() {} };
