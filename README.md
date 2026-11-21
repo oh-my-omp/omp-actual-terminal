@@ -159,10 +159,11 @@ plain text; explicit `read term://…/screen.png` requests return images.
 actions, so the extension wraps omp's `JobsSheet.prototype` (`describe`,
 `handleInput`, `handleNativeEvent`) once per process. It puts the Open button
 into a copy of the selected terminal's status row and leaves omp's own nodes
-unchanged; any other job's page is the one omp built. If omp no longer keys
-the selected job's detail by its id, or its status row loses the spacer before
-its actions, describing fails with a "requalify" error instead of silently
-dropping Open.
+unchanged; any other job's page is the one omp built. If a selected
+terminal's status row loses the spacer before its actions, describing fails
+with a "requalify" error instead of silently dropping Open. The page cannot
+tell a job that is not a terminal from a detail omp no longer keys by its job
+id, so such an omp change leaves Open absent; omp upgrades requalify that key.
 
 **No Tern plugin.** The Console uses omp's own overlay role
 (`omp.overlay.console`), so Tern's built-in styles draw it. That role is a

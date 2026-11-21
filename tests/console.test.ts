@@ -158,7 +158,8 @@ async function screenShows(session: ExecSession, needle: string): Promise<void> 
 		() => `screen shows ${needle}; screen is ${JSON.stringify(session.styledScreen()?.text)}`);
 }
 
-describe("Console from omp's jobs page", () => {
+// The fixture is a POSIX `sh` reporting `stty size`, the size the kernel gives the terminal.
+describe("Console from omp's jobs page", { skip: process.platform === "win32" }, () => {
 	it("offers Open only on a selected terminal job, before Cancel job, and opens with o or the button", async (t) => {
 		const h = await makeHarness(t);
 		const terminal = h.spawn("bg_1");
@@ -239,7 +240,9 @@ describe("Console from omp's jobs page", () => {
 		component.handleInput?.("ignored");
 		assert.equal(writes.mock.callCount(), 0);
 	});
+});
 
+describe("Open on omp's jobs page", () => {
 	it("names the omp change when the selected terminal's status row loses its spacer", () => {
 		const detail: NativeNode = { k: "col", p: { role: "omp.jobs.detail" }, key: "k1", c: [{ k: "row", p: { role: "omp.jobs.status" }, c: [] }] };
 		assert.throws(

@@ -198,6 +198,11 @@ const DEFAULT_COLORS: Readonly<Record<TerminalAppearance, { readonly fg: string;
 	light: { fg: "rgb:0000/0000/0000", bg: "rgb:ffff/ffff/ffff" },
 };
 
+/** History rows a `cols`-wide grid keeps within `TERMINAL_HISTORY_CELLS`, at least one screen. */
+function historyRows(cols: number, rows: number): number {
+	return Math.max(rows, Math.floor(TERMINAL_HISTORY_CELLS / cols));
+}
+
 function isBlankCell(cell: IBufferCell): boolean {
 	const chars = cell.getChars();
 	return (chars === "" || chars === " ") && cell.isBgDefault() && !cell.isInverse();
@@ -207,7 +212,8 @@ export class TerminalScreen {
 	private size: { cols: number; rows: number };
 	/** The size the last `resize` asked for; it becomes `size` once the writes queued before it are parsed. */
 	private requested: { cols: number; rows: number };
-	private readonly scrollback: number;
+	/** History rows the cell budget allows at the current width. */
+	private scrollback: number;
 	private readonly term: Terminal;
 	private pendingWrites = 0;
 	private flushWaiters: Array<() => void> = [];
@@ -234,7 +240,7 @@ export class TerminalScreen {
 		this.size = { cols, rows };
 		this.requested = this.size;
 		this.appearance = appearance;
-		this.scrollback = Math.max(rows, Math.floor(TERMINAL_HISTORY_CELLS / cols));
+		this.scrollback = historyRows(cols, rows);
 		this.term = new Terminal({ cols, rows, scrollback: this.scrollback, allowProposedApi: true });
 		const encoder = new TextEncoder();
 		this.term.onData((data) => reply(encoder.encode(data)));
@@ -277,7 +283,10 @@ export class TerminalScreen {
 		return this.size.rows;
 	}
 
-	/** Reflows the grid to `cols`×`rows`; queued after pending writes so they parse at the size they were written for. */
+	/**
+	 * Reflows the grid to `cols`×`rows`, keeping history within the cell budget at the new width;
+	 * queued after pending writes so they parse at the size they were written for.
+	 */
 	resize(cols: number, rows: number): void {
 		if (this.disposed || (cols === this.requested.cols && rows === this.requested.rows)) return;
 		const size = { cols, rows };
@@ -286,6 +295,8 @@ export class TerminalScreen {
 			if (this.disposed) return;
 			this.size = size;
 			this.term.resize(cols, rows);
+			this.scrollback = historyRows(cols, rows);
+			this.term.options.scrollback = this.scrollback;
 			this.notifyChange();
 		});
 	}

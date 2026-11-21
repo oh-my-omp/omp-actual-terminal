@@ -31,7 +31,7 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Changed
 
-- Resized the terminal to the Console's size while it is open and restored its previous size on leaving
+- Resized the terminal to the Console's size while it is open, trimming its history to the cell budget at the new width, and restored its previous size on leaving
 - Updated the shared copy of `tern-plugin.ts` to oh-my-omp/shared@a88403a.
 - Sent SIGKILL to an LRU-evicted running terminal that had not exited 2s after its SIGTERM, and marked its job cancelled only once it ended, keeping the job running when it outlived the SIGKILL
 - Ended the main agent's terminals, its subagents' included, when `/new` or a session switch cancels its jobs

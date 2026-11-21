@@ -604,8 +604,8 @@ tool cards change visibly.
    button, located with `tern ctl dump '[data-role="omp.jobs.status"]'`): in
    the Console typed keys reach the terminal, Escape leaves it running, and
    End ends it.
-4. `record stop`, then encode `$D/out/serve/NAME.mp4` into
-   `docs/assets/OUT.mp4` and `OUT.gif`:
+4. `record stop`, then `mkdir -p docs/assets` and encode
+   `$D/out/serve/NAME.mp4` into `docs/assets/OUT.mp4` and `OUT.gif`:
 
 ```bash
 ffmpeg -i NAME.mp4 -vf "scale=1680:-2:flags=lanczos,fps=30" -c:v libx264 \

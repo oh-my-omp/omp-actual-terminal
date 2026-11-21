@@ -61,7 +61,7 @@ Console 都遵循 `OMOMP_LANG`（不区分大小写的 `en` 或 `zh`）。未设
 
 omp 的 ANSI TUI 没有 jobs 页面，因此不提供 Console。工具结果仍是纯文本；显式 `read term://…/screen.png` 请求返回图像。
 
-**「打开」如何并入 omp 的 jobs 页面。** omp 没有给 job 加动作的扩展点，所以本扩展在每个进程里包装一次 omp 的 `JobsSheet.prototype`（`describe`、`handleInput`、`handleNativeEvent`）。它把「打开」按钮放进选中终端状态行的副本里，omp 自己的节点不被修改；其他 job 的页面就是 omp 构建的那一份。如果 omp 不再按 id 给选中 job 的详情加 key，或状态行在动作前不再有 spacer，描述时报 "requalify" 错误，而不是静默不显示「打开」。
+**「打开」如何并入 omp 的 jobs 页面。** omp 没有给 job 加动作的扩展点，所以本扩展在每个进程里包装一次 omp 的 `JobsSheet.prototype`（`describe`、`handleInput`、`handleNativeEvent`）。它把「打开」按钮放进选中终端状态行的副本里，omp 自己的节点不被修改；其他 job 的页面就是 omp 构建的那一份。如果选中终端的状态行在动作前不再有 spacer，描述时报 "requalify" 错误，而不是静默不显示「打开」。页面分不清一个 job 不是终端，还是 omp 不再按 job id 给详情加 key，所以 omp 的这种改动会让「打开」不出现；omp 升级时会重新验证这个 key。
 
 **不需要 Tern 插件。** Console 使用 omp 自己的 overlay role（`omp.overlay.console`），所以由 Tern 的自带样式绘制。这个 role 是 omp 与 Tern 的展示层契约，升级时需重新验证。本扩展会移除早期版本安装的 `omp-unified-exec` Tern 插件，因为它的样式表仍会移动 omp 共享的 widget 容器：在 omp 等待的扩展 factory 中，先执行 Tern 的 `plugin list`，再执行 `plugin remove`（Tern 回答它是链接时改用 `plugin unlink`），然后确认 Tern 不再列出它。没有 `tern` 时什么也不做；Tern 可用但失败时，加载失败并给出它的诊断信息。
 
