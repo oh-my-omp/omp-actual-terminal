@@ -6,6 +6,7 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Changed
 
+- Updated the shared copy of `tern-plugin.ts` to oh-my-omp/shared@a88403a.
 - Updated the shared copy of `todo-read.ts` to oh-my-omp/shared@dcbf622.
 
 ## [0.15.4] - 2026-11-21
