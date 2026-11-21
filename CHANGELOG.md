@@ -28,6 +28,7 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Changed
 
+- Sent SIGKILL to an LRU-evicted running terminal that had not exited 2s after its SIGTERM, and marked its job cancelled only once it ended, keeping the job running when it outlived the SIGKILL
 - Ended the main agent's terminals, its subagents' included, when `/new` or a session switch cancels its jobs
 - Reported the terminal's job as completed on exit 0, failed on failure or timeout, and cancelled once a terminal the plugin ended actually returned, keeping it running when the kill failed
 - Identified terminals by a string `job_id` (`bg_N`) in results, notices and session listings, and took `job_id` in `write_stdin`, `kill_session`, `set_on_exit` and monitor calls

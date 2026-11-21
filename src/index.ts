@@ -749,13 +749,7 @@ async function terminateSessionById(
 	ctx.lifecycle.noteKill(sid);
 	if (origin.kind === "human") ctx.coordinator.monitorEndReason(sid, "human_terminated");
 	session.kill(initial);
-	await waitForExitOrDeadline({ exited: session.exited, durationMs: 2000 });
-	let escalated = false;
-	if (!session.hasExited && !IS_WINDOWS) {
-		session.kill("SIGKILL");
-		escalated = true;
-		await waitForExitOrDeadline({ exited: session.exited, durationMs: 500 });
-	}
+	const escalated = await escalateUntilExit(session);
 	const collected = await session.collect({ deadlineMs: Date.now() + 100 });
 	const killed = session.hasExited;
 	if (killed) {
@@ -770,6 +764,15 @@ async function terminateSessionById(
 		ctx.jobs.get(sid)?.killFailed();
 	}
 	return { session, escalated, collected, killed };
+}
+
+/** After a terminal was signalled: wait for its exit, SIGKILL it if it does not exit, and report whether it took SIGKILL. */
+async function escalateUntilExit(session: ExecSession): Promise<boolean> {
+	await waitForExitOrDeadline({ exited: session.exited, durationMs: 2000 });
+	if (session.hasExited || IS_WINDOWS) return false;
+	session.kill("SIGKILL");
+	await waitForExitOrDeadline({ exited: session.exited, durationMs: 500 });
+	return true;
 }
 
 async function killLeftoverGroup(session: ExecSession): Promise<"none" | "killed" | "survived"> {
@@ -1016,8 +1019,14 @@ function createRuntime(opts: RuntimeOptions): ExtensionCtx {
 			maxSessions: MAX_SESSIONS, lruProtectedCount: LRU_PROTECTED_COUNT,
 			onEvict: (session, reason) => {
 				if (reason !== "lru") return;
-				ctx.jobs.get(session.id)?.cancel();
-				if (!session.hasExited) coordinator.monitorEndReason(session.id, "lru_terminated");
+				const job = ctx.jobs.get(session.id);
+				job?.cancel();
+				if (session.hasExited) return;
+				coordinator.monitorEndReason(session.id, "lru_terminated");
+				// The store sends SIGTERM next; a terminal that outlives SIGKILL keeps its job running.
+				void escalateUntilExit(session).then(() => {
+					if (!session.hasExited) job?.killFailed();
+				});
 			},
 		}),
 		ui: undefined,

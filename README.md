@@ -987,8 +987,9 @@ LIFECYCLE_SWEEP_MS           = 60_000 (lifecycle check interval)
   still running until the SIGKILL lands.
 - **LRU eviction** at 64 sessions takes the oldest non-protected one, preferring
   exited sessions; the 8 most recent are never evicted. A tracked terminal
-  evicted this way gets a `reclaimed` notice naming the cap, and a running
-  one's job shows as cancelled.
+  evicted this way gets a `reclaimed` notice naming the cap. A running one gets
+  SIGTERM, then SIGKILL if it has not exited after 2s, and its job shows as
+  cancelled once it ends.
 - **Observations** are serialized per session; streaming updates, `read term://`,
   monitor and the Tern HUD never consume ordinary observations. A streaming
   update is sent every 250 ms only when the parsed screen, the exit state or
