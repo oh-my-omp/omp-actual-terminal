@@ -4,6 +4,8 @@ All notable changes to this project. **Newest entries go on top.**
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-23
+
 ### Added
 
 - Deferred `unified-exec-notice` sends during active omp compaction via the shared `compact-handoff.ts` compaction-window barrier and registered `omp-actual-terminal` to claim `<harness-provided>` and re-inject the live PTY session & `term://` table post-compaction via `createDeltaStream("omp-actual-terminal/sessions")` when sessions are present.
