@@ -14,6 +14,7 @@ import {
 	registerExecCommandTopics,
 	writeStdinTopicPointers,
 } from "../fork-features/exec-command-docs.ts";
+import { createCompactNoticeSender, registerActualTerminalCompactHandoff } from "../fork-features/compact-handoff-wiring.ts";
 import { bindingContext, bindSession, type HostBindingState, recheckBinding } from "../fork-features/session-binding.ts";
 import { MonitorError, type MonitorWatchStatus } from "../fork-features/monitor-subscription.ts";
 import { loadInitFile, shellScript } from "../fork-features/exec-init.ts";
@@ -1003,6 +1004,7 @@ export function activate(
 	let binding: HostBindingState = { kind: "pending" };
 	let hostCwd: string | undefined;
 	let agentId: string | undefined;
+	let activeSessionManager: object | undefined;
 	let cachedStopConfig: StopConfig = DEFAULT_STOP_CONFIG;
 	const reportedConfigProblems = new Set<string>();
 	const warnConfigProblems = (load: Awaited<ReturnType<typeof loadStopConfig>>): void => {
@@ -1057,14 +1059,18 @@ export function activate(
 			}
 		},
 	};
-	const attachment: RuntimeHost = {
-		kind: "attached",
-		send: (message) => {
+	const compactNoticeSender = createCompactNoticeSender({
+		sendImmediate: (message) => {
 			pi.sendMessage(
 				{ customType: "unified-exec-notice", content: message.content, display: true, details: message.details },
 				{ deliverAs: "aside" },
 			);
 		},
+		sessionManager: () => activeSessionManager,
+	});
+	const attachment: RuntimeHost = {
+		kind: "attached",
+		send: (message) => compactNoticeSender.send(message),
 		gate,
 		judge: stopHost && screenJudge(stopHost, () => (binding.kind === "bound" ? binding.session : undefined)),
 		graceReclaimNotice: async () => {
@@ -1096,6 +1102,7 @@ export function activate(
 	};
 	const parked = parkedRuntimes<ExtensionCtx>();
 	let ctx = createRuntime({ attachment, agentHost, lifecycleClock, appearance, shellPath, shellHost, invalidateGithubCache, pluginSettings });
+	registerActualTerminalCompactHandoff(pi, () => ctx.store);
 	const resolveSessionTarget = (target: string): { readonly sid: number; readonly session: ExecSession | undefined } => {
 		if (/^\d+$/.test(target)) {
 			const sid = Number(target);
@@ -1254,6 +1261,7 @@ export function activate(
 	pi.on("session_start", async (_event, eventCtx) => {
 		if (approvalHost && binding.kind === "pending") binding = bindSession(approvalHost, bindingContext(eventCtx));
 		hostCwd = eventCtx.cwd;
+		activeSessionManager = eventCtx.sessionManager;
 		agentId = bindingContext(eventCtx).agentId;
 		const agent = agentHost && agentId !== undefined ? agentHost.identify(agentId) : undefined;
 		const resumed = agent && parked.take(agent.generation);
@@ -1262,6 +1270,7 @@ export function activate(
 		} else {
 			ctx.shuttingDown = false; // reload/new/resume re-arms the extension
 			// Never resurrect notices or wakes from a previous session.
+			compactNoticeSender.clearQueued();
 			ctx.notices.reset();
 			ctx.coordinator.reset();
 			ctx.lifecycle.restart();
@@ -1276,6 +1285,8 @@ export function activate(
 
 	const rebind = async (eventCtx: ExtensionContext): Promise<void> => {
 		hostCwd = eventCtx.cwd;
+		activeSessionManager = eventCtx.sessionManager;
+		compactNoticeSender.clearQueued();
 		binding = recheckBinding(binding, bindingContext(eventCtx));
 		ctx.notices.forgetResponse();
 		await refreshStopConfig(hostCwd);
@@ -1288,6 +1299,7 @@ export function activate(
 	});
 
 	pi.on("session_tree", async (_event, eventCtx) => {
+		activeSessionManager = eventCtx.sessionManager;
 		ctx.ui = eventCtx.ui;
 		updateRunningSessionsUi(ctx, { showWidget: true, notifyTree: runningSessions(ctx).length > 0 });
 	});
@@ -1301,6 +1313,8 @@ export function activate(
 			parked.hold(agentHost, agent.generation, ctx);
 			return;
 		}
+		activeSessionManager = undefined;
+		compactNoticeSender.clearQueued();
 		if (getTerminalUrlRuntime() === urlRuntime) setTerminalUrlRuntime(undefined);
 		await ctx.end();
 		await parked.settled();
