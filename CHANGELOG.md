@@ -4,6 +4,10 @@ All notable changes to this project. **Newest entries go on top.**
 
 ## [Unreleased]
 
+### Changed
+
+- Updated the shared copy of `internal-url.ts` to oh-my-omp/shared@b601064.
+
 ## [0.15.5] - 2026-11-22
 
 ### Changed
