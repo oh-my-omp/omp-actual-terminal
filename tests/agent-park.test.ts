@@ -1,8 +1,10 @@
 import { strict as assert } from "node:assert";
 import { afterEach, describe, it } from "node:test";
+import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import type { AgentRef, AgentStatus, RegistryEvent } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSessionHandle } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { type AgentGeneration, type AgentHost, type AgentIdentity, parkedRuntimes, parseAgentHost } from "../fork-features/agent-park.ts";
+import { initializeTerminalUrls } from "../fork-features/terminal-url.ts";
 import { activate } from "../src/index.ts";
 import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";
 
@@ -98,6 +100,7 @@ function makeHarness(): Harness {
 	const harness: Harness = {
 		sent,
 		async emit(event) {
+			if (event === "session_start") await initializeTerminalUrls();
 			for (const h of handlers[event] ?? []) await h({}, stubCtx);
 		},
 		async call(name, params) {
@@ -111,7 +114,17 @@ function makeHarness(): Harness {
 			sweep?.();
 		},
 		async listed(id) {
-			return (await harness.call("list_sessions", {})).details.sessions?.find((s) => s.session_id === id);
+			await initializeTerminalUrls();
+			const res = await InternalUrlRouter.instance().resolve("term://");
+			const text = typeof res.content === "string" ? res.content : res.content.toString("utf8");
+			const line = text.split("\n").find((l) => l.includes(`session_id=${id} `));
+			if (!line) return undefined;
+			const pidMatch = /\bpid=(\d+)/.exec(line);
+			return {
+				session_id: id,
+				pid: pidMatch ? Number(pidMatch[1]) : undefined,
+				running: line.includes("[running]"),
+			};
 		},
 	};
 	live.add(harness);
@@ -173,8 +186,9 @@ describe("a subagent's terminals across omp's park", { skip: process.platform ==
 		assert.ok(alive(pid), "the park killed nothing");
 		const revived = await revive();
 		assert.equal((await revived.listed(sid))?.running, true);
-		const killed = await revived.call("kill_session", { session_id: sid });
-		assert.equal(killed.details.killed, true);
+		const killed = await InternalUrlRouter.instance().write(`term://${sid}/kill`, "");
+		assert.equal(killed?.isError, undefined);
+		assert.match(killed!.content[0]!.type === "text" ? killed!.content[0]!.text : "", /killed: true/);
 		assert.equal(alive(pid), false);
 		assert.equal(first.sent.length + revived.sent.length, 0);
 	});

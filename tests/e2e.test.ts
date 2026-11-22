@@ -5,9 +5,11 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { describe, it } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { DEFAULT_MAX_BYTES } from "@earendil-works/pi-coding-agent";
+import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
+import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import { activate, EmptyPollRemovedError } from "../src/index.ts";
 import { readTerminal } from "../fork-features/terminal-resource.ts";
+import { initializeTerminalUrls } from "../fork-features/terminal-url.ts";
 import { IS_WINDOWS } from "../src/shell.ts";
 import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";
 
@@ -92,9 +94,65 @@ function makeHarness(shellPath: () => string | undefined = STUB_SHELL_PATH) {
 		sentMessages,
 		uiEvents,
 		async emit(event: string, evt: any = {}) {
+			if (event === "session_start") await initializeTerminalUrls();
 			const results = [];
 			for (const h of handlers[event] ?? []) results.push(await h(evt, stubCtx));
 			return results;
+		},
+		async readTerm(url = "term://"): Promise<string> {
+			await initializeTerminalUrls();
+			const res = await InternalUrlRouter.instance().resolve(url);
+			return typeof res.content === "string" ? res.content : res.content.toString("utf8");
+		},
+		async writeTerm(url: string, content: string) {
+			await initializeTerminalUrls();
+			return InternalUrlRouter.instance().write(url, content);
+		},
+		async listSessions() {
+			const text = await this.readTerm("term://");
+			const headerMatch = /\((\d+) running, (\d+) returned\)/.exec(text);
+			const runningCount = headerMatch ? Number(headerMatch[1]) : 0;
+			const returnedCount = headerMatch ? Number(headerMatch[2]) : 0;
+			const lines = text.split("\n");
+			const sessions: Array<{
+				session_id: number;
+				title: string;
+				running: boolean;
+				exit_code?: number;
+				pid?: number;
+				shell?: string;
+				log_path?: string;
+				lifecycle_returned?: string;
+			}> = [];
+			for (let i = 0; i < lines.length; i++) {
+				const line = lines[i]!;
+				const m = /^\s+session_id=(\d+)\s+("(?:\\.|[^"])*")\s+\[([^\]]+)\]/.exec(line);
+				if (!m) continue;
+				const sid = Number(m[1]);
+				const title = JSON.parse(m[2]!);
+				const status = m[3]!;
+				const pidMatch = /\bpid=(\d+)/.exec(line);
+				const exitMatch = /exit_code=(\d+)/.exec(status);
+				const lifeMatch = /\[returned ([^;]+);/.exec(line);
+				let shell: string | undefined;
+				let logPath: string | undefined;
+				for (let j = i + 1; j < lines.length && lines[j]!.startsWith("        "); j++) {
+					const sub = lines[j]!.trim();
+					if (sub.startsWith("shell: ")) shell = sub.slice("shell: ".length);
+					if (sub.startsWith("log: ")) logPath = sub.slice("log: ".length);
+				}
+				sessions.push({
+					session_id: sid,
+					title,
+					running: status === "running",
+					exit_code: exitMatch ? Number(exitMatch[1]) : undefined,
+					pid: pidMatch ? Number(pidMatch[1]) : undefined,
+					shell,
+					log_path: logPath,
+					lifecycle_returned: lifeMatch?.[1],
+				});
+			}
+			return { text, running_count: runningCount, returned_count: returnedCount, sessions };
 		},
 	};
 }
@@ -127,7 +185,7 @@ describe("unified-exec e2e", () => {
 			const sid = started.details.session_id;
 			const url: string = started.details.terminal_url;
 			assert.ok(await waitFor(async () => (await readTerminal(url.slice(7))).screenLines.some((line) => line.includes("unobserved-marker"))));
-			for (const input of [{}, { chars: "" }, { chars_b64: "" }, { chars_b64: " \n" }]) {
+			for (const input of [{}, { text: "" }, { raw_base64: "" }, { raw_base64: " \n" }]) {
 				await assert.rejects(h.call("write_stdin", { session_id: sid, ...input }), (error: unknown) => {
 					assert.ok(error instanceof EmptyPollRemovedError);
 					assert.equal(error.code, "empty_poll_removed");
@@ -136,11 +194,11 @@ describe("unified-exec e2e", () => {
 					return true;
 				});
 			}
-			const after = await h.call("write_stdin", { session_id: sid, chars: "after\n" });
+			const after = await h.call("write_stdin", { session_id: sid, text: "after", enter: true });
 			assert.equal(after.details.running, true);
 			assert.match(after.details.output, /unobserved-marker/);
 			assert.match(after.details.output, /after/);
-			for (const input of [{}, { chars: "" }, { chars_b64: "" }]) {
+			for (const input of [{}, { text: "" }, { raw_base64: "" }]) {
 				await assert.rejects(h.call("write_stdin", { session_id: -1, ...input }), EmptyPollRemovedError);
 			}
 		} finally {
@@ -150,7 +208,8 @@ describe("unified-exec e2e", () => {
 
 	it("leaves presentation hooks to the omp factory rather than the tool core", () => {
 		const h = makeHarness();
-		for (const name of ["exec_command", "write_stdin", "set_on_exit", "monitor", "kill_session", "list_sessions"]) {
+		assert.deepEqual(Object.keys(h.tools).sort(), ["exec_command", "monitor", "write_stdin"]);
+		for (const name of ["exec_command", "write_stdin", "monitor"]) {
 			assert.equal(h.tools[name]?.renderCall, undefined, `${name} has a core renderCall`);
 			assert.equal(h.tools[name]?.renderResult, undefined, `${name} has a core renderResult`);
 		}
@@ -310,7 +369,7 @@ describe("unified-exec e2e", () => {
 			const pollUpdates: Array<{ details: { shell?: string } }> = [];
 			const polled = await h.call(
 				"write_stdin",
-				{ session_id: sid, chars: "still-original\n", yield_time_ms: 1000 },
+				{ session_id: sid, text: "still-original", enter: true, yield_time_ms: 1000 },
 				undefined,
 				(partial: { details: { shell?: string } }) => pollUpdates.push(partial),
 			);
@@ -320,23 +379,14 @@ describe("unified-exec e2e", () => {
 			assert.ok(pollUpdates.length > 0, "expected a streaming update while the old PTY remains live");
 			assert.ok(pollUpdates.every((update) => update.details.shell === "/bin/sh"));
 
-			const listed = await h.call("list_sessions", {});
-			const entries: Array<{ session_id: number; shell?: string }> = listed.details.sessions;
-			assert.equal(entries.find((entry) => entry.session_id === sid)?.shell, "/bin/sh");
-			assert.ok(
-				listed.details && typeof listed.details === "object" && "sessions" in listed.details,
-			);
-			assert.ok(Array.isArray(listed.details.sessions));
-			const structuredEntry: unknown = listed.details.sessions.find(
-				(entry: unknown) => typeof entry === "object" && entry !== null && "session_id" in entry && entry.session_id === sid,
-			);
-			assert.ok(structuredEntry && typeof structuredEntry === "object" && "shell" in structuredEntry);
-			assert.equal(structuredEntry.shell, "/bin/sh");
-			assert.ok(listed.content[0].text.includes("shell: /bin/sh"));
+			const listed = await h.listSessions();
+			assert.equal(listed.sessions.find((entry) => entry.session_id === sid)?.shell, "/bin/sh");
+			assert.ok(listed.text.includes("shell: /bin/sh"));
 
-			const killed = await h.call("kill_session", { session_id: sid });
-			assert.equal(killed.details.killed, true, JSON.stringify(killed.details));
-			assertReportedShell(killed, "/bin/sh");
+			const killed = await h.writeTerm(`term://${sid}/kill`, "");
+			const killText = killed!.content[0]!.type === "text" ? killed!.content[0]!.text : "";
+			assert.match(killText, /^\[killed\]/);
+			assert.match(killText, /shell: \/bin\/sh/);
 		} finally {
 			if (previous === undefined) delete process.env.SHELL;
 			else process.env.SHELL = previous;
@@ -355,8 +405,8 @@ describe("unified-exec e2e", () => {
 			assert.doesNotMatch(r.details.output, /must-not-run/);
 			assert.equal(h.uiEvents.notifications.length, 1, JSON.stringify(h.uiEvents.notifications));
 			assert.match(h.uiEvents.notifications[0]?.message ?? "", /pi-shell/);
-			const listed = await h.call("list_sessions", {});
-			assert.equal(listed.details.running_count, 0);
+			const listed = await h.listSessions();
+			assert.equal(listed.running_count, 0);
 		} finally {
 			await h.emit("session_shutdown");
 		}
@@ -388,8 +438,8 @@ describe("unified-exec e2e", () => {
 
 		const projection = await readTerminal(r1.details.terminal_url.slice(7));
 		assert.ok(projection.screenLines.some((line) => line.includes("tock 3")));
-		const listed = await h.call("list_sessions", {});
-		assert.equal(listed.details.sessions.find((s: { session_id: number }) => s.session_id === sid)?.exit_code, 0);
+		const listed = await h.listSessions();
+		assert.equal(listed.sessions.find((s) => s.session_id === sid)?.exit_code, 0);
 		await h.emit("session_shutdown");
 	});
 
@@ -409,8 +459,24 @@ describe("unified-exec e2e", () => {
 		assert.ok(await waitFor(() => h.sentMessages.some((m) => m.customType === "unified-exec-notice" && m.content.includes("monitor ended:"))));
 		const projection = await readTerminal(r1.details.terminal_url.slice(7));
 		assert.ok(projection.screenLines.some((line) => line.includes("tick 5")));
-		const listed = await h.call("list_sessions", {});
-		assert.equal(listed.details.sessions.find((s: { session_id: number }) => s.session_id === sid)?.exit_code, 0);
+		const listed = await h.listSessions();
+		assert.equal(listed.sessions.find((s) => s.session_id === sid)?.exit_code, 0);
+		await h.emit("session_shutdown");
+	});
+
+	it("write term://<id>/monitor cancel cancels an active monitor", async () => {
+		const h = makeHarness();
+		await h.emit("session_start");
+		const r1 = await h.call("exec_command", { title: "Monitored", cmd: "sleep 10", yield_time_ms: 250 });
+		const sid = r1.details.session_id;
+		const started = await h.call("monitor", { session_id: sid });
+		assert.equal(started.details.status, "started");
+		const cancelled = await h.writeTerm(`term://${sid}/monitor`, "cancel");
+		assert.deepEqual(JSON.parse(cancelled!.content[0]!.type === "text" ? cancelled!.content[0]!.text : "{}"), {
+			session_id: sid,
+			status: "cancelled",
+		});
+		await h.writeTerm(`term://${sid}/kill`, "");
 		await h.emit("session_shutdown");
 	});
 
@@ -424,7 +490,7 @@ describe("unified-exec e2e", () => {
 
 		const r2 = await h.call("write_stdin", {
 			session_id: sid,
-			chars: "hello from stdin\n",
+			text: "hello from stdin\n",
 			yield_time_ms: 400,
 		});
 		assert.ok(r2.details.output.includes("hello from stdin"), `got ${JSON.stringify(r2.details)}`);
@@ -432,7 +498,7 @@ describe("unified-exec e2e", () => {
 
 		const r3 = await h.call("write_stdin", {
 			session_id: sid,
-			chars: "\x04",
+			special_key: "ctrl-d",
 			yield_time_ms: 5000,
 		});
 		assert.equal(r3.details.exit_code, 0);
@@ -440,7 +506,7 @@ describe("unified-exec e2e", () => {
 		await h.emit("session_shutdown");
 	});
 
-	it("kill_session terminates a stuck process", async () => {
+	it("write term://<id>/kill terminates a stuck process", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "sleep 60",
@@ -449,15 +515,16 @@ describe("unified-exec e2e", () => {
 		const sid = r1.details.session_id;
 
 		const t0 = Date.now();
-		const r2 = await h.call("kill_session", { session_id: sid });
+		const r2 = await h.writeTerm(`term://${sid}/kill`, "");
 		const dt = Date.now() - t0;
-		assert.ok(dt < 2500, `kill_session took too long: ${dt}ms`);
-		assert.equal(r2.details.session_id, sid);
-		assert.ok(r2.details.signal === "SIGTERM" || r2.details.exit_code != null, `details=${JSON.stringify(r2.details)}`);
+		assert.ok(dt < 2500, `kill took too long: ${dt}ms`);
+		const text = r2!.content[0]!.type === "text" ? r2!.content[0]!.text : "";
+		assert.match(text, /killed: true/);
+		assert.match(text, new RegExp(`session_id: ${sid}`));
 		await h.emit("session_shutdown");
 	});
 
-	it("kill_session bounds delayed noisy output while the log retains the complete stream", async () => {
+	it("write term://<id>/kill bounds delayed noisy output while the log retains the complete stream", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		try {
@@ -478,24 +545,16 @@ describe("unified-exec e2e", () => {
 				"noisy command did not finish its output burst",
 			);
 
-			const killed = await h.call("kill_session", { session_id: sid });
-			assert.equal(killed.details.operation, "kill_session");
-			assert.equal(killed.details.status, "killed");
-			assert.equal(killed.details.running, false);
-			assert.equal(killed.details.killed, true);
-			assert.equal(Object.hasOwn(killed.details, "final_output"), false);
-			assert.ok(Buffer.byteLength(killed.details.output, "utf8") <= DEFAULT_MAX_BYTES);
-			assert.ok(killed.details.output.split("\n").length <= killed.details.terminal.rows);
-			assert.match(killed.details.output, /kill-line-4000-/);
-			assert.match(killed.content[0].text, /^\[killed\]/);
+			const killed = await h.writeTerm(`term://${sid}/kill`, "");
+			const text = killed!.content[0]!.type === "text" ? killed!.content[0]!.text : "";
+			assert.match(text, /^\[killed\]/);
+			assert.match(text, /kill-line-4000-/);
 			assert.ok(
-				Buffer.byteLength(killed.content[0].text, "utf8") < DEFAULT_MAX_BYTES + 4096,
-				`kill content unexpectedly large: ${Buffer.byteLength(killed.content[0].text, "utf8")}`,
+				Buffer.byteLength(text, "utf8") < DEFAULT_MAX_BYTES + 4096,
+				`kill content unexpectedly large: ${Buffer.byteLength(text, "utf8")}`,
 			);
 
 			const fullLog = readFileSync(logPath, "utf8");
-			// Count by content, not line start: ConPTY (Windows) writes its own
-			// init and window-title sequences in front of the first lines.
 			const logged = new Set([...fullLog.matchAll(/kill-line-(\d+)-/g)].map((m) => Number(m[1])));
 			assert.equal(logged.size, 4000);
 			assert.ok(logged.has(1) && logged.has(4000));
@@ -504,7 +563,7 @@ describe("unified-exec e2e", () => {
 		}
 	});
 
-	it("kill_session escalates to SIGKILL when SIGTERM is trapped", async () => {
+	it("write term://<id>/kill escalates to SIGKILL when SIGTERM is trapped", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "trap '' TERM; sleep 60",
@@ -512,24 +571,22 @@ describe("unified-exec e2e", () => {
 			yield_time_ms: 300, });
 		const sid = r1.details.session_id;
 		assert.ok(typeof sid === "number");
-		const r2 = await h.call("kill_session", { session_id: sid });
+		const r2 = await h.writeTerm(`term://${sid}/kill`, "");
+		const text = r2!.content[0]!.type === "text" ? r2!.content[0]!.text : "";
 		if (IS_WINDOWS) {
-			// Don't assert
-			// on exit timing (taskkill on a loaded runner can exceed the 2s
-			// window) — assert the retained session is no longer running instead.
-			assert.equal(r2.details.escalated, false, `details=${JSON.stringify(r2.details)}`);
-			const l = await h.call("list_sessions", {});
+			assert.match(text, /escalated: false/);
+			const l = await h.listSessions();
 			assert.ok(
-				!l.details.sessions.some((s: any) => s.session_id === sid && s.running),
-				`session ${sid} still listed as running: ${JSON.stringify(l.details)}`,
+				!l.sessions.some((s) => s.session_id === sid && s.running),
+				`session ${sid} still listed as running: ${l.text}`,
 			);
 		} else {
-			assert.equal(r2.details.escalated, true, `details=${JSON.stringify(r2.details)}`);
+			assert.match(text, /escalated: true/);
 		}
 		await h.emit("session_shutdown");
 	});
 
-	it("kill_session ends a session whose shell exited while a group member holds the terminal", { skip: process.platform !== "linux" }, async () => {
+	it("write term://<id>/kill ends a session whose shell exited while a group member holds the terminal", { skip: process.platform !== "linux" }, async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		let bg = 0;
@@ -540,9 +597,9 @@ describe("unified-exec e2e", () => {
 			bg = Number(/bg=(\d+)/.exec(r1.details.output)?.[1]);
 			assert.ok(bg > 0, r1.details.output);
 			assert.match(r1.details.note ?? "", /shell has exited/, JSON.stringify(r1.details));
-			const killed = await h.call("kill_session", { session_id: r1.details.session_id });
-			assert.equal(killed.details.killed, true, JSON.stringify(killed.details));
-			assert.throws(() => process.kill(bg, 0), "the held-open group member survived kill_session");
+			const killed = await h.writeTerm(`term://${r1.details.session_id}/kill`, "");
+			assert.match(killed!.content[0]!.type === "text" ? killed!.content[0]!.text : "", /killed: true/);
+			assert.throws(() => process.kill(bg, 0), "the held-open group member survived kill");
 			bg = 0;
 		} finally {
 			if (bg > 0) {
@@ -555,18 +612,18 @@ describe("unified-exec e2e", () => {
 		}
 	});
 
-	it("list_sessions enumerates live sessions", async () => {
+	it("read term:// enumerates live sessions", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "sleep 10", yield_time_ms: 300 });
 		const r2 = await h.call("exec_command", { title: "Test command", cmd: "sleep 11", yield_time_ms: 300 });
-		const l = await h.call("list_sessions", {});
-		assert.equal(l.details.running_count, 2, `details=${JSON.stringify(l.details)}`);
-		const ids = l.details.sessions.map((s: any) => s.session_id);
+		const l = await h.listSessions();
+		assert.equal(l.running_count, 2, l.text);
+		const ids = l.sessions.map((s) => s.session_id);
 		assert.ok(ids.includes(r1.details.session_id));
 		assert.ok(ids.includes(r2.details.session_id));
-		await h.call("kill_session", { session_id: r1.details.session_id });
-		await h.call("kill_session", { session_id: r2.details.session_id });
+		await h.writeTerm(`term://${r1.details.session_id}/kill`, "");
+		await h.writeTerm(`term://${r2.details.session_id}/kill`, "");
 		await h.emit("session_shutdown");
 	});
 
@@ -584,13 +641,13 @@ describe("unified-exec e2e", () => {
 		if (!widgetContent) assert.fail(`widget=${JSON.stringify(widget)}`);
 		assert.ok(widgetContent[0].includes("1 session still running"), `widget=${JSON.stringify(widget)}`);
 		assert.ok(widgetContent.some((line) => line.includes(`#${sid}`)), `widget=${JSON.stringify(widget)}`);
-		assert.ok(widgetContent.some((line) => line.includes("set_on_exit") || line.includes("write_stdin")), `widget=${JSON.stringify(widget)}`);
+		assert.ok(widgetContent.some((line) => line.includes("term://") || line.includes("write_stdin")), `widget=${JSON.stringify(widget)}`);
 		assert.ok(
 			h.uiEvents.notifications.some((n) => n.type === "warning" && n.message.includes("still running after /tree")),
 			`notifications=${JSON.stringify(h.uiEvents.notifications)}`,
 		);
 
-		await h.call("kill_session", { session_id: sid });
+		await h.writeTerm(`term://${sid}/kill`, "");
 		assert.equal(h.uiEvents.statuses.get("unified-exec.sessions"), undefined);
 		assert.equal(h.uiEvents.widgets.get("unified-exec.sessions")?.content, undefined);
 		await h.emit("session_shutdown");
@@ -611,8 +668,8 @@ describe("unified-exec e2e", () => {
 			`status did not clear: ${h.uiEvents.statuses.get("unified-exec.sessions")}`,
 		);
 
-		const r2 = await h.call("list_sessions", {});
-		assert.equal(r2.details.sessions.find((s: { session_id: number }) => s.session_id === sid)?.exit_code, 0);
+		const r2 = await h.listSessions();
+		assert.equal(r2.sessions.find((s) => s.session_id === sid)?.exit_code, 0);
 		await h.emit("session_shutdown");
 	});
 
@@ -632,8 +689,8 @@ describe("unified-exec e2e", () => {
 			`widget did not clear: ${JSON.stringify(h.uiEvents.widgets.get("unified-exec.sessions"))}`,
 		);
 
-		const r2 = await h.call("list_sessions", {});
-		assert.equal(r2.details.sessions.find((s: { session_id: number }) => s.session_id === sid)?.exit_code, 0);
+		const r2 = await h.listSessions();
+		assert.equal(r2.sessions.find((s) => s.session_id === sid)?.exit_code, 0);
 		await h.emit("session_shutdown");
 	});
 
@@ -658,9 +715,9 @@ describe("unified-exec e2e", () => {
 		assert.ok(widget.includes(`#${longSid}`), `widget=${widget}`);
 		assert.ok(!widget.includes(`#${shortSid}`), `widget=${widget}`);
 
-		const listed = await h.call("list_sessions", {});
-		assert.equal(listed.details.sessions.find((s: { session_id: number }) => s.session_id === shortSid)?.exit_code, 0);
-		await h.call("kill_session", { session_id: longSid });
+		const listed = await h.listSessions();
+		assert.equal(listed.sessions.find((s) => s.session_id === shortSid)?.exit_code, 0);
+		await h.writeTerm(`term://${longSid}/kill`, "");
 		await h.emit("session_shutdown");
 	});
 
@@ -672,8 +729,8 @@ describe("unified-exec e2e", () => {
 		assert.ok(r1.details.session_id);
 		assert.ok(r2.details.session_id);
 		await h.emit("session_shutdown");
-		const l = await h.call("list_sessions", {});
-		assert.equal(l.details.running_count, 0);
+		const l = await h.listSessions();
+		assert.equal(l.running_count, 0);
 	});
 
 	it("session_shutdown racing exec_command creation does not orphan the child", async () => {
@@ -688,8 +745,8 @@ describe("unified-exec e2e", () => {
 		const unconfirmed = r.details.running === true && /exit not confirmed/.test(r.details.failure_message ?? "");
 		assert.ok(reportedExit || unconfirmed, JSON.stringify(r.details));
 		await h.emit("session_start");
-		const l = await h.call("list_sessions", {});
-		assert.deepEqual(l.details.sessions, [], JSON.stringify(l.details));
+		const l = await h.listSessions();
+		assert.deepEqual(l.sessions, [], l.text);
 		await h.emit("session_shutdown");
 	});
 
@@ -705,8 +762,8 @@ describe("unified-exec e2e", () => {
 		assert.equal(r.details.signal, "SIGKILL", JSON.stringify(r.details));
 		assert.equal(r.details.shell, "/bin/bash", JSON.stringify(r.details));
 		await h.emit("session_start");
-		const l = await h.call("list_sessions", {});
-		assert.deepEqual(l.details.sessions, [], JSON.stringify(l.details));
+		const l = await h.listSessions();
+		assert.deepEqual(l.sessions, [], l.text);
 		assert.throws(() => execFileSync("pgrep", ["-f", `slee[p] ${marker}`]), "trapping child must be dead");
 		await h.emit("session_shutdown");
 	});
@@ -723,11 +780,11 @@ describe("unified-exec e2e", () => {
 			assert.ok(typeof sid === "number", JSON.stringify(r1.details));
 			const logPath: string = r1.details.log_path;
 			assert.ok(await waitFor(() => readFileSync(logPath, "utf8").includes("trap-ready")), "SIGTERM trap was not installed");
-			const listed: Array<{ session_id: number; pid: number }> = (await h.call("list_sessions", {})).details.sessions;
+			const listed = (await h.listSessions()).sessions;
 			const pid = listed.find((s) => s.session_id === sid)?.pid;
 			assert.ok(typeof pid === "number");
 
-			const inflight = h.call("write_stdin", { session_id: sid, chars: "x", yield_time_ms: 500 });
+			const inflight = h.call("write_stdin", { session_id: sid, text: "x", yield_time_ms: 500 });
 			await h.emit("session_shutdown"); // releases the terminal now; returns after the SIGKILL escalation
 			const r = await inflight;
 			assert.equal(r.details.running, true, JSON.stringify(r.details));
@@ -761,8 +818,8 @@ describe("unified-exec e2e", () => {
 				reason,
 				targetSessionFile: reason === "new" || reason === "resume" || reason === "fork" ? "/tmp/next.jsonl" : undefined,
 			});
-			const l = await h.call("list_sessions", {});
-			assert.equal(l.details.running_count, 0);
+			const l = await h.listSessions();
+			assert.equal(l.running_count, 0);
 		});
 	}
 
@@ -778,9 +835,9 @@ describe("unified-exec e2e", () => {
 		assert.ok(dt < 2000, `should have returned near abort time; dt=${dt}`);
 		assert.ok(typeof r.details.session_id === "number", `${JSON.stringify(r.details)}`);
 		const sid = r.details.session_id;
-		const list = await h.call("list_sessions", {});
-		assert.ok(list.details.sessions.some((s: any) => s.session_id === sid));
-		await h.call("kill_session", { session_id: sid });
+		const list = await h.listSessions();
+		assert.ok(list.sessions.some((s) => s.session_id === sid));
+		await h.writeTerm(`term://${sid}/kill`, "");
 		await h.emit("session_shutdown");
 	});
 
@@ -788,17 +845,16 @@ describe("unified-exec e2e", () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		await assert.rejects(
-			() => h.call("write_stdin", { session_id: 9999, chars: "hi\n" }),
+			() => h.call("write_stdin", { session_id: 9999, text: "hi\n" }),
 			/unknown session_id/,
 		);
 		await h.emit("session_shutdown");
 	});
 
-	it("kill_session on unknown id returns found: false", async () => {
+	it("write term://<id>/kill on unknown id throws", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
-		const r = await h.call("kill_session", { session_id: 9999 });
-		assert.equal(r.details.found, false);
+		await assert.rejects(() => h.writeTerm("term://9999/kill", ""), /No such session: 9999/);
 		await h.emit("session_shutdown");
 	});
 
@@ -827,29 +883,28 @@ describe("unified-exec e2e", () => {
 		await h.emit("session_shutdown");
 	});
 
-
-
-	it("list_sessions entries include log_path", async () => {
+	it("read term:// entries include log_path", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "sleep 10", yield_time_ms: 200 });
-		const l = await h.call("list_sessions", {});
-		assert.equal(l.details.running_count, 1);
-		const entry = l.details.sessions[0];
+		const l = await h.listSessions();
+		assert.equal(l.running_count, 1);
+		const entry = l.sessions[0]!;
 		assert.equal(entry.session_id, r1.details.session_id);
 		assert.equal(entry.log_path, r1.details.log_path);
-		assert.ok(existsSync(entry.log_path));
-		await h.call("kill_session", { session_id: r1.details.session_id });
+		assert.ok(entry.log_path && existsSync(entry.log_path));
+		await h.writeTerm(`term://${r1.details.session_id}/kill`, "");
 		await h.emit("session_shutdown");
 	});
 
-	it("kill_session details include log_path", async () => {
+	it("write term://<id>/kill text includes log_path", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "sleep 10", yield_time_ms: 200 });
 		const sid = r1.details.session_id;
-		const r2 = await h.call("kill_session", { session_id: sid });
-		assert.equal(r2.details.log_path, r1.details.log_path);
+		const r2 = await h.writeTerm(`term://${sid}/kill`, "");
+		const text = r2!.content[0]!.type === "text" ? r2!.content[0]!.text : "";
+		assert.ok(text.includes(`log_path: ${r1.details.log_path}`));
 		await h.emit("session_shutdown");
 	});
 
@@ -877,8 +932,8 @@ describe("unified-exec e2e", () => {
 					assert.doesNotMatch(result.details.output, /fallback-must-not-run/);
 					assertReportedShell(result, missingShell);
 				}
-				const listed = await h.call("list_sessions", {});
-				assert.equal(listed.details.running_count, 0);
+				const listed = await h.listSessions();
+				assert.equal(listed.running_count, 0);
 			}
 		} finally {
 			if (previous === undefined) delete process.env.SHELL;
@@ -914,27 +969,33 @@ describe("unified-exec e2e", () => {
 		}
 	});
 
+	it("write term://<id>/kill normalizes signal names (content and ?signal= query)", async () => {
+		const h = makeHarness();
+		await h.emit("session_start");
+		const r1 = await h.call("exec_command", { title: "Test command", cmd: "sleep 60", yield_time_ms: 300 });
+		const sid1 = r1.details.session_id;
+		assert.ok(typeof sid1 === "number");
+		const r2 = await h.writeTerm(`term://${sid1}/kill`, "term");
+		assert.match(r2!.content[0]!.type === "text" ? r2!.content[0]!.text : "", /requested_signal: SIGTERM/);
 
-	it("kill_session normalizes signal names (lowercase, no SIG prefix)", async () => {
+		const r3 = await h.call("exec_command", { title: "Test command 2", cmd: "sleep 60", yield_time_ms: 300 });
+		const sid2 = r3.details.session_id;
+		const r4 = await h.writeTerm(`term://${sid2}/kill?signal=int`, "");
+		assert.match(r4!.content[0]!.type === "text" ? r4!.content[0]!.text : "", /requested_signal: SIGINT/);
+		await h.emit("session_shutdown");
+	});
+
+	it("write term://<id>/kill rejects unknown signal names instead of silently no-opping", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "sleep 60", yield_time_ms: 300 });
 		const sid = r1.details.session_id;
-		assert.ok(typeof sid === "number");
-		const r2 = await h.call("kill_session", { session_id: sid, signal: "term" });
-		assert.equal(r2.details.session_id, sid);
-		assert.ok(r2.details.signal === "SIGTERM" || r2.details.exit_code != null, JSON.stringify(r2.details));
+		await assert.rejects(() => h.writeTerm(`term://${sid}/kill`, "BOGUS"), /unknown signal/);
+		await h.writeTerm(`term://${sid}/kill`, "");
 		await h.emit("session_shutdown");
 	});
 
-	it("kill_session rejects unknown signal names instead of silently no-opping", async () => {
-		const h = makeHarness();
-		await h.emit("session_start");
-		await assert.rejects(() => h.call("kill_session", { session_id: 1, signal: "BOGUS" }), /unknown signal/);
-		await h.emit("session_shutdown");
-	});
-
-	it("list_sessions retains returned sessions with exit info until lifecycle reclamation", async () => {
+	it("read term:// retains returned sessions with exit info until lifecycle reclamation", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "sleep 0.3", yield_time_ms: 250 });
@@ -942,20 +1003,20 @@ describe("unified-exec e2e", () => {
 		assert.ok(typeof sid === "number", JSON.stringify(r1.details));
 		assert.ok(await waitFor(() => h.uiEvents.statuses.get("unified-exec.sessions") === undefined), "exit was not observed");
 
-		const l1 = await h.call("list_sessions", {});
-		assert.equal(l1.details.running_count, 0, JSON.stringify(l1.details));
-		const entry = l1.details.sessions.find((s: any) => s.session_id === sid);
-		assert.ok(entry, `returned session should remain listed: ${JSON.stringify(l1.details)}`);
+		const l1 = await h.listSessions();
+		assert.equal(l1.running_count, 0, l1.text);
+		const entry = l1.sessions.find((s) => s.session_id === sid);
+		assert.ok(entry, `returned session should remain listed: ${l1.text}`);
 		assert.equal(entry.running, false);
 		assert.equal(entry.exit_code, 0);
 		assert.equal(entry.title, "Test command");
-		assert.equal(l1.details.returned_count, 1);
-		assert.equal(entry.lifecycle.returned, "normally");
+		assert.equal(l1.returned_count, 1);
+		assert.equal(entry.lifecycle_returned, "normally");
 
-		const l2 = await h.call("list_sessions", {});
-		assert.equal(l2.details.sessions.length, 1, JSON.stringify(l2.details));
-		assert.equal(l2.details.sessions[0].session_id, sid);
-		assert.equal(l2.details.sessions[0].running, false);
+		const l2 = await h.listSessions();
+		assert.equal(l2.sessions.length, 1, l2.text);
+		assert.equal(l2.sessions[0]!.session_id, sid);
+		assert.equal(l2.sessions[0]!.running, false);
 		await h.emit("session_shutdown");
 	});
 
@@ -965,8 +1026,8 @@ describe("unified-exec e2e", () => {
 		const r1 = await h.call("exec_command", { title: "Test command", cmd: "trap '' TERM; sleep 30", shell: "bash", yield_time_ms: 300 });
 		const sid = r1.details.session_id;
 		assert.ok(typeof sid === "number", JSON.stringify(r1.details));
-		const l = await h.call("list_sessions", {});
-		const pid = l.details.sessions.find((s: any) => s.session_id === sid)?.pid;
+		const l = await h.listSessions();
+		const pid = l.sessions.find((s) => s.session_id === sid)?.pid;
 		assert.ok(typeof pid === "number");
 
 		await h.emit("session_shutdown");
@@ -991,7 +1052,7 @@ describe("unified-exec e2e", () => {
 			"partial updates should carry session_id",
 		);
 		if (r.details.session_id !== undefined) {
-			await h.call("kill_session", { session_id: r.details.session_id });
+			await h.writeTerm(`term://${r.details.session_id}/kill`, "");
 		}
 		await h.emit("session_shutdown");
 	});
@@ -1008,7 +1069,7 @@ describe("unified-exec e2e", () => {
 			assert.notDeepEqual(updates[i], updates[i - 1], `update ${i} repeats update ${i - 1}`);
 		}
 		assert.ok(updates.length <= 3, `silence streams no repeats; got ${updates.length} updates`);
-		await h.call("kill_session", { session_id: r.details.session_id });
+		await h.writeTerm(`term://${r.details.session_id}/kill`, "");
 		await h.emit("session_shutdown");
 	});
 
@@ -1022,8 +1083,8 @@ describe("unified-exec e2e", () => {
 		h.uiEvents.selectResponses.push((options) => options.find((o) => o.startsWith(`#${sid} `)));
 		await h.invokeCommand("unified-exec-sessions");
 
-		const l = await h.call("list_sessions", {});
-		assert.equal(l.details.running_count, 0, JSON.stringify(l.details));
+		const l = await h.listSessions();
+		assert.equal(l.running_count, 0, l.text);
 		assert.ok(
 			h.uiEvents.notifications.some((n) => n.message.includes("killed 1")),
 			JSON.stringify(h.uiEvents.notifications),
@@ -1040,8 +1101,8 @@ describe("unified-exec e2e", () => {
 		h.uiEvents.selectResponses.push((options) => options.find((o) => o.startsWith("Kill all")));
 		await h.invokeCommand("unified-exec-sessions");
 
-		const l = await h.call("list_sessions", {});
-		assert.equal(l.details.running_count, 0, JSON.stringify(l.details));
+		const l = await h.listSessions();
+		assert.equal(l.running_count, 0, l.text);
 		await h.emit("session_shutdown");
 	});
 

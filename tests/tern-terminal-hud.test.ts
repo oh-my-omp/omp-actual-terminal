@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { join, parse, sep } from "node:path";
 import { describe, it, type TestContext } from "node:test";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { NativeChild, NativeNode } from "@earendil-works/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { NativeChild, NativeNode } from "@oh-my-pi/pi-tui";
 import {
 	BACK_ACTION,
 	CLOSE_ACTION,

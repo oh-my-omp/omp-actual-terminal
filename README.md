@@ -32,13 +32,13 @@ Model turns play at 3× speed. Full-resolution video:
 [docs/assets/demo-lazygit.mp4](docs/assets/demo-lazygit.mp4).
 
 This is a fork of [iamwrm/pi-unified-exec](https://github.com/iamwrm/pi-unified-exec),
-a Pi port of codex's `unified_exec`. The original tools (`exec_command`,
-`write_stdin`, `set_on_exit`, `kill_session`, `list_sessions`) retain their
-session model; the fork runs every session in a PTY under the host's shell
-setting, leaves short commands to the host's `bash`, and adds terminal
-reads/images and `monitor` for omp. The full list
-of fork changes, why each exists and how to requalify them on omp/Tern
-upgrades is in [fork-features/README.md](fork-features/README.md).
+a Pi port of codex's `unified_exec`. It exposes three top-level tools
+(`exec_command`, `write_stdin`, `monitor`) plus `term://` URL read/write
+handlers (listing, inspecting, screenshots, `/kill`, `/on_exit`, `/monitor`),
+runs every session in a PTY under the host's shell setting, and leaves short
+commands to the host's `bash`. The full list of fork changes, why each exists and
+how to requalify them on omp/Tern upgrades is in
+[fork-features/README.md](fork-features/README.md).
 
 ## Install
 
@@ -124,7 +124,7 @@ results remain in English.
   the next run, only a terminal problem (`abnormal_return`) starts a turn. A
   finished subagent follows the same rule. See [Finished work](#finished-work).
 - **Opt-in completion wake.** `on_exit: "wake"` resumes the agent once when a
-  backgrounded process exits unobserved; `set_on_exit` disarms it.
+  backgrounded process exits unobserved; `write term://<id>/on_exit` (`"none"`) disarms it.
 - **Await matching output.** `monitor` watches an existing session without
   consuming output, wakes for matching batches, for new screens a judge model
   finds meet a stated intent, or for completion, and defaults to at most ten
@@ -134,9 +134,9 @@ results remain in English.
   settles on a prompt the agent has not seen (a debconf/whiptail dialog such as
   the sshd_config question during `apt upgrade`, `[Y/n]`, a password, a pager)
   wakes the agent.
-- **omp-native presentation.** `exec_command`, `write_stdin` and
-  `kill_session` render through omp's own bash card (command line, output,
-  exit chip, error tone), in the ANSI TUI and in Tern alike.
+- **omp-native presentation.** `exec_command` and `write_stdin` render through
+  omp's own bash card (command line, output, exit chip, error tone), in the ANSI
+  TUI and in Tern alike.
 - **A terminal HUD in Tern.** Watch, scroll back through, type into and kill
   the model's sessions without a tool call.
 
@@ -157,7 +157,7 @@ When omp renders natively in Tern and a session exists:
   runs, Open), the whole command, its directory, PID, size, start time and
   linked log, and its coloured output following the newest line. The footer
   shows how many run and are stored, and Close. ↑/↓ or a click picks a
-  session, `x` / Kill ends it the way `kill_session` does, Esc / Close leaves.
+  session, `x` / Kill ends it the way `write term://<id>/kill` does, Esc / Close leaves.
   The card's header icon is the one Tern draws for the jobs view.
 - **Terminal page.** Enter / Open (or a double click) shows the session as a
   full-pane page framed like omp's Console, headed by its title: its retained
@@ -202,32 +202,33 @@ command deadline, and nothing restarts a process that exits. Observe a session
 with `monitor` and `read term://…`, and send input with `write_stdin`; its output is the
 rendered terminal screen (see [Terminal output](#terminal-output)).
 
-All six are top-level omp tools (`loadMode: "essential"`), not `xd://` devices.
-Read `xd://<tool>` for any of the six tools' concise descriptions and topic pointers.
-Each tool supplies its own topic bodies through `docTopics()`:
+All three tools (`exec_command`, `write_stdin`, `monitor`) register as top-level
+omp tools (`loadMode: "essential"`). Shared documentation topics are registered
+under `tool://exec_command/<topic>` (`fork-features/topics/*.md`):
 
-- `xd://exec_command/interactive`: input bytes, monitoring output and remote-script quoting.
-- `xd://exec_command/lifecycle`: terminal reclaim and exit wakes.
-- `xd://exec_command/waiting`: command lifetime, completion-only monitors and non-consuming reads.
-- `xd://write_stdin/input`: verbatim input, empty-input rejection, cancellation and observed exits.
-- `xd://set_on_exit/wake`: arming, disarming and queued exit wakes.
-- `xd://monitor/subscription`: future-output matching, judge monitors, cancellation, reminders and input-wait alerts.
-- `xd://kill_session/termination`: signals, wake/monitor suppression and retained terminals.
-- `xd://list_sessions/inventory`: inventory state, output reads and exit-wake effects.
+- `tool://exec_command/pty-io`: interactive input (`write_stdin`), remote heredocs, and `term://` read/write URLs.
+- `tool://exec_command/pty-lifecycle`: terminal reclaim, `on_exit` wakes, and `monitor`.
 
-The Markdown files ship in `fork-features/topics/`; topic reads need no external
-configuration extension. An unknown topic returns a missing-topic error.
+Session inventory and control (`list_sessions`, `kill_session`, `set_on_exit`,
+and `monitor` cancellation) are handled directly through `term://` URLs:
+
+- `read term://` — list all stored PTY sessions (`session_id`, `key`, `title`, status, URL).
+- `write term://<id_or_key>/kill` — terminate a session (optional body signal or `?signal=`).
+- `write term://<id_or_key>/on_exit` — set exit wake policy (`"wake"` or `"none"`).
+- `write term://<id_or_key>/monitor` — cancel an active monitor (`"cancel"`).
+
+An unknown `tool://` topic returns a missing-topic error.
 
 | Param | Type | Default | Notes |
 |---|---|---|---|
 | `cmd` | string | — | Shell command. Required. |
-| `title` | string | — | Required start title naming the terminal in `list_sessions`, the Terminals view and every notice about it. Folded to one line; at most 80 characters are kept. A missing or blank title fails the call before anything starts. |
+| `title` | string | — | Required start title naming the terminal in `read term://`, the Terminals view and every notice about it. Folded to one line; at most 80 characters are kept. A missing or blank title fails the call before anything starts. |
 | `workdir` | string | host session cwd | Working directory. The default is read from the host for each call; a `cd` inside a session never changes it. A relative path resolves against that session cwd. A missing path or a non-directory fails with `Working directory does not exist: <path>` / `Working directory is not a directory: <path>` (the host bash's wording) and starts nothing. |
 | `shell` | string | omp `shellPath`, else `SHELL`, else pi-shell on Windows (`omp bash`), else `bash` | Shell executable; see [Shell selection](#shell-selection). `cmd` is refused; `powershell` / `pwsh` get `-Command`; every other shell, pi-shell included, gets `-c`. |
 | `cols` | number | `120` | PTY width. Clamped to [20, 500]. |
 | `rows` | number | `80` | PTY height. Clamped to [5, 300]. |
 | `yield_time_ms` | number | `10_000` | How long this call stays attached waiting for output (not the command's lifetime), clamped to [250, 30_000]. |
-| `on_exit` | `"none"` \| `"wake"` | `"none"` | Policy for exits nobody is observing. `"wake"`: one follow-up prompt resumes the agent — only when the human explicitly wants auto-resume. Change later with `set_on_exit`. |
+| `on_exit` | `"none"` \| `"wake"` | `"none"` | Policy for exits nobody is observing. `"wake"`: one follow-up prompt resumes the agent — only when the human explicitly wants auto-resume. Change later with `write term://<id>/on_exit`. |
 
 Response body (running, short output, no truncation):
 
@@ -312,10 +313,9 @@ bash 5.3, so POSIX syntax runs there.
 
 The result header and `details` carry the
 resolved executable as `shell`: for short commands, started sessions and spawn
-failures alike. `write_stdin` results, streaming updates, `kill_session`
-results and `list_sessions` entries repeat the shell the session started
-with; they never select again. The shell is metadata only and is never added
-to `output`.
+failures alike. `write_stdin` results and streaming updates repeat the shell the
+session started with; they never select again. The shell is metadata only and is
+never added to `output`.
 
 #### Init file
 
@@ -355,7 +355,7 @@ alias omp='omp --hide-thinking'
   `eval`, because zsh parses a whole `-c` string before running any of it
   and would not expand aliases defined in the same string. Bash also gets
   `shopt -s expand_aliases`. Errors in `cmd` may therefore be reported at
-  `(eval)` positions. Results, `list_sessions`, notices and approval still show
+  `(eval)` positions. Results, `read term://`, notices and approval still show
   `cmd` as given; what the file prints appears in the terminal and the log.
 - An alias applies only where `cmd` names it as a command word, including
   after `&&` or `;`. Nested shells, scripts and wrappers like `xargs` or
@@ -400,20 +400,25 @@ size; the raw stream goes only to `log_path`.
   divided by `cols` rows). Lines scrolled past it before a call reports them
   set `history_may_be_truncated: true`; they are only in the log.
 
-#### Reading retained terminals on omp
+#### Reading and controlling terminals on omp via `term://`
 
-Results and `list_sessions` include a process-unique `terminal_url`, such as
-`term://3-9f2c1a7e-…`. What a human sees in the terminal remains readable
-independently of result consumption:
+Results and `read term://` include a process-unique `terminal_url`, such as
+`term://3-9f2c1a7e-…` (and every `term://<id_or_key>` endpoint accepts either the
+numeric `session_id` or the session `key`). What a human sees in the terminal
+remains readable independently of result consumption:
 
-| Read path | Content |
+| Operation / Path | Effect / Content |
 |---|---|
-| `term://<key>` | All retained normal-screen physical rows, without trailing spaces or trailing empty rows. While a full-screen program (e.g. `tmux`) holds the alternate screen, that screen instead, which has no history; normal history is back once it leaves. |
-| `term://<key>/screen` | The active screen, including an active alternate screen. |
-| `term://<key>/screen.png` | An image of the full active grid, with cell colours and attributes. |
-| `term://<key>/page/2` | The second page of the rows `term://<key>` reads; each page has the session's `rows` rows. |
-| `term://<key>/page/-1` | The last page; negative page numbers count from the end. |
-| `term://<key>:raw:1-2` / `term://<key>:raw:-3` | The existing `read` head/tail selectors, with no context rows in raw mode. |
+| `read term://` | Lists all stored PTY sessions (`session_id`, `key`, `title`, running/exited status, `term://<id>` URL). Does not count as reading terminal output. |
+| `read term://<key>` | All retained normal-screen physical rows, without trailing spaces or trailing empty rows. While a full-screen program (e.g. `tmux`) holds the alternate screen, that screen instead, which has no history; normal history is back once it leaves. |
+| `read term://<key>/screen` | The active screen, including an active alternate screen. |
+| `read term://<key>/screen.png` | An image of the full active grid, with cell colours and attributes. |
+| `read term://<key>/page/2` | The second page of the rows `term://<key>` reads; each page has the session's `rows` rows. |
+| `read term://<key>/page/-1` | The last page; negative page numbers count from the end. |
+| `read term://<key>:raw:1-2` / `term://<key>:raw:-3` | The existing `read` head/tail selectors, with no context rows in raw mode. |
+| `write term://<id>/kill` | Terminates the session (optional body signal or `?signal=`, default `SIGTERM`, escalates to `SIGKILL` after 2s). |
+| `write term://<id>/on_exit` | Sets the exit wake policy (`"wake"` or `"none"`) without killing the process. |
+| `write term://<id>/monitor` | Cancels an active monitor (`"cancel"`). |
 
 Reads do not consume output, advance observation markers or remove sessions.
 A complete read of a terminal whose command has returned counts as reading it
@@ -450,18 +455,20 @@ and `monitor`.
 | Param | Type | Default | Notes |
 |---|---|---|---|
 | `session_id` | number | — | Required. |
-| `chars` | string | omitted | Text decoded with C-style escapes, then written verbatim with nothing appended. Mutually exclusive with `chars_b64`; decoded input must be nonempty. |
-| `chars_b64` | string | omitted | Base64-encoded input bytes. Binary-safe; decoded input must be nonempty. Mutually exclusive with `chars`. |
+| `text` | string | omitted | Literal text to send verbatim (no C-style escape decoding). |
+| `enter` | boolean | `false` | When `true`, appends a newline/Enter after `text` (or sends Enter alone). |
+| `special_key` | string | omitted | Control or navigation key: `"ctrl-c"`, `"ctrl-d"`, `"ctrl-z"`, `"esc"`, `"tab"`, `"up"`, `"down"`, `"left"`, `"right"`, `"backspace"`, `"delete"`. |
+| `raw_base64` | string | omitted | Raw base64-encoded bytes (binary-safe escape hatch). |
 | `yield_time_ms` | number | `250` | Attachment window after writing, not a process timeout. Clamped to [250, 30_000]; fractional milliseconds round down. |
 
 #### Waiting on long-running commands
 
-1. Read `terminal_url` (or its `/screen`) for state and content without consuming
-   ordinary observations.
+1. Read `term://` (or `terminal_url` / `/screen`) for state and content without
+   consuming ordinary observations.
 2. Use `monitor` with a condition for future output events, or without a condition
    to await output closure and process completion. Send input only with `write_stdin`.
 3. `on_exit` defaults to `"none"`. Use `"wake"` only when the human explicitly
-   wants auto-resume; `set_on_exit(session_id, on_exit: "none")` disarms it
+   wants auto-resume; `write term://<id>/on_exit` with `"none"` disarms it
    without killing.
 4. A completion observed directly by an input-bearing tool result consumes the
    wake; an attachment window ending or cancellation leaves it armed. Monitor
@@ -471,52 +478,28 @@ The attachment window never kills a process. Cache warming during waits is the
 host's business, not this package's. Raw logs have no size cap; see **Logs**
 under [Semantics](#semantics) for their seven-day compression.
 
-#### Control bytes and escapes in `chars`
-
-`chars` is decoded as a C-style escape string before it is written.
-
-| Escape | Produces |
-|---|---|
-| `\\n` `\\r` `\\t` `\\b` `\\f` `\\v` | LF CR TAB BS FF VT |
-| `\\0` | NUL (0x00) |
-| `\\a` | BEL (0x07) |
-| `\\e` | ESC (0x1B) |
-| `\\xHH` (2 hex) | single byte |
-| `\\uHHHH` (4 hex) | Unicode char |
-| `\\u{H…H}` (1–6 hex) | Unicode code point |
-| `\\\\` `\\"` `\\'` | literal `\` `"` `'` |
-| `\\X` not in the list above | preserved literally (both chars) |
-| Raw bytes in the string | pass through untouched |
+#### Zero-escape input in `write_stdin`
 
 ```
-write_stdin chars="\x03"          → Ctrl-C   (0x03)
-write_stdin chars="\x04"          → Ctrl-D   (0x04)
-write_stdin chars="\x1b:wq\n"     → ESC + ":wq" + LF     (vim save+quit)
-write_stdin chars="\x1b[A"        → ESC + "[A"           (up arrow)
-write_stdin chars="C:\\\\temp"    → "C:\\temp"           (must escape \)
-write_stdin chars_b64="G3s6wgo="  → exact 5 decoded bytes
+write_stdin session_id=1, special_key="ctrl-c"                 → Ctrl-C   (0x03)
+write_stdin session_id=1, special_key="ctrl-d"                 → Ctrl-D   (0x04)
+write_stdin session_id=1, special_key="esc", text=":wq", enter=true → ESC + ":wq" + CR/LF
+write_stdin session_id=1, special_key="up"                     → ESC + "[A"
+write_stdin session_id=1, text="C:\\temp", enter=true          → literal C:\temp + Enter
+write_stdin session_id=1, raw_base64="G3s6wgo="                → exact 5 decoded bytes
 ```
 
-Passing both `chars` and `chars_b64`, or malformed base64, rejects the call.
-Bytes reach the PTY verbatim: nothing (no `\r` or `\n`) is appended, so ESC and
-arrow keys go alone. The terminal's line discipline turns `\x03` (Ctrl-C) into
-SIGINT for the foreground process group, and `\x04` (Ctrl-D) at the start of a
-line into end-of-file for a program reading in canonical mode; programs in raw
-mode read both as keys. Submit a line with `\r` (Enter): it works everywhere,
-while `\n` does not run a line in legacy Windows consoles.
+Malformed base64 or zero total bytes rejects the call (`empty_poll_removed`).
+`special_key` maps directly to control/ANSI bytes, and `text` is written verbatim
+without escape decoding; `enter: true` appends the Enter sequence for the session.
 
-### `set_on_exit`
+### Disarming or arming `on_exit` (`write term://<id>/on_exit`)
 
-Changes the `on_exit` policy **without killing the process**.
-
-| Param | Type | Default | Notes |
-|---|---|---|---|
-| `session_id` | number | — | Required. |
-| `on_exit` | `"none"` \| `"wake"` | — | `"none"` disarms a pending wake (also for coordinator tombstones after eviction). `"wake"` arms it while the session is still running in the store. |
-
-Status tokens: `disarmed`, `already_none`, `armed`, `already_armed`,
-`too_late`; unknown ids return `found: false`. Disarming cannot recall a
-follow-up already queued to the host.
+Writing `"wake"` or `"none"` to `term://<id>/on_exit` changes the `on_exit` policy
+**without killing the process**: `"none"` disarms a pending wake (also for
+coordinator tombstones after eviction), while `"wake"` arms it while the session
+is still running in the store. Disarming cannot recall a follow-up already queued
+to the host.
 
 ### `on_exit: "wake"` — completion notifications
 
@@ -534,7 +517,7 @@ follow-up already queued to the host.
 - The wake is an `exit_wake` [terminal notice](#terminal-notices): bounded
   metadata only (session id, title, exit code/signal, command, cwd, elapsed
   time, terminal reading address, log path, failure) — never raw output.
-- `kill_session`, the `/unified-exec-sessions` command, LRU eviction of a live
+- `write term://<id>/kill`, the `/unified-exec-sessions` command, LRU eviction of a live
   process and `session_shutdown` suppress the wake; a kill that fails restores
   it. A naturally exited wake session evicted before notification keeps a
   bounded tombstone so its wake is still delivered.
@@ -547,12 +530,13 @@ the process or consuming ordinary observations.
 | Param | Type | Default | Notes |
 |---|---|---|---|
 | `session_id` | number | — | Existing running session. |
-| `action` | `"start"` \| `"cancel"` | `"start"` | Start/replaces the session's one subscription, or silently cancel it. |
 | `condition` | string | omitted | JavaScript regex source (no `/` delimiters); omit it and `judge` to return only at output closure. |
 | `judge` | string | omitted | Intent a judge model checks each new screen against; excludes `condition`. |
 | `judge_interval_ms` | number | `60000` | With `judge` only. Integer 1–2147483647: time between judgments. |
 | `max_returns` | number | `10` | Positive safe integer, counting successful match or met-screen messages, not lines or End. |
 | `remind_after_ms` | number | `1200000` | Integer 1–2147483647: silence before one reminder that the monitor has not returned. |
+
+(To cancel an active monitor, write `"cancel"` to `term://<id>/monitor`.)
 
 Conditions see changed/new rendered logical lines, including prompts without a
 newline; wrapped physical rows are joined. On the alternate screen, the
@@ -588,7 +572,7 @@ for its revival.
 
 Actual output closure sends End (a `monitor_end` notice) with pending matches and exit code/signal;
 human HUD/slash and LRU terminations identify their reason. End merges an
-already-armed ordinary completion wake. Model `kill_session`, explicit cancel,
+already-armed ordinary completion wake. `write term://<id>/kill`, `write term://<id>/monitor` (`"cancel"`),
 replacement, reset and shutdown end monitoring silently, including a failed
 model kill. Already-enqueued follow-ups cannot be recalled. Unknown/ended
 sessions, invalid regexes, invalid or conflicting judge parameters, invalid
@@ -638,35 +622,10 @@ prompts away from the cursor are ignored. A newer alert for the same session
 replaces an undelivered one; a failed send is retried at the next safe
 boundary while the screen is unchanged and unseen.
 
-### `kill_session`
+### Terminating and listing sessions (`write term://<id>/kill`, `read term://`)
 
-| Param | Type | Default | Notes |
-|---|---|---|---|
-| `session_id` | number | — | Required. |
-| `signal` | string | `"SIGTERM"` | Escalates to SIGKILL after 2s. `"SIGKILL"` skips the grace. On Windows any signal force-kills the process tree. |
-
-Signal names are normalized (`term`, `INT`, `sigkill`); unknown names are
-rejected. The result uses the same bounded envelope as the other tools, with
-`killed`, `escalated`, requested/actual signal and `running`. A failed kill
-stays registered and reports `running: true`. A confirmed kill is a normal
-ending: the terminal stays listed (`running: false`) and its
-[lifecycle](#terminal-lifecycle) reclaims it, after the 5-minute linger once
-nothing of it runs; the kill result shows its final screen, which counts as
-reading it. The Tern HUD's Kill uses the same path and counts as read as well.
-
-### `list_sessions`
-
-Lists every stored terminal: running ones, and returned ones until their
-[lifecycle](#terminal-lifecycle) reclaims them. Each entry has its `title`, the
-`shell` it started with, `running`, `exit_code`/`signal` once the terminal
-closed, `wake_armed`, an active monitor's `watch` (`end`, `regex` with its
-condition, or `judge` with its intent and interval), returns/limit/reminder
-interval and, once the command returned, `lifecycle`: how it returned
-(`normally` or `abnormally (<reason>)`), whether it has been read, and its
-phase (`ttl`, `unread_reminded`, `grace`, `linger`, `reclaiming`). The response carries
-`running_count`, `returned_count` and the current host `tool_time_utc`.
-Reporting an exit here suppresses a not-yet-sent `on_exit` wake; it is not a
-read of the terminal's output.
+- **`write term://<id>/kill`**: send empty body (default `SIGTERM`), a signal name (`"SIGINT"`, `"SIGTERM"`, `"SIGKILL"`), or `?signal=<SIG>`. Escalates to `SIGKILL` after 2s (on Windows any signal force-kills the process tree). A confirmed kill is a normal ending, marks the terminal read, and lets its [lifecycle](#terminal-lifecycle) reclaim it after the 5-minute linger. The Tern HUD's Kill uses the same path.
+- **`read term://`**: lists every stored terminal (running and returned until reclaimed), including `session_id`, `key`, `title`, state, and `term://<id>` URL. Reading `term://` reports inventory only and does not count as reading a terminal's output.
 
 ### Terminal lifecycle
 
@@ -679,20 +638,21 @@ background processes may still hold the terminal — or the terminal closes.
   silently, read or not, with no `unread`, `reclaim_due` or `reclaimed`
   notice; reads do not extend the linger. When background jobs outlive the
   shell, the linger starts at the check that finds them gone. A tool call that
-  names a reclaimed terminal's `session_id` (`write_stdin`, `monitor`,
-  `set_on_exit`, `kill_session`) answers that it was reclaimed, how it
-  returned, and its `term://` address and `log_path`.
+  names a reclaimed terminal's `session_id` (`write_stdin`, `monitor`) or
+  control write (`term://<id>/kill`, `term://<id>/on_exit`, `term://<id>/monitor`)
+  answers that it was reclaimed, how it returned, and its `term://` address and
+  `log_path`.
 - **Abnormal return** (non-zero exit, signal, spawn/runtime failure) sends an
-  `abnormal_return` notice at once, read or not. A kill by `kill_session`, the
-  HUD or `/unified-exec-sessions` is a normal ending, and so is a return after
-  the agent wrote Ctrl-C (`\x03`) or Ctrl-\ (`\x1c`) with `write_stdin`. Later
-  input without one of them clears that mark, so a program that survived the
-  interrupt and fails afterwards is reported.
-- **Reads** count from the return on: a complete `read term://…` (text or
-  `/screen.png`), or a finalized `write_stdin`/`kill_session` result (or an
-  `exec_command` result for a shell that already exited) that shows the
-  returned terminal. Errored or cancelled results do not count. `list_sessions`,
-  `monitor` End and wakes report status only and do not count.
+  `abnormal_return` notice at once, read or not. A kill via `write term://<id>/kill`,
+  the HUD or `/unified-exec-sessions` is a normal ending, and so is a return
+  after the agent sent Ctrl-C (`special_key="ctrl-c"` or `\x03`) or Ctrl-\ with
+  `write_stdin`. Later input without one of them clears that mark, so a program
+  that survived the interrupt and fails afterwards is reported.
+- **Reads** count from the return on: a complete `read term://<id_or_key>` (text
+  or `/screen.png`), a `write term://<id>/kill`, or a finalized `write_stdin`
+  result (or an `exec_command` result for a shell that already exited) that
+  shows the returned terminal. Errored or cancelled results do not count.
+  `read term://`, `monitor` End and wakes report status only and do not count.
 - **30 minutes** after the return or the latest read of an abnormal return, or
   of a normal one whose processes remain:
   - never read: one `unread` notice; the checks keep the terminal until it is
@@ -703,8 +663,8 @@ background processes may still hold the terminal — or the terminal closes.
 - **Reclaim** kills whatever is left of the terminal's process group —
   background jobs holding the terminal on Linux, and jobs that outlived the
   closed terminal on macOS (SIGTERM, SIGKILL after 2 s) — and removes the
-  terminal from `list_sessions` and the HUD. The `term://` address and
-  `log_path` stay readable. A terminal whose processes cannot be ended stays
+  terminal from `read term://` and the HUD. The `term://<id>` / `term://<key>`
+  address and `log_path` stay readable. A terminal whose processes cannot be ended stays
   and is retried at the next check (on Windows a tree whose root has exited
   cannot be reached).
 - **Reclaim notice** after the grace: none by default, since the
@@ -846,13 +806,13 @@ lines), `{instruction}` (the last line), `{terminal_count}` and
 `{ "done": true }`) stays literal. Substitution is a single pass, so inserted text is never
 expanded again. The human-facing transcript keeps the default layout.
 
-The section is read from `<cwd>/.omp/omomp.{yml,yaml,json,toml}`, then from the
-agent directory's `omomp.*`; the first valid copy wins, and it is read again at
-every stop, so edits apply without a restart. An unknown key, mode or
-placeholder makes a copy invalid: a warning names it once and the next
-location, or the defaults, apply. Owned configuration and detector failure explanations
-use the current UI language; field names, model identifiers and external error
-payloads remain unchanged.
+`stop`, `judgePrompt`, and `noticeTemplate` are configured in omp's native plugin
+settings (`omp.settings` in `package.json`, editable via `/settings` → Plugins,
+`omp plugin config`, or `.omp/plugin-overrides.json`) and are read again at
+every stop, so edits apply without a restart. An unknown mode or invalid
+placeholder falls back to defaults and logs a warning once. Owned configuration
+and detector failure explanations use the current UI language; field names,
+model identifiers and external error payloads remain unchanged.
 
 ### Finished subagents and omp's idle park
 
@@ -887,15 +847,14 @@ no timer of its own for this; it reads omp's agent registry and lifecycle.
 
 ## Presentation
 
-**On omp,** `exec_command`, `write_stdin` and `kill_session` render through
+**On omp,** `exec_command` and `write_stdin` render through
 omp's exported bash renderer, in the ANSI TUI and in Tern: `$ cmd`, collapsed
 output with omp's expand binding, the exit chip and error tone for failures,
 `Backgrounded: session N` for running sessions, and the truncation marker with
-the log path as the last line. `write_stdin` and `kill_session` show their
-action as a bash comment (`# stdin → session N: "…"`,
-`# kill session N (SIGTERM)`). `monitor`, `set_on_exit` and `list_sessions`
-use omp's default card. If omp's bash renderer is missing or reshaped, plugin loading
-fails rather than showing raw envelopes.
+the log path as the last line. `write_stdin` shows its action as a bash comment
+(`# stdin → session N: "…"`). `monitor` uses omp's default card. If omp's bash
+renderer is missing or reshaped, plugin loading fails rather than showing raw
+envelopes.
 
 ## Constants
 
@@ -924,7 +883,7 @@ LIFECYCLE_SWEEP_MS           = 60_000 (lifecycle check interval)
 
 - **Early exit:** commands that finish within 150 ms never enter the session
   store; the result has `exit_code` and no `session_id`.
-- **Returned terminals** stay in the store, the HUD and `list_sessions`
+- **Returned terminals** stay in the store, the HUD and `read term://`
   until their [lifecycle](#terminal-lifecycle) reclaims them; no tool call
   removes them on observing the exit.
 - **Spawn failures** (missing shell or `workdir`) are checked before the PTY
@@ -937,8 +896,8 @@ LIFECYCLE_SWEEP_MS           = 60_000 (lifecycle check interval)
   A descendant that survives the shell and still holds the PTY (e.g. a
   `nohup`'d or SIGHUP-ignoring job) keeps it open; such results carry a `note`
   on how to detach it (`setsid cmd >log 2>&1 </dev/null &`; on Windows, where
-  no session shell runs that recipe, the note names only `kill_session`), and the
-  running-session widget marks the session `terminal held`. `kill_session`,
+  no session shell runs that recipe, the note names only `write term://<id>/kill`),
+  and the running-session widget marks the session `terminal held`. `write term://<id>/kill`,
   reclaim and shutdown still signal the shell's process group then, so a
   descendant that stayed in it is ended; one that left it (`setsid`) is not.
 - **A closed terminal** never crashes the host; writes report `failure_message`.
@@ -991,7 +950,7 @@ terminal_url: term://1-9f2c1a7e-…
 Server listening on :3000
   GET /health 200 in 3ms
 
-> kill_session(session_id=1)   # stays listed until its lifecycle reclaims it
+> write term://1/kill            # stays listed until its lifecycle reclaims it
 ```
 
 ### A state without fixed text
@@ -1017,7 +976,7 @@ terminal: normal screen 120x80, cursor row 1 col 5
 ---
 >>>
 
-> write_stdin(session_id=1, chars="print(7*6)\r", yield_time_ms=1000)
+> write_stdin(session_id=1, text="print(7*6)", enter=true, yield_time_ms=1000)
 [still running]
 terminal: normal screen 120x80, cursor row 3 col 5
 ---
@@ -1035,7 +994,7 @@ session_id: 2
 completion_notification: armed
 ---
 # …the agent ends its turn; when npm test exits, one follow-up prompt resumes it.
-> set_on_exit(session_id=2, on_exit="none")   # if the job is abandoned
+> write term://2/on_exit ("none")   # if the job is abandoned
 ```
 
 ## Windows
@@ -1080,8 +1039,7 @@ src/
 ├── output-safety.ts      # terminal-control stripping
 ├── terminal-screen.ts    # headless terminal: observations, styled screens, query answers
 ├── tool-result.ts        # bounded envelopes + model-visible text
-├── script-result.ts      # monitor result details
-└── unescape.ts           # C-style escape decoder for `chars`
+└── script-result.ts      # monitor result details
 fork-features/
 ├── omp-presentation.ts   # omp host detection, bash-renderer delegation, theme appearance, shellPath setting
 ├── command-approval.ts   # built-in bash approval port and factory-loaded host helpers
@@ -1090,18 +1048,18 @@ fork-features/
 ├── session-binding.ts    # activation-local AgentSession identity for approval settings and stop detectors
 ├── tern-terminal-hud.ts  # terminals segment in omp's pill, Terminals view, terminal page
 ├── terminal-resource.ts  # process-global terminal keys, live/frozen projections
-├── terminal-url.ts       # omp `term://` read handler; reports reads to the terminal's owner
+├── terminal-url.ts       # omp `term://` read/write handler; reports reads & controls sessions
 ├── terminal-image.ts     # terminal screenshots (SVG → PNG)
 ├── terminal-notice.ts    # terminal notice ADT, formatter and the one dispatcher: run-held, merged, stop-gated
 ├── terminal-lifecycle.ts # returned-terminal silent linger, TTL, read/reclaim reminders, grace, reclaim, reclaimed record, finished-work collection
-├── stop-config.ts        # `omp-unified-exec` omomp section: stop mode, judge prompt, notice template
-├── plugin-settings.ts    # native plugin settings (`omp.settings`): `notice.graceReclaim`, read via omp's getPluginSettings
+├── stop-config.ts        # native plugin settings stop config: stop mode, judge prompt, notice template
+├── plugin-settings.ts    # native plugin settings (`omp.settings`): `notice.graceReclaim`, `stop`, `judgePrompt`, `noticeTemplate`
 ├── exec-init.ts          # `exec.initFile`: resolve the init file, source it before `cmd` in POSIX shells
 ├── stop-gate.ts          # judge / @smol / todo stop detectors over factory-loaded omp modules
 ├── screen-judge.ts       # judge monitors' screen judgment through omp's judge role chain
 ├── stop-reasons.ts       # structured stop/config reasons; English/Chinese boundary rendering
-├── exec-command-docs.ts  # six tools' lazy documentation providers and topic pointers
-├── topics/               # packaged body-only tool documentation
+├── exec-command-docs.ts  # registers tool://exec_command/pty-io & pty-lifecycle topics
+├── topics/               # packaged body-only tool documentation (pty-io.md, pty-lifecycle.md)
 ├── monitor-subscription.ts # monitor conditions, batching, judgments and reminders as terminal notices
 ├── input-wait.ts         # input prompt detection; input-wait alerts as terminal notices
 ├── log-archive.ts        # seven-day gzip compression of session logs
@@ -1115,8 +1073,8 @@ docs/
 ## Tests
 
 ```bash
-npm install
-npm test                                   # strict typecheck + Bun unit/integration suites
+bun install
+bun test                                   # strict typecheck + Bun unit/integration suites
 bun test ./tests/tern-terminal-hud.test.ts ./tests/omp-presentation.test.ts
 ```
 

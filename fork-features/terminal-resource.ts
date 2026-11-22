@@ -3,11 +3,12 @@ import { randomUUID } from "node:crypto";
 import type { TerminalProjection, TerminalScreen } from "../src/terminal-screen.ts";
 
 export type TerminalResource =
-	| { readonly kind: "live"; readonly screen: TerminalScreen; readonly onRead?: () => void }
-	| { readonly kind: "frozen"; readonly projection: TerminalProjection; readonly onRead?: () => void };
+	| { readonly kind: "live"; readonly id: number; readonly screen: TerminalScreen; readonly onRead?: () => void }
+	| { readonly kind: "frozen"; readonly id: number; readonly projection: TerminalProjection; readonly onRead?: () => void };
 
 interface TerminalRegistry {
 	readonly resources: Map<string, TerminalResource>;
+	resolveKeyById?: (id: number) => string | undefined;
 }
 
 const registrySymbol = Symbol.for("omp-unified-exec.terminal-resources");
@@ -23,14 +24,38 @@ export class TerminalResourceError extends Error {
 	}
 }
 
+export function setTerminalIdResolver(resolver: ((id: number) => string | undefined) | undefined): void {
+	terminalRegistry.resolveKeyById = resolver;
+}
+
 export function registerTerminal(id: number, screen: TerminalScreen, onRead?: () => void): string {
 	const key = `${id}-${randomUUID()}`;
-	terminalRegistry.resources.set(key, { kind: "live", screen, onRead });
+	terminalRegistry.resources.set(key, { kind: "live", id, screen, onRead });
 	return key;
 }
 
-export function noteTerminalRead(key: string): void {
-	try { terminalRegistry.resources.get(key)?.onRead?.(); } catch { /* the owner's bookkeeping must not fail a read */ }
+export function resolveTerminalKey(idOrKey: string): string {
+	if (terminalRegistry.resources.has(idOrKey)) return idOrKey;
+	if (/^\d+$/.test(idOrKey)) {
+		const id = Number(idOrKey);
+		const activeKey = terminalRegistry.resolveKeyById?.(id);
+		if (activeKey !== undefined && terminalRegistry.resources.has(activeKey)) return activeKey;
+		let matchedKey: string | undefined;
+		for (const [key, resource] of terminalRegistry.resources) {
+			if (resource.id === id) matchedKey = key;
+		}
+		if (matchedKey !== undefined) return matchedKey;
+	}
+	throw new TerminalResourceError("unknown_terminal", `No retained terminal exists for ${idOrKey}.`);
+}
+
+export function noteTerminalRead(idOrKey: string): void {
+	try {
+		const key = resolveTerminalKey(idOrKey);
+		terminalRegistry.resources.get(key)?.onRead?.();
+	} catch {
+		/* the owner's bookkeeping must not fail a read */
+	}
 }
 
 export function detachTerminalReader(key: string): void {
@@ -38,14 +63,15 @@ export function detachTerminalReader(key: string): void {
 	if (resource?.onRead) terminalRegistry.resources.set(key, { ...resource, onRead: undefined });
 }
 
-export function getTerminalResource(key: string): TerminalResource {
+export function getTerminalResource(idOrKey: string): TerminalResource {
+	const key = resolveTerminalKey(idOrKey);
 	const resource = terminalRegistry.resources.get(key);
-	if (!resource) throw new TerminalResourceError("unknown_terminal", `No retained terminal exists for ${key}.`);
+	if (!resource) throw new TerminalResourceError("unknown_terminal", `No retained terminal exists for ${idOrKey}.`);
 	return resource;
 }
 
-export async function readTerminal(key: string): Promise<TerminalProjection> {
-	const resource = getTerminalResource(key);
+export async function readTerminal(idOrKey: string): Promise<TerminalProjection> {
+	const resource = getTerminalResource(idOrKey);
 	switch (resource.kind) {
 		case "live": return resource.screen.project();
 		case "frozen": return resource.projection;
@@ -58,7 +84,7 @@ export async function freezeTerminal(key: string): Promise<void> {
 	const projection = await live.screen.project();
 	const current = terminalRegistry.resources.get(key);
 	if (current?.kind === "live" && current.screen === live.screen) {
-		terminalRegistry.resources.set(key, { kind: "frozen", projection, onRead: current.onRead });
+		terminalRegistry.resources.set(key, { kind: "frozen", id: current.id, projection, onRead: current.onRead });
 	}
 }
 

@@ -6,6 +6,9 @@ export const PLUGIN_NAME = "omp-unified-exec";
 export type PluginSettingsReader = (cwd: string) => Promise<Readonly<Record<string, unknown>>>;
 
 export const GRACE_RECLAIM_KEY = "notice.graceReclaim";
+export const STOP_KEY = "stop";
+export const JUDGE_PROMPT_KEY = "judgePrompt";
+export const NOTICE_TEMPLATE_KEY = "noticeTemplate";
 
 export type SettingRead<T> = { readonly kind: "ok"; readonly value: T } | { readonly kind: "invalid"; readonly key: string; readonly fallback: T };
 

@@ -38,7 +38,7 @@ jobs:
 
           echo ""
           echo "To extend, run:"
-          echo "  gh api -X PUT repos/iamwrm/pi-unified-exec/interaction-limits \\"
+          echo "  gh api -X PUT repos/oh-my-omp/omp-unified-exec/interaction-limits \\"
           echo "    -f limit=collaborators_only -f expiry=six_months"
           echo "then update EXPIRES_AT in .github/workflows/interaction-limit-reminder.yml"
           exit 1

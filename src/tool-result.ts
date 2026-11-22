@@ -4,13 +4,15 @@ import {
 	DEFAULT_MAX_LINES,
 	truncateTail,
 	type TruncationResult,
-} from "@earendil-works/pi-coding-agent";
-import { formatBytes } from "@oh-my-pi/pi-utils";
+} from "@oh-my-pi/pi-tui/tools/streaming-output";
 
 import type { CollectResult } from "./collect.ts";
 import type { OnExitPolicy } from "./completion.ts";
 import { sanitizeOutputText } from "./output-safety.ts";
 import type { TerminalObservation, TerminalScreenKind, TerminalView } from "./terminal-screen.ts";
+import { safeMeta, truncationMarker as buildTruncationMarker } from "./truncation-marker.ts";
+
+export { safeMeta };
 
 export type ProcessOperation = "exec_command" | "write_stdin";
 export type ProcessStatus = "running" | "exited";
@@ -122,16 +124,6 @@ function generateChunkId(): string {
 
 function approxTokenCount(byteLength: number): number {
 	return Math.ceil(byteLength / 4);
-}
-
-export function safeMeta(value: string, max = 4096): string {
-	const scanLimit = max * 8;
-	let end = Math.min(value.length, scanLimit);
-	if (end < value.length && end > 0 && /[\ud800-\udbff]/.test(value[end - 1]!)) end--;
-	const clipped = end < value.length;
-	const clean = sanitizeOutputText(value.slice(0, end)).replace(/\s+/g, " ").trim();
-	if (!clipped && clean.length <= max) return clean;
-	return `${clean.slice(0, Math.max(0, max - 1))}…`;
 }
 
 type OutputEnvelope = Pick<
@@ -279,17 +271,7 @@ export function finalizeKillResult(input: FinalizeKillInput): KillResultDetails 
 }
 
 export function truncationMarker(t: TruncationResult | undefined, logPath: string | undefined): string | null {
-	if (!t?.truncated) return null;
-	const full = logPath ? `. Full output: ${safeMeta(logPath)}` : "";
-	if (t.lastLinePartial) {
-		return `[Showing last ${formatBytes(t.outputBytes ?? Buffer.byteLength(t.content, "utf-8"))} of final line (line ${t.totalLines} is larger than the ${formatBytes(DEFAULT_MAX_BYTES)} limit)${full}]`;
-	}
-	const startLine = t.totalLines - (t.outputLines ?? t.content.split("\n").length) + 1;
-	const endLine = t.totalLines;
-	if (t.truncatedBy === "lines") {
-		return `[Showing lines ${startLine}-${endLine} of ${t.totalLines}${full}]`;
-	}
-	return `[Showing lines ${startLine}-${endLine} of ${t.totalLines} (${formatBytes(DEFAULT_MAX_BYTES)} limit)${full}]`;
+	return buildTruncationMarker(t, logPath, DEFAULT_MAX_BYTES);
 }
 
 function appendOutputSection(lines: string[], shape: OutputResultDetails): string {

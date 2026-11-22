@@ -3,20 +3,20 @@ import type {
 	Settings,
 	ToolDefinition,
 	ToolRenderResultOptions,
-	TruncationResult,
-} from "@earendil-works/pi-coding-agent";
+} from "@oh-my-pi/pi-coding-agent";
 import type * as Registry from "@oh-my-pi/pi-coding-agent/config/registry";
 import type * as GhCache from "@oh-my-pi/pi-coding-agent/tools/gh-cache-invalidation";
 import type * as ThemeModule from "@oh-my-pi/pi-tui/theme";
 import type * as PiTuiTools from "@oh-my-pi/pi-tui/tools";
-import type { Component } from "@earendil-works/pi-tui";
+import type { TruncationResult } from "@oh-my-pi/pi-tui/tools/streaming-output";
+import type { Component } from "@oh-my-pi/pi-tui";
 
 import { sanitizeOutputText } from "../src/output-safety.ts";
 import { tr } from "./omomp-shared/i18n.ts";
 import { requireBunRuntime } from "../src/pty.ts";
 import type { SessionStore } from "../src/session-store.ts";
 import type { TerminalAppearance } from "../src/terminal-screen.ts";
-import { truncationMarker } from "../src/tool-result.ts";
+import { truncationMarker } from "../src/truncation-marker.ts";
 import { type AgentHost, loadAgentHost } from "./agent-park.ts";
 import { loadShellHost, type ShellHost } from "./shell-host.ts";
 import { type CommandApprovalHost, loadCommandApprovalHost } from "./command-approval.ts";
@@ -25,7 +25,6 @@ import { loadStopHost, type StopHost } from "./stop-gate.ts";
 import type { LifecycleClock } from "./terminal-lifecycle.ts";
 import { scheduleLogArchive } from "./log-archive.ts";
 import { loadTernHudHost, mountTerminalHud } from "./tern-terminal-hud.ts";
-import { initializeTerminalUrls } from "./terminal-url.ts";
 import type * as TernPluginRemoval from "./tern-plugin-removal.ts";
 
 const TERN_PLUGIN_REMOVAL_MODULE = "./tern-plugin-removal.ts";
@@ -314,29 +313,31 @@ export function execShellArgs(args: StreamedArgs<"cmd" | "workdir">): ShellArgs 
 	};
 }
 
-export function writeStdinShellArgs(args: StreamedArgs<"session_id" | "chars" | "chars_b64">): ShellArgs {
+export function writeStdinShellArgs(
+	args: StreamedArgs<"session_id" | "text" | "enter" | "special_key" | "raw_base64">,
+): ShellArgs {
 	const target = typeof args?.session_id === "number"
 		? tr(`session ${args.session_id}`, `会话 ${args.session_id}`)
 		: tr("session ?", "会话 ?");
-	if (typeof args?.chars === "string" && args.chars.length > 0) {
-		return { command: tr(
-			`# stdin → ${target}: "${stringifyChars(args.chars)}"`,
-			`# 输入 → ${target}：“${stringifyChars(args.chars)}”`,
-		) };
+	const parts: string[] = [];
+	if (typeof args?.text === "string" && args.text.length > 0) {
+		parts.push(`"${stringifyChars(args.text)}"`);
 	}
-	if (typeof args?.chars_b64 === "string" && args.chars_b64.length > 0) {
-		const bytes = base64ByteLength(args.chars_b64);
+	if (typeof args?.special_key === "string" && args.special_key.length > 0) {
+		parts.push(`<${sanitizeOutputText(args.special_key)}>`);
+	}
+	if (args?.enter === true) {
+		parts.push("<enter>");
+	}
+	if (parts.length > 0) {
+		const summary = parts.join(" ");
+		return { command: tr(`# stdin → ${target}: ${summary}`, `# 输入 → ${target}：${summary}`) };
+	}
+	if (typeof args?.raw_base64 === "string" && args.raw_base64.length > 0) {
+		const bytes = base64ByteLength(args.raw_base64);
 		return { command: tr(`# stdin → ${target}: ${bytes} bytes`, `# 输入 → ${target}：${bytes} 字节`) };
 	}
 	return { command: tr(`# stdin → ${target}: (input required)`, `# 输入 → ${target}：（需要输入）`) };
-}
-
-export function killShellArgs(args: StreamedArgs<"session_id" | "signal">): ShellArgs {
-	const target = typeof args?.session_id === "number"
-		? tr(`session ${args.session_id}`, `会话 ${args.session_id}`)
-		: tr("session ?", "会话 ?");
-	const signal = optionalString(args?.signal) ?? "SIGTERM";
-	return { command: tr(`# kill ${target} (${signal})`, `# 结束 ${target}（${signal}）`) };
 }
 
 /**
@@ -375,7 +376,7 @@ function delegateToShell<K extends string>(
 	};
 }
 
-export const SHELL_PRESENTED_TOOLS = ["exec_command", "write_stdin", "kill_session"] as const;
+export const SHELL_PRESENTED_TOOLS = ["exec_command", "write_stdin"] as const;
 type ShellPresentedTool = (typeof SHELL_PRESENTED_TOOLS)[number];
 
 function isShellPresented(name: string): name is ShellPresentedTool {
@@ -390,7 +391,6 @@ async function presentOnOmp(pi: ExtensionAPI): Promise<ExtensionAPI> {
 	const hooks: Record<ShellPresentedTool, OmpToolHooks> = {
 		exec_command: delegateToShell(bash, execShellArgs),
 		write_stdin: delegateToShell(bash, writeStdinShellArgs),
-		kill_session: delegateToShell(bash, killShellArgs),
 	};
 	const registerTool: ExtensionAPI["registerTool"] = (definition) => {
 		const topLevel = { ...definition, loadMode: "essential" as const };
@@ -466,6 +466,7 @@ export function withHostPresentation(
 		agentHost?: AgentHost,
 		shellHost?: ShellHost,
 	) => ActivatedExtension,
+	prepareHost?: () => Promise<void>,
 ): (host: ExtensionAPI) => void | Promise<void> {
 	return (host) => {
 		if (!("arktype" in host)) {
@@ -482,7 +483,7 @@ export function withHostPresentation(
 			// host-admission checks above can reject a foreign host.
 			const removal: typeof TernPluginRemoval = await import(TERN_PLUGIN_REMOVAL_MODULE);
 			await removal.retireTernPlugin();
-			await initializeTerminalUrls();
+			if (prepareHost) await prepareHost();
 			const activated = activate(pi, appearance, shellPath, approvalHost, invalidateGithubCache, {}, stopHost, pluginSettings, agentHost, shellHost);
 			mountTerminalHud(pi, activated.store, hud, activated.kill);
 			scheduleLogArchive();

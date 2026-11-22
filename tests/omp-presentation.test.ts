@@ -10,12 +10,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
-import { DEFAULT_MAX_LINES, type ExtensionAPI, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ToolDefinition } from "@oh-my-pi/pi-coding-agent";
+import { DEFAULT_MAX_LINES } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import { Type } from "@oh-my-pi/omptype/typebox";
 
 import {
 	execShellArgs,
-	killShellArgs,
 	parseResultView,
 	toShellResult,
 	type ActivatedExtension,
@@ -332,19 +332,14 @@ describe("omp shell argument presentation", () => {
 		assert.deepEqual(execShellArgs(undefined), { command: undefined, cwd: undefined });
 	});
 
-	it("describes required input, escaped stdin, and base64 byte counts as shell comments", () => {
+	it("describes required input, text/enter/special_key, and base64 byte counts as shell comments", () => {
 		assert.deepEqual(writeStdinShellArgs({ session_id: 1 }), { command: "# stdin → session 1: (input required)" });
-		assert.deepEqual(writeStdinShellArgs({ session_id: 1, chars: "" }), { command: "# stdin → session 1: (input required)" });
-		assert.deepEqual(writeStdinShellArgs({ session_id: 1, chars: "q\n" }), { command: '# stdin → session 1: "q\\n"' });
-		assert.deepEqual(writeStdinShellArgs({ session_id: 1, chars_b64: "aGk=" }), { command: "# stdin → session 1: 2 bytes" });
+		assert.deepEqual(writeStdinShellArgs({ session_id: 1, text: "" }), { command: "# stdin → session 1: (input required)" });
+		assert.deepEqual(writeStdinShellArgs({ session_id: 1, text: "q", enter: true }), { command: '# stdin → session 1: "q" <enter>' });
+		assert.deepEqual(writeStdinShellArgs({ session_id: 1, special_key: "ctrl-c" }), { command: "# stdin → session 1: <ctrl-c>" });
+		assert.deepEqual(writeStdinShellArgs({ session_id: 1, raw_base64: "aGk=" }), { command: "# stdin → session 1: 2 bytes" });
 		assert.deepEqual(writeStdinShellArgs({}), { command: "# stdin → session ?: (input required)" });
 		assert.deepEqual(writeStdinShellArgs(undefined), { command: "# stdin → session ?: (input required)" });
-	});
-
-	it("describes default and custom kill signals, including streamed missing args", () => {
-		assert.deepEqual(killShellArgs({ session_id: 1 }), { command: "# kill session 1 (SIGTERM)" });
-		assert.deepEqual(killShellArgs({ session_id: 1, signal: "SIGINT" }), { command: "# kill session 1 (SIGINT)" });
-		assert.deepEqual(killShellArgs(undefined), { command: "# kill session ? (SIGTERM)" });
 	});
 });
 
@@ -382,7 +377,7 @@ describe("host presentation activation", () => {
 		const compiled = join(temporary, "plugin.mjs");
 		const build = spawnSync(process.execPath, [
 			"build", fileURLToPath(new URL("../src/index.ts", import.meta.url)),
-			"--target=node", "--packages=external", "--external", "@earendil-works/*", "--outfile", compiled,
+			"--target=node", "--packages=external", "--external", "@oh-my-pi/*", "--outfile", compiled,
 		], { cwd: root, encoding: "utf8" });
 		assert.equal(build.status, 0, `${build.stdout}\n${build.stderr}`);
 		// --external "@earendil-works/*" keeps the bundle's imports external, but
@@ -469,7 +464,7 @@ describe("host presentation activation", () => {
 		const compiled = join(temporary, "presentation.mjs");
 		const build = spawnSync(process.execPath, [
 			"build", fileURLToPath(new URL("../fork-features/omp-presentation.ts", import.meta.url)),
-			"--target=bun", "--packages=external", "--external", "@earendil-works/*", "--outfile", compiled,
+			"--target=bun", "--packages=external", "--external", "@oh-my-pi/*", "--outfile", compiled,
 		], { cwd: root, encoding: "utf8" });
 		assert.equal(build.status, 0, `${build.stdout}\n${build.stderr}`);
 		// --external "@earendil-works/*" leaves the bundle's imports verbatim.

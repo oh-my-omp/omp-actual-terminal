@@ -254,8 +254,8 @@ export function describeNotice(body: NoticeBody, localized = false): Described {
 					),
 					...(body.screenLines.length ? [t(`screen ${outputLabel(localized)}`, `屏幕${outputLabel(localized)}`), ...body.screenLines] : []),
 					t(
-						"It may wait for input, be stalled or be slow. The monitor stays active; call monitor to rearm it or cancel it. Sent once per silence.",
-						"它可能正在等待输入、卡住或只是较慢。monitor 仍保持活动；请调用 monitor 重新设置等待或取消它。每段静默只发送一次。",
+						"It may wait for input, be stalled or be slow. The monitor stays active; call monitor to rearm it or write term://<id>/monitor (\"cancel\") to cancel it. Sent once per silence.",
+						"它可能正在等待输入、卡住或只是较慢。monitor 仍保持活动；请调用 monitor 重新设置等待，或写入 term://<id>/monitor（\"cancel\"）取消它。每段静默只发送一次。",
 					),
 				],
 				actionable: true,
@@ -306,8 +306,8 @@ export function describeNotice(body: NoticeBody, localized = false): Described {
 				outputLabel(localized),
 				...body.lines,
 				t(
-					"Answer with write_stdin (Enter is \\r; dialogs take Tab, arrows, Space), read the terminal for the full screen, or kill_session. Not repeated for this screen.",
-					"请用 write_stdin 回答（Enter 是 \\r；对话框使用 Tab、方向键和空格），读取终端查看完整屏幕，或使用 kill_session。此屏幕不会重复提醒。",
+					"Answer with write_stdin (use enter: true or special_key such as \"tab\"/\"up\"/\"down\"), read term://<id> for the full screen, or write term://<id>/kill. Not repeated for this screen.",
+					"请用 write_stdin 回答（使用 enter: true 或 special_key 如 \"tab\"/\"up\"/\"down\"），读取 term://<id> 查看完整屏幕，或写入 term://<id>/kill。此屏幕不会重复提醒。",
 				),
 			],
 			actionable: true,
@@ -326,8 +326,8 @@ export function describeNotice(body: NoticeBody, localized = false): Described {
 				`约 ${elapsed(body.graceMs)} 后将被回收：${outcomeText(body.outcome, true)}，上次读取距今 ${elapsed(body.lastReadAgoMs)}`,
 			),
 			lines: [t(
-				`A read keeps it for another ${elapsed(body.ttlMs)}; otherwise its remaining processes are killed and it leaves list_sessions. The terminal stays readable.`,
-				`读取一次可再保留 ${elapsed(body.ttlMs)}；否则其剩余进程会被结束并从 list_sessions 移除。终端仍可读取。`,
+				`A read keeps it for another ${elapsed(body.ttlMs)}; otherwise its remaining processes are killed and it leaves term://. The terminal stays readable.`,
+				`读取一次可再保留 ${elapsed(body.ttlMs)}；否则其剩余进程会被结束并从 term:// 移除。终端仍可读取。`,
 			)],
 			actionable: false,
 		};

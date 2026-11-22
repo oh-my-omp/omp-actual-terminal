@@ -1,32 +1,31 @@
 import { constants as osConstants } from "node:os";
 import { statSync } from "node:fs";
 import { resolve } from "node:path";
-import { type AgentToolResult, type AgentToolUpdateCallback, type ExtensionAPI, type ExtensionContext, type SessionStopEvent, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Box, Text } from "@earendil-works/pi-tui";
+import { type AgentToolResult, type AgentToolUpdateCallback, type ExtensionAPI, type ExtensionContext, type SessionStopEvent, type ToolDefinition } from "@oh-my-pi/pi-coding-agent";
+import { Box, Text } from "@oh-my-pi/pi-tui";
 import { Type, type TUnsafe } from "@oh-my-pi/omptype/typebox";
 
 import { type AgentHost, type AgentIdentity, type ParkedRuntime, parkedRuntimes } from "../fork-features/agent-park.ts";
 import { type ActivatedExtension, withHostPresentation } from "../fork-features/omp-presentation.ts";
 import { approvalCommand, approveBoundCommand, type CommandApprovalHost } from "../fork-features/command-approval.ts";
 import {
-	execCommandDocumentation, execCommandTopicPointers,
-	writeStdinDocumentation, writeStdinTopicPointers,
-	setOnExitDocumentation, setOnExitTopicPointers,
-	monitorDocumentation, monitorTopicPointers,
-	killSessionDocumentation, killSessionTopicPointers,
-	listSessionsDocumentation, listSessionsTopicPointers,
+	execCommandTopicPointers,
+	monitorTopicPointers,
+	registerExecCommandTopics,
+	writeStdinTopicPointers,
 } from "../fork-features/exec-command-docs.ts";
 import { bindingContext, bindSession, type HostBindingState, recheckBinding } from "../fork-features/session-binding.ts";
 import { MonitorError, type MonitorWatchStatus } from "../fork-features/monitor-subscription.ts";
 import { loadInitFile, shellScript } from "../fork-features/exec-init.ts";
 import { noShellHost, type ShellHost } from "../fork-features/shell-host.ts";
 import { parseGraceReclaim, type PluginSettingsReader } from "../fork-features/plugin-settings.ts";
-import { loadStopConfig } from "../fork-features/stop-config.ts";
+import { DEFAULT_STOP_CONFIG, loadStopConfig, type StopConfig } from "../fork-features/stop-config.ts";
 import { detectStop, type StopHost } from "../fork-features/stop-gate.ts";
 import { screenJudge, type ScreenJudge } from "../fork-features/screen-judge.ts";
 import { renderStopConfigReason, renderStopReason } from "../fork-features/stop-reasons.ts";
 import { type LifecycleClock, type ReclaimResult, TerminalLifecycle } from "../fork-features/terminal-lifecycle.ts";
 import { buildNoticeDisplayMessage, MAX_TITLE_CHARS, NoticeDispatcher, type NoticeGate, type NoticeMessage, outcomeText, parseTerminalTitle } from "../fork-features/terminal-notice.ts";
+import { getTerminalUrlRuntime, initializeTerminalUrls, setTerminalUrlRuntime, type TerminalUrlRuntime } from "../fork-features/terminal-url.ts";
 import { type CollectResult, NO_OUTPUT } from "./collect.ts";
 import { CompletionCoordinator, type OnExitPolicy, sanitizeMeta } from "./completion.ts";
 import { formatElapsed, formatElapsedUi, nowUtcIso } from "./format-time.ts";
@@ -50,7 +49,6 @@ import {
 	type FinalizeProcessInput,
 	type ProcessResultDetails,
 } from "./tool-result.ts";
-import { unescapeChars } from "./unescape.ts";
 
 
 const MIN_YIELD_TIME_MS = 250;
@@ -154,10 +152,42 @@ type ExecCommandArgs = {
 	on_exit?: OnExitPolicy;
 };
 
+const SPECIAL_KEYS = [
+	"ctrl-c",
+	"ctrl-d",
+	"ctrl-z",
+	"esc",
+	"tab",
+	"up",
+	"down",
+	"left",
+	"right",
+	"backspace",
+	"delete",
+] as const;
+
+type SpecialKey = (typeof SPECIAL_KEYS)[number];
+
+const SPECIAL_KEY_BYTES: Readonly<Record<SpecialKey, string>> = {
+	"ctrl-c": "\x03",
+	"ctrl-d": "\x04",
+	"ctrl-z": "\x1a",
+	esc: "\x1b",
+	tab: "\t",
+	up: "\x1b[A",
+	down: "\x1b[B",
+	left: "\x1b[D",
+	right: "\x1b[C",
+	backspace: "\x7f",
+	delete: "\x1b[3~",
+};
+
 type WriteStdinArgs = {
 	session_id: number;
-	chars?: string;
-	chars_b64?: string;
+	text?: string;
+	enter?: boolean;
+	special_key?: SpecialKey;
+	raw_base64?: string;
 	yield_time_ms?: number;
 };
 
@@ -179,32 +209,35 @@ export class EmptyPollRemovedError extends Error {
 }
 
 function resolveWriteInput(args: WriteStdinArgs): Uint8Array | undefined {
-	const hasChars = typeof args.chars === "string" && args.chars.length > 0;
-	const hasB64 = typeof args.chars_b64 === "string" && args.chars_b64.length > 0;
-	if (hasChars && hasB64) {
-		throw new Error("write_stdin: pass either `chars` or `chars_b64`, not both.");
+	const hasText = typeof args.text === "string" && args.text.length > 0;
+	const hasEnter = args.enter === true;
+	const hasSpecialKey = args.special_key !== undefined;
+	const hasB64 = typeof args.raw_base64 === "string" && args.raw_base64.length > 0;
+	if (hasB64 && (hasText || hasEnter || hasSpecialKey)) {
+		throw new Error("write_stdin: `raw_base64` cannot be combined with `text`, `enter`, or `special_key`.");
 	}
 	if (hasB64) {
-		const b64 = args.chars_b64!.replace(/\s+/g, "");
+		const b64 = args.raw_base64!.replace(/\s+/g, "");
 		if (!/^[A-Za-z0-9+/]*={0,2}$/.test(b64)) {
-			throw new Error("write_stdin: `chars_b64` is not valid base64.");
+			throw new Error("write_stdin: `raw_base64` is not valid base64.");
 		}
 		return new Uint8Array(Buffer.from(b64, "base64"));
 	}
-	if (hasChars) {
-		return encode(unescapeChars(args.chars!));
-	}
-	return undefined;
+	const combined =
+		(args.text ?? "") +
+		(args.special_key !== undefined ? SPECIAL_KEY_BYTES[args.special_key] : "") +
+		(hasEnter ? "\r" : "");
+	return combined.length > 0 ? encode(combined) : undefined;
 }
 
 const HELD_OPEN_NOTE = IS_WINDOWS
 	? "shell has exited, but background process(es) still hold the terminal " +
 		"(a job started from this shell that kept its console as stdin/stdout/stderr), " +
-		"so this session stays open until they exit, or end the session with kill_session."
+		"so this session stays open until they exit, or end the session with write term://<id>/kill."
 	: "shell has exited, but background process(es) still hold the terminal " +
 		"(e.g. a nohup'd or SIGHUP-ignoring job that kept the PTY as stdin/stdout/stderr), " +
 		"so this session stays open until they exit. To detach: redirect inside the job — " +
-		"`setsid cmd >log 2>&1 </dev/null &` — or end the session with kill_session.";
+		"`setsid cmd >log 2>&1 </dev/null &` — or end the session with write term://<id>/kill.";
 
 function heldOpenNote(session: ExecSession): string | undefined {
 	return session.shellExited && !session.hasExited ? HELD_OPEN_NOTE : undefined;
@@ -245,7 +278,7 @@ async function runExecCommand(
 	}
 	const title = parseTerminalTitle(args.title);
 	if (title === undefined) {
-		throw new Error(`exec_command: title is required — a short nonblank name for this terminal (at most ${MAX_TITLE_CHARS} characters shown); notices and list_sessions identify the terminal by it.`);
+		throw new Error(`exec_command: title is required — a short nonblank name for this terminal (at most ${MAX_TITLE_CHARS} characters shown); notices and term:// identify the terminal by it.`);
 	}
 
 	const requestedShell = args.shell?.trim() ? args.shell : ctx.shellPath?.();
@@ -603,7 +636,7 @@ interface TerminateOutcome {
 }
 
 type TerminateOrigin =
-	| { readonly kind: "model"; readonly toolCallId: string }
+	| { readonly kind: "model"; readonly toolCallId?: string }
 	| { readonly kind: "human" }
 	| { readonly kind: "reclaim" };
 
@@ -634,7 +667,7 @@ async function terminateSessionById(
 	if (killed) {
 		ctx.coordinator.confirmKill(sid);
 		if (origin.kind === "reclaim" || !ctx.lifecycle.isTracked(sid)) removeSession(ctx, sid);
-		else if (origin.kind === "model") ctx.lifecycle.noteToolRead(origin.toolCallId, sid);
+		else if (origin.kind === "model" && origin.toolCallId) ctx.lifecycle.noteToolRead(origin.toolCallId, sid);
 		else ctx.lifecycle.markRead(sid);
 	} else {
 		ctx.coordinator.restoreAfterFailedKill(sid);
@@ -697,13 +730,13 @@ function formatRunningSessionsWidget(ctx: ExtensionCtx, sessions: ExecSession[])
 	];
 	if (sessions.length > shown.length) {
 		lines.push(tr(
-			`  … ${sessions.length - shown.length} more; use list_sessions`,
-			`  … 还有 ${sessions.length - shown.length} 个；使用 list_sessions`,
+			`  … ${sessions.length - shown.length} more; use read term://`,
+			`  … 还有 ${sessions.length - shown.length} 个；使用 read term://`,
 		));
 	}
 	lines.push(tr(
-		"  Use list_sessions, write_stdin, set_on_exit (disarm wake), or kill_session.",
-		"  使用 list_sessions、write_stdin、set_on_exit（取消唤醒）或 kill_session。",
+		"  Use read term://, write_stdin, write term://<id>/on_exit (disarm wake), or write term://<id>/kill.",
+		"  使用 read term://、write_stdin、write term://<id>/on_exit（取消唤醒）或 write term://<id>/kill。",
 	));
 	return lines;
 }
@@ -970,22 +1003,28 @@ export function activate(
 	let binding: HostBindingState = { kind: "pending" };
 	let hostCwd: string | undefined;
 	let agentId: string | undefined;
+	let cachedStopConfig: StopConfig = DEFAULT_STOP_CONFIG;
 	const reportedConfigProblems = new Set<string>();
+	const warnConfigProblems = (load: Awaited<ReturnType<typeof loadStopConfig>>): void => {
+		for (const problem of load.problems) {
+			const key = `${problem.path}\n${JSON.stringify(problem.reason)}`;
+			if (reportedConfigProblems.has(key)) continue;
+			reportedConfigProblems.add(key);
+			const reason = renderStopConfigReason(problem.reason, language());
+			ctx.ui?.notify(
+				tr(`unified-exec: ignoring ${problem.path}: ${reason}`, `unified-exec：忽略 ${problem.path}：${reason}`),
+				"warning",
+			);
+		}
+	};
+	const refreshStopConfig = async (cwd: string | undefined): Promise<void> => {
+		if (!stopHost || !pluginSettings) return;
+		const load = await loadStopConfig(pluginSettings, cwd ?? "/");
+		warnConfigProblems(load);
+		cachedStopConfig = load.config;
+	};
 	const gate: NoticeGate | undefined = stopHost && {
-		config: () => {
-			const load = loadStopConfig(hostCwd, stopHost.getAgentDir());
-			for (const problem of load.problems) {
-				const key = `${problem.path}\n${JSON.stringify(problem.reason)}`;
-				if (reportedConfigProblems.has(key)) continue;
-				reportedConfigProblems.add(key);
-				const reason = renderStopConfigReason(problem.reason, language());
-				ctx.ui?.notify(
-					tr(`unified-exec: ignoring ${problem.path}: ${reason}`, `unified-exec：忽略 ${problem.path}：${reason}`),
-					"warning",
-				);
-			}
-			return load.config;
-		},
+		config: () => cachedStopConfig,
 		detect: (config, input, signal) => detectStop({
 			host: stopHost,
 			session: () => (binding.kind === "bound" ? binding.session : undefined),
@@ -1057,6 +1096,138 @@ export function activate(
 	};
 	const parked = parkedRuntimes<ExtensionCtx>();
 	let ctx = createRuntime({ attachment, agentHost, lifecycleClock, appearance, shellPath, shellHost, invalidateGithubCache, pluginSettings });
+	const resolveSessionTarget = (target: string): { readonly sid: number; readonly session: ExecSession | undefined } => {
+		if (/^\d+$/.test(target)) {
+			const sid = Number(target);
+			return { sid, session: ctx.store.get(sid) };
+		}
+		const byKey = ctx.store.values().find((s) => s.terminalUrl === `term://${target}`);
+		if (byKey) return { sid: byKey.id, session: byKey };
+		const leadingId = /^(\d+)-/.exec(target);
+		const sid = leadingId ? Number(leadingId[1]) : -1;
+		return { sid, session: undefined };
+	};
+	const urlRuntime: TerminalUrlRuntime = {
+		resolveSessionKey: (id) => ctx.store.get(id)?.terminalUrl?.slice("term://".length),
+		listSessions: () => {
+			for (const s of ctx.store.values()) if (s.hasExited) ctx.coordinator.observeViaListing(s.id);
+			updateRunningSessionsUi(ctx);
+			const now = Date.now();
+			const sessions = ctx.store.values()
+				.sort((a, b) => a.id - b.id)
+				.map((s) => {
+					const life = ctx.lifecycle.status(s.id);
+					const key = s.terminalUrl?.startsWith("term://") ? s.terminalUrl.slice("term://".length) : undefined;
+					return {
+						session_id: s.id,
+						key,
+						title: s.title,
+						command: s.displayCommand,
+						cwd: s.cwd,
+						shell: s.shell,
+						pid: s.pid,
+						started_at_ms: s.startedAt,
+						elapsed_ms: now - s.startedAt,
+						running: !s.hasExited,
+						wake_armed: ctx.coordinator.isArmed(s.id),
+						monitor: ctx.coordinator.monitorStatus(s.id),
+						lifecycle: life ? { returned: outcomeText(life.outcome), read: life.read, phase: life.phase } : undefined,
+						exit_code: s.hasExited ? s.exitCode : undefined,
+						signal: s.hasExited ? (s.signal ?? undefined) : undefined,
+						failure_message: s.failureMessage ?? undefined,
+						output_bytes_total: s.totalBytesSeen,
+						log_path: s.logPath,
+						url: `term://${s.id}`,
+						terminal_url: s.terminalUrl,
+					};
+				});
+			const runningCount = sessions.filter((s) => s.running).length;
+			const returnedCount = sessions.filter((s) => s.lifecycle !== undefined).length;
+			const toolTimeUtc = nowUtcIso();
+			const lines = sessions.length
+				? sessions.map((s) => {
+						const state = s.running
+							? "running"
+							: `exited${s.exit_code !== undefined && s.exit_code !== null ? ` exit_code=${s.exit_code}` : ""}${s.signal ? ` signal=${s.signal}` : ""}`;
+						const life = s.lifecycle ? `  [returned ${s.lifecycle.returned}; ${s.lifecycle.read ? "read" : "unread"}; ${s.lifecycle.phase}]` : "";
+						const wake = s.wake_armed ? " [wake]" : "";
+						const monitor = s.monitor ? ` [monitor ${s.monitor.returns}/${s.monitor.max_returns} ${watchLabel(s.monitor.watch)} remind_after=${formatElapsed(s.monitor.remind_after_ms)}]` : "";
+						return `  session_id=${s.session_id}  ${JSON.stringify(s.title)}  [${state}]  url=${s.url}${s.key ? `  key=${s.key}` : ""}  pid=${s.pid ?? "?"}  ${(s.elapsed_ms / 1000).toFixed(1)}s${wake}${monitor}  ${oneLineCommand(s.command, 60)}${life}\n        shell: ${sanitizeMeta(s.shell ?? "")}\n        log: ${s.log_path}${s.terminal_url ? `\n        terminal_url: ${s.terminal_url}` : ""}`;
+					})
+				: ["  (no terminals)"];
+			const header = `unified-exec terminals (${runningCount} running, ${returnedCount} returned):`;
+			return `${header}\n${lines.join("\n")}\ntool_time_utc: ${toolTimeUtc}`;
+		},
+		killSession: async (target, rawSignal, toolCallId) => {
+			const { sid, session: resolved } = resolveSessionTarget(target);
+			if (!resolved) {
+				throw new Error(sid >= 0 ? missingSessionText(ctx, sid, `No such session: ${target}`) : `No such session: ${target}`);
+			}
+			const initial = normalizeSignal(rawSignal);
+			const startedAt = Date.now();
+			const outcome = await terminateSessionById(ctx, sid, initial, { kind: "model", toolCallId });
+			if (!outcome) {
+				throw new Error(missingSessionText(ctx, sid, `No such session: ${target}`));
+			}
+			const { session, escalated, collected, killed } = outcome;
+			updateRunningSessionsUi(ctx);
+			const killFailure = killed
+				? session.failureMessage
+				: [
+						`process still running after ${initial}${escalated ? " and SIGKILL escalation" : ""}; ` +
+							`the session remains registered — retry write term://${sid}/kill or check permissions`,
+						session.failureMessage,
+					]
+					.filter((value): value is string => Boolean(value))
+					.join("; ");
+			const details = finalizeKillResult({
+				wallTimeSec: (Date.now() - startedAt) / 1000,
+				collected,
+				totalBytes: session.totalBytesSeen,
+				sessionId: sid,
+				pid: session.pid,
+				requestedSignal: initial,
+				exitCode: session.exitCode,
+				signal: session.signal,
+				failure: killFailure || null,
+				logPath: session.logPath,
+				cwd: session.cwd,
+				shell: session.shell,
+				command: session.displayCommand,
+				escalated,
+				killed,
+			});
+			return { text: renderKillResultText(details), killed };
+		},
+		setOnExit: (target, policy) => {
+			const { sid, session } = resolveSessionTarget(target);
+			if (sid < 0 || (policy === "wake" && !session)) {
+				throw new Error(sid >= 0 ? missingSessionText(ctx, sid, `No such session: ${target}`) : `No such session: ${target}`);
+			}
+			const status = ctx.coordinator.setOnExit(sid, policy, session);
+			if (!session && status === "already_none") {
+				throw new Error(missingSessionText(ctx, sid, `No such session: ${target}`));
+			}
+			updateRunningSessionsUi(ctx);
+			const running = session ? !session.hasExited : false;
+			const armed = ctx.coordinator.isArmed(sid);
+			return (
+				`on_exit session_id=${sid} policy=${policy} → ${status}` +
+				(session ? (running ? " (process still running)" : " (process already exited)") : " (no store session; coordinator only)") +
+				(armed ? "; wake armed" : "; wake not armed")
+			);
+		},
+		cancelMonitor: (target) => {
+			const { sid, session } = resolveSessionTarget(target);
+			if (sid < 0 || (!session && !ctx.coordinator.monitorStatus(sid))) {
+				throw new Error(sid >= 0 ? missingSessionText(ctx, sid, `No such session: ${target}`) : `No such session: ${target}`);
+			}
+			const cancelled = ctx.coordinator.cancelMonitor(sid);
+			updateRunningSessionsUi(ctx);
+			return JSON.stringify({ session_id: sid, status: cancelled ? "cancelled" : "not_monitored" });
+		},
+	};
+	setTerminalUrlRuntime(urlRuntime);
 	pi.registerMessageRenderer("unified-exec-notice", (message) => {
 		const box = new Box(1, 1);
 		box.addChild(new Text(buildNoticeDisplayMessage(message.details), 0, 0));
@@ -1068,12 +1239,14 @@ export function activate(
 		ctx.coordinator.handleToolExecutionEnd(event.toolCallId, event.isError === true);
 	});
 	pi.on("agent_start", async () => {
+		await refreshStopConfig(hostCwd);
 		ctx.notices.agentStarted();
 	});
 	pi.on("agent_end", async (event) => {
 		const willContinue = event.willContinue === true;
 		const awaitingAsyncWork = event.awaitingAsyncWork === true;
 		if (willContinue && !awaitingAsyncWork) return;
+		await refreshStopConfig(hostCwd);
 		ctx.coordinator.flushPending();
 		ctx.notices.agentStopped(awaitingAsyncWork ? "awaiting" : "final");
 	});
@@ -1094,14 +1267,18 @@ export function activate(
 			ctx.lifecycle.restart();
 			ctx.agent = agent;
 		}
+		setTerminalUrlRuntime(urlRuntime);
 		ctx.host = attachment;
 		ctx.ui = eventCtx.ui;
+		await refreshStopConfig(hostCwd);
 		updateRunningSessionsUi(ctx);
 	});
 
-	const rebind = (eventCtx: ExtensionContext): void => {
+	const rebind = async (eventCtx: ExtensionContext): Promise<void> => {
+		hostCwd = eventCtx.cwd;
 		binding = recheckBinding(binding, bindingContext(eventCtx));
 		ctx.notices.forgetResponse();
+		await refreshStopConfig(hostCwd);
 	};
 	pi.on("session_switch", async (_event, eventCtx) => rebind(eventCtx));
 	pi.on("session_branch", async (_event, eventCtx) => rebind(eventCtx));
@@ -1124,6 +1301,7 @@ export function activate(
 			parked.hold(agentHost, agent.generation, ctx);
 			return;
 		}
+		if (getTerminalUrlRuntime() === urlRuntime) setTerminalUrlRuntime(undefined);
 		await ctx.end();
 		await parked.settled();
 	});
@@ -1186,9 +1364,11 @@ export function activate(
 	});
 
 
+	registerExecCommandTopics();
+
 	const execCommandParameters = Type.Object({
 		cmd: Type.String({ description: "Shell command to execute." }),
-		title: Type.String({ description: `Terminal name in list_sessions, the Terminals view and every notice: one nonblank line, at most ${MAX_TITLE_CHARS} characters kept.` }),
+		title: Type.String({ description: `Terminal name in term://, the Terminals view and every notice: one nonblank line, at most ${MAX_TITLE_CHARS} characters kept.` }),
 		workdir: Type.Optional(Type.String({ description: "Working directory. Defaults to the session cwd." })),
 		shell: Type.Optional(Type.String({
 			description: "Shell executable. Defaults to omp shellPath, then $SHELL, then the platform default: omp's pi-shell (omp bash, bash 5.3 syntax) on Windows, bash elsewhere. cmd is refused. Write cmd in that shell's syntax; results name it.",
@@ -1204,13 +1384,12 @@ export function activate(
 		})),
 		on_exit: Type.Optional(StringEnum(
 			["none", "wake"] as const,
-			'"none" (default). "wake": resume you once when the process exits unobserved; only when the human explicitly asks, never for servers or watchers. A tool result observing the exit consumes it; set_on_exit changes it.',
+			'"none" (default). "wake": resume you once when the process exits unobserved; only when the human explicitly asks, never for servers or watchers. A tool result observing the exit consumes it; write term://<id>/on_exit changes it.',
 		)),
 	});
 
 	pi.registerTool({
 		name: "exec_command",
-		...execCommandDocumentation,
 		label: tr("Execute command", "执行命令"),
 		...(approvalHost ? {
 			approval: (args: unknown) => approveBoundCommand(approvalHost, binding, args),
@@ -1222,7 +1401,7 @@ export function activate(
 			],
 		} : {}),
 		description:
-			"Run a command in a PTY for long-running, interactive (REPL, TUI, ssh, sudo), concurrent or daemon work; bash for one-shot commands. No command deadline. Returns session_id if running, else exit_code. " +
+			"Run a command in a PTY for long-running, interactive, concurrent or daemon work; bash for one-shot commands. Returns session_id or exit_code. " +
 			execCommandTopicPointers,
 		parameters: execCommandParameters,
 		async execute(toolCallId, params, signal, onUpdate, eventCtx) {
@@ -1234,15 +1413,22 @@ export function activate(
 				details: shape,
 			};
 		},
-	} satisfies ToolDefinition<typeof execCommandParameters> & { docTopics(): Readonly<Record<string, string>> });
+	} satisfies ToolDefinition<typeof execCommandParameters>);
 
 	const writeStdinParameters = Type.Object({
 		session_id: Type.Number({ description: "Session id from exec_command." }),
-		chars: Type.Optional(Type.String({
-			description: "Text with C-style escapes: \\xHH, \\uHHHH, \\u{H\u2026}, \\n \\r \\t \\0 \\a \\e \\b \\f \\v \\\\ \\\". Unknown \\X preserved literally. Mutually exclusive with chars_b64.",
+		text: Type.Optional(Type.String({
+			description: "Verbatim UTF-8 text to write to stdin (no backslash escaping). Mutually exclusive with raw_base64.",
 		})),
-		chars_b64: Type.Optional(Type.String({
-			description: "Raw bytes (base64) to write. Mutually exclusive with chars.",
+		enter: Type.Optional(Type.Boolean({
+			description: "Append Enter (\\r) after text/special_key, or send Enter alone. Mutually exclusive with raw_base64.",
+		})),
+		special_key: Type.Optional(StringEnum(
+			SPECIAL_KEYS,
+			"Control or navigation key to send (ctrl-c, ctrl-d, ctrl-z, esc, tab, up, down, left, right, backspace, delete). Mutually exclusive with raw_base64.",
+		)),
+		raw_base64: Type.Optional(Type.String({
+			description: "Raw bytes encoded as base64. Mutually exclusive with text, enter, and special_key.",
 		})),
 		yield_time_ms: Type.Optional(Type.Number({
 			description: `Attachment window in ms, not a process timeout. Default ${DEFAULT_WRITE_STDIN_YIELD_MS}, clamped to [${MIN_YIELD_TIME_MS}, ${MAX_YIELD_TIME_MS}].`,
@@ -1250,10 +1436,9 @@ export function activate(
 	}, { additionalProperties: false });
 	pi.registerTool({
 		name: "write_stdin",
-		...writeStdinDocumentation,
 		label: tr("Send input", "发送输入"),
 		description:
-			"Send input to a running session's PTY; returns output like exec_command." +
+			"Send input (text, enter, special_key, or raw_base64) to a running session's PTY; returns output like exec_command. " +
 			writeStdinTopicPointers,
 		parameters: writeStdinParameters,
 		async execute(toolCallId, params, signal, onUpdate, eventCtx) {
@@ -1265,65 +1450,10 @@ export function activate(
 				details: shape,
 			};
 		},
-	} satisfies ToolDefinition<typeof writeStdinParameters> & { docTopics(): Readonly<Record<string, string>> });
-
-	const setOnExitParameters = Type.Object({
-		session_id: Type.Number({ description: "Session id from exec_command." }),
-		on_exit: StringEnum(
-			["none", "wake"] as const,
-			'"none": disarm (also after eviction) as soon as auto-resume is unwanted. "wake": arm auto-resume while running, only when the human explicitly asked.',
-		),
-	});
-	pi.registerTool({
-		name: "set_on_exit",
-		...setOnExitDocumentation,
-		label: tr("Set exit wake", "设置退出唤醒"),
-		description:
-			"Change a session's on_exit policy without stopping the process." + setOnExitTopicPointers,
-		parameters: setOnExitParameters,
-		async execute(_toolCallId, params, _signal, _onUpdate, eventCtx) {
-			ctx.ui ??= eventCtx.ui;
-			const { session_id: sid, on_exit: policy } = params as { session_id: number; on_exit: OnExitPolicy };
-			const session = ctx.store.get(sid);
-			if (policy === "wake" && !session) {
-				return {
-					content: [{ type: "text", text: missingSessionText(ctx, sid, `No such session: ${sid}`) }],
-					details: { session_id: sid, found: false },
-				};
-			}
-			const status = ctx.coordinator.setOnExit(sid, policy, session);
-			if (!session && status === "already_none") {
-				return {
-					content: [{ type: "text", text: missingSessionText(ctx, sid, `No such session: ${sid}`) }],
-					details: { session_id: sid, found: false },
-				};
-			}
-			const running = session ? !session.hasExited : false;
-			const armed = ctx.coordinator.isArmed(sid);
-			const text =
-				`set_on_exit session_id=${sid} on_exit=${policy} → ${status}` +
-				(session ? (running ? " (process still running)" : " (process already exited)") : " (no store session; coordinator only)") +
-				(armed ? "; wake armed" : "; wake not armed");
-			return {
-				content: [{ type: "text", text }],
-				details: {
-					session_id: sid,
-					found: true,
-					on_exit: policy,
-					status,
-					running,
-					wake_armed: armed,
-					command: session?.displayCommand,
-					log_path: session?.logPath,
-					tool_time_utc: nowUtcIso(),
-				},
-			};
-		},
-	} satisfies ToolDefinition<typeof setOnExitParameters> & { docTopics(): Readonly<Record<string, string>> });
+	} satisfies ToolDefinition<typeof writeStdinParameters>);
 
 	const monitorParameters = Type.Object({
 		session_id: Type.Number({ description: "Existing running session id." }),
-		action: Type.Optional(StringEnum(["start", "cancel"] as const, "start (default) establishes or replaces; cancel removes silently.")),
 		condition: Type.Optional(Type.String({ description: "JavaScript regex source without / delimiters. Omit both condition and judge to await completion only." })),
 		judge: Type.Optional(Type.String({ description: "Intent the judge checks each new screen against, e.g. \"the server is ready to accept requests\"; each screen judged met wakes you. Excludes condition." })),
 		judge_interval_ms: Type.Optional(Type.Number({ description: "With judge: time between judgments; default 60000, integer 1–2147483647. An unchanged screen is not judged again." })),
@@ -1332,26 +1462,21 @@ export function activate(
 	});
 	pi.registerTool({
 		name: "monitor",
-		...monitorDocumentation,
 		label: tr("Monitor", "监视"),
 		description:
-			"Wait for a running session's future output: each batch matching condition or each new screen the judge finds meets your intent wakes you; with neither, its end wakes you once." +
+			"Wait for a running session's future output (condition regex, judge intent, or completion). Cancel via write term://<id>/monitor (\"cancel\"). " +
 			monitorTopicPointers,
 		parameters: monitorParameters,
 		async execute(_toolCallId, params, signal) {
 			let details: MonitorScriptResult;
 			try {
-				if (params.action === "cancel") {
-					details = { session_id: params.session_id, status: ctx.coordinator.cancelMonitor(params.session_id) ? "cancelled" : "not_monitored" };
-				} else {
-					const session = ctx.store.get(params.session_id);
-					if (!session) throw new MonitorError("unknown_session", missingSessionText(ctx, params.session_id, `No such session: ${params.session_id}`));
-					const monitor = await ctx.coordinator.startMonitor(session, {
-						condition: params.condition, judge: params.judge, judgeIntervalMs: params.judge_interval_ms,
-						maxReturns: params.max_returns, remindAfterMs: params.remind_after_ms,
-					}, signal);
-					details = { session_id: params.session_id, status: "started", monitor };
-				}
+				const session = ctx.store.get(params.session_id);
+				if (!session) throw new MonitorError("unknown_session", missingSessionText(ctx, params.session_id, `No such session: ${params.session_id}`));
+				const monitor = await ctx.coordinator.startMonitor(session, {
+					condition: params.condition, judge: params.judge, judgeIntervalMs: params.judge_interval_ms,
+					maxReturns: params.max_returns, remindAfterMs: params.remind_after_ms,
+				}, signal);
+				details = { session_id: params.session_id, status: "started", monitor };
 			} catch (error) {
 				if (!(error instanceof MonitorError)) throw error;
 				details = { session_id: params.session_id, status: "error", code: error.code, message: error.message };
@@ -1362,134 +1487,7 @@ export function activate(
 				...(details.status === "error" ? { isError: true } : {}),
 			};
 		},
-	} satisfies ToolDefinition<typeof monitorParameters> & { docTopics(): Readonly<Record<string, string>> });
-
-	const killSessionParameters = Type.Object({
-		session_id: Type.Number({ description: "Session to terminate." }),
-		signal: Type.Optional(Type.String({
-			description: 'Initial signal (default "SIGTERM"). Examples: SIGINT, SIGHUP, SIGKILL.',
-		})),
-	});
-	pi.registerTool({
-		name: "kill_session",
-		...killSessionDocumentation,
-		label: tr("Terminate session", "结束会话"),
-		description:
-			"Terminate a session: SIGTERM, then SIGKILL after 2 s; on Windows any signal force-kills the process tree." +
-			killSessionTopicPointers,
-		parameters: killSessionParameters,
-		async execute(toolCallId, params, _signal, _onUpdate, eventCtx) {
-			ctx.ui ??= eventCtx.ui;
-			const sid = (params as { session_id: number; signal?: string }).session_id;
-			const initial = normalizeSignal((params as { signal?: string }).signal);
-			const startedAt = Date.now();
-			const outcome = await terminateSessionById(ctx, sid, initial, { kind: "model", toolCallId });
-			if (!outcome) {
-				return {
-					content: [{ type: "text", text: missingSessionText(ctx, sid, `No such session: ${sid}`) }],
-					details: {
-						operation: "kill_session",
-						status: "kill_failed",
-						running: false,
-						session_id: sid,
-						found: false,
-					} as const,
-				};
-			}
-			const { session, escalated, collected, killed } = outcome;
-			updateRunningSessionsUi(ctx);
-			const killFailure = killed
-				? session.failureMessage
-				: [
-						`process still running after ${initial}${escalated ? " and SIGKILL escalation" : ""}; ` +
-							"the session remains registered — retry kill_session or check permissions",
-						session.failureMessage,
-					]
-					.filter((value): value is string => Boolean(value))
-					.join("; ");
-			const details = finalizeKillResult({
-				wallTimeSec: (Date.now() - startedAt) / 1000,
-				collected,
-				totalBytes: session.totalBytesSeen,
-				sessionId: sid,
-				pid: session.pid,
-				requestedSignal: initial,
-				exitCode: session.exitCode,
-				signal: session.signal,
-				failure: killFailure || null,
-				logPath: session.logPath,
-				cwd: session.cwd,
-				shell: session.shell,
-				command: session.displayCommand,
-				escalated,
-				killed,
-			});
-			return {
-				content: [{ type: "text", text: renderKillResultText(details) }],
-				details,
-			};
-		},
-	} satisfies ToolDefinition<typeof killSessionParameters> & { docTopics(): Readonly<Record<string, string>> });
-
-	const listSessionsParameters = Type.Object({});
-	pi.registerTool({
-		name: "list_sessions",
-		...listSessionsDocumentation,
-		label: tr("List sessions", "列出会话"),
-		description: "List this omp run's unified-exec terminals: running ones, and returned ones not yet reclaimed, with their titles and lifecycle state." + listSessionsTopicPointers,
-		parameters: listSessionsParameters,
-		async execute(_toolCallId, _params, _signal, _onUpdate, eventCtx) {
-			ctx.ui ??= eventCtx.ui;
-			for (const s of ctx.store.values()) if (s.hasExited) ctx.coordinator.observeViaListing(s.id);
-			updateRunningSessionsUi(ctx);
-			const now = Date.now();
-			const stored = ctx.store.values();
-			const sessions = stored
-				.sort((a, b) => a.id - b.id)
-				.map((s) => {
-					const life = ctx.lifecycle.status(s.id);
-					return {
-						session_id: s.id,
-						title: s.title,
-						command: s.displayCommand,
-						cwd: s.cwd,
-						shell: s.shell,
-						pid: s.pid,
-						started_at_ms: s.startedAt,
-						elapsed_ms: now - s.startedAt,
-						running: !s.hasExited,
-						wake_armed: ctx.coordinator.isArmed(s.id),
-						monitor: ctx.coordinator.monitorStatus(s.id),
-						lifecycle: life ? { returned: outcomeText(life.outcome), read: life.read, phase: life.phase } : undefined,
-						exit_code: s.hasExited ? s.exitCode : undefined,
-						signal: s.hasExited ? (s.signal ?? undefined) : undefined,
-						failure_message: s.failureMessage ?? undefined,
-						output_bytes_total: s.totalBytesSeen,
-						log_path: s.logPath,
-						terminal_url: s.terminalUrl,
-					};
-				});
-			const runningCount = sessions.filter((s) => s.running).length;
-			const returnedCount = sessions.filter((s) => s.lifecycle !== undefined).length;
-			const toolTimeUtc = nowUtcIso();
-			const lines = sessions.length
-				? sessions.map((s) => {
-						const exited = s.running
-							? ""
-							: `  [exited${s.exit_code !== undefined && s.exit_code !== null ? ` exit_code=${s.exit_code}` : ""}${s.signal ? ` signal=${s.signal}` : ""}]`;
-						const life = s.lifecycle ? `  [returned ${s.lifecycle.returned}; ${s.lifecycle.read ? "read" : "unread"}; ${s.lifecycle.phase}]` : "";
-						const wake = s.wake_armed ? " [wake]" : "";
-						const monitor = s.monitor ? ` [monitor ${s.monitor.returns}/${s.monitor.max_returns} ${watchLabel(s.monitor.watch)} remind_after=${formatElapsed(s.monitor.remind_after_ms)}]` : "";
-						return `  ${String(s.session_id).padStart(3)}  ${JSON.stringify(s.title)}  pid=${String(s.pid ?? "?").padStart(6)}  ${((s.elapsed_ms / 1000).toFixed(1) + "s").padStart(8)}${wake}${monitor}  ${oneLineCommand(s.command, 60)}${exited}${life}\n        shell: ${sanitizeMeta(s.shell ?? "")}\n        log: ${s.log_path}${s.terminal_url ? `\n        terminal_url: ${s.terminal_url}` : ""}`;
-					})
-				: ["  (no terminals)"];
-			const header = `unified-exec terminals (${runningCount} running, ${returnedCount} returned):`;
-			return {
-				content: [{ type: "text", text: `${header}\n${lines.join("\n")}\ntool_time_utc: ${toolTimeUtc}` }],
-				details: { sessions, running_count: runningCount, returned_count: returnedCount, tool_time_utc: toolTimeUtc },
-			};
-		},
-	} satisfies ToolDefinition<typeof listSessionsParameters> & { docTopics(): Readonly<Record<string, string>> });
+	} satisfies ToolDefinition<typeof monitorParameters>);
 
 	return {
 		store: () => ctx.store,
@@ -1501,4 +1499,4 @@ export function activate(
 	};
 }
 
-export default withHostPresentation(activate);
+export default withHostPresentation(activate, initializeTerminalUrls);

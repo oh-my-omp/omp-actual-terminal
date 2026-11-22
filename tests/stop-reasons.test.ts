@@ -1,19 +1,14 @@
 import { strict as assert } from "node:assert";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, it } from "node:test";
-import { loadStopConfig, parseStopSection } from "../fork-features/stop-config.ts";
+import { loadStopConfig, parseStopSection, parseStopSettings } from "../fork-features/stop-config.ts";
 import { renderStopConfigReason, renderStopReason, type StopConfigReason, type StopReason } from "../fork-features/stop-reasons.ts";
 
 const configCases: readonly [StopConfigReason, string, string][] = [
-	[{ kind: "non_mapping", scope: "root" }, "root is not a mapping", "根节点不是映射"],
 	[{ kind: "non_mapping", scope: "section" }, "section is not a mapping", "配置段不是映射"],
 	[{ kind: "unknown_keys", keys: ["typo"] }, "unknown key typo; known: stop, judgePrompt, noticeTemplate", "未知字段 typo；可用字段：stop, judgePrompt, noticeTemplate"],
 	[{ kind: "invalid_stop", modes: ["auto", "off"] }, "stop: must be one of auto, off", "stop：必须为以下值之一：auto, off"],
 	[{ kind: "invalid_template", key: "judgePrompt" }, "judgePrompt: must be a non-empty string", "judgePrompt：必须为非空字符串"],
 	[{ kind: "unknown_placeholders", key: "noticeTemplate", names: ["typo"], known: ["summary"] }, "noticeTemplate: unknown placeholder {typo}; known: {summary}", "noticeTemplate：未知占位符 {typo}；可用占位符：{summary}"],
-	[{ kind: "ambiguous_files", names: ["omomp.yml", "omomp.json"] }, "several omomp files: omomp.yml, omomp.json", "存在多个 omomp 文件：omomp.yml, omomp.json"],
 	[{ kind: "parse_error", detail: "external parser payload" }, "external parser payload", "external parser payload"],
 ];
 const stopCases: readonly [StopReason, string, string][] = [
@@ -50,25 +45,18 @@ describe("stop diagnostic facts and boundary rendering", () => {
 		assert.deepEqual(parseStopSection({ judgePrompt: " " }), { kind: "error", reason: { kind: "invalid_template", key: "judgePrompt" } });
 		assert.deepEqual(parseStopSection({ noticeTemplate: "{typo}" }), { kind: "error", reason: { kind: "unknown_placeholders", key: "noticeTemplate", names: ["typo"], known: ["summary", "items", "instruction", "terminal_count", "notice_count"] } });
 	});
-	it("keeps file-source problems structured and accepts a valid fallback", () => {
-		const dir = mkdtempSync(join(tmpdir(), "unified-stop-reasons-"));
-		try {
-			const project = join(dir, "project");
-			const agent = join(dir, "agent");
-			mkdirSync(join(project, ".omp"), { recursive: true });
-			mkdirSync(agent);
-			writeFileSync(join(project, ".omp", "omomp.json"), JSON.stringify({ "omp-unified-exec": "bad" }));
-			writeFileSync(join(agent, "omomp.json"), JSON.stringify({ "omp-unified-exec": { stop: "off" } }));
-			const load = loadStopConfig(project, agent);
-			assert.equal(load.config.mode, "off");
-			assert.deepEqual(load.problems, [{ path: `${join(project, ".omp", "omomp.json")}#omp-unified-exec`, reason: { kind: "non_mapping", scope: "section" } }]);
-			const reason = load.problems[0].reason;
-			const identity = JSON.stringify(reason);
-			assert.equal(renderStopConfigReason(reason, "zh"), "配置段不是映射");
-			assert.equal(renderStopConfigReason(reason, "en"), "section is not a mapping");
-			assert.equal(JSON.stringify(reason), identity, "rendering never changes locale-independent diagnostic identity");
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
-		}
+	it("ignores unrelated plugin settings keys and loads valid stop settings via getPluginSettings", async () => {
+		const parsed = parseStopSettings({ "notice.graceReclaim": true, "exec.initFile": "~/.bashrc", stop: "off" });
+		assert.equal(parsed.config.mode, "off");
+		assert.deepEqual(parsed.problems, []);
+
+		const invalid = await loadStopConfig(async () => ({ stop: "always" }), "/tmp");
+		assert.equal(invalid.config.mode, "auto");
+		assert.equal(invalid.problems.length, 1);
+		const reason = invalid.problems[0]!.reason;
+		const identity = JSON.stringify(reason);
+		assert.equal(renderStopConfigReason(reason, "zh"), "stop：必须为以下值之一：off, auto, judge, llm, todo");
+		assert.equal(renderStopConfigReason(reason, "en"), "stop: must be one of off, auto, judge, llm, todo");
+		assert.equal(JSON.stringify(reason), identity, "rendering never changes locale-independent diagnostic identity");
 	});
 });

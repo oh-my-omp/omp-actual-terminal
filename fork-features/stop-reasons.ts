@@ -1,12 +1,11 @@
 import type { Language } from "./omomp-shared/i18n.ts";
 
 export type StopConfigReason =
-	| { readonly kind: "non_mapping"; readonly scope: "root" | "section" }
+	| { readonly kind: "non_mapping"; readonly scope: "section" }
 	| { readonly kind: "unknown_keys"; readonly keys: readonly string[] }
 	| { readonly kind: "invalid_stop"; readonly modes: readonly string[] }
 	| { readonly kind: "invalid_template"; readonly key: string }
 	| { readonly kind: "unknown_placeholders"; readonly key: string; readonly names: readonly string[]; readonly known: readonly string[] }
-	| { readonly kind: "ambiguous_files"; readonly names: readonly string[] }
 	| { readonly kind: "parse_error"; readonly detail: string };
 
 export type ModelFailure =
@@ -31,9 +30,7 @@ export function renderStopConfigReason(reason: StopConfigReason, language: Langu
 	const zh = language === "zh";
 	switch (reason.kind) {
 		case "non_mapping":
-			return reason.scope === "root"
-				? (zh ? "根节点不是映射" : "root is not a mapping")
-				: (zh ? "配置段不是映射" : "section is not a mapping");
+			return zh ? "配置段不是映射" : "section is not a mapping";
 		case "unknown_keys":
 			return zh ? `未知字段 ${reason.keys.join(", ")}；可用字段：stop, judgePrompt, noticeTemplate` : `unknown key ${reason.keys.join(", ")}; known: stop, judgePrompt, noticeTemplate`;
 		case "invalid_stop":
@@ -45,8 +42,6 @@ export function renderStopConfigReason(reason: StopConfigReason, language: Langu
 			const known = reason.known.map((name) => `{${name}}`).join(", ");
 			return zh ? `${reason.key}：未知占位符 ${names}；可用占位符：${known}` : `${reason.key}: unknown placeholder ${names}; known: ${known}`;
 		}
-		case "ambiguous_files":
-			return zh ? `存在多个 omomp 文件：${reason.names.join(", ")}` : `several omomp files: ${reason.names.join(", ")}`;
 		case "parse_error":
 			return reason.detail;
 	}

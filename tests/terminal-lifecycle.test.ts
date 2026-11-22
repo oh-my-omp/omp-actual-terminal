@@ -1,7 +1,9 @@
 import { strict as assert } from "node:assert";
 import { afterEach, describe, it } from "node:test";
+import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import type { PluginSettingsReader } from "../fork-features/plugin-settings.ts";
 import { noteTerminalRead, readTerminal } from "../fork-features/terminal-resource.ts";
+import { initializeTerminalUrls } from "../fork-features/terminal-url.ts";
 import { activate } from "../src/index.ts";
 import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";
 
@@ -80,6 +82,7 @@ function makeHarness(pluginSettings?: PluginSettingsReader): Harness {
 		sent,
 		warnings,
 		async emit(event, evt = {}) {
+			if (event === "session_start") await initializeTerminalUrls();
 			for (const h of handlers[event] ?? []) await h(evt, stubCtx);
 		},
 		async call(name, params) {
@@ -96,8 +99,19 @@ function makeHarness(pluginSettings?: PluginSettingsReader): Harness {
 			return sent.flatMap((s) => s.message.details.notices.filter((n) => n.kind === kind));
 		},
 		async listed(id) {
-			const list = await harness.call("list_sessions", {});
-			return list.details.sessions?.find((s) => s.session_id === id);
+			await initializeTerminalUrls();
+			const res = await InternalUrlRouter.instance().resolve("term://");
+			const text = typeof res.content === "string" ? res.content : res.content.toString("utf8");
+			const line = text.split("\n").find((l) => l.includes(`session_id=${id} `));
+			if (!line) return undefined;
+			const titleMatch = /session_id=\d+\s+("(?:\\.|[^"])*")/.exec(line);
+			const lifeMatch = /\[returned ([^;]+); (read|unread); ([^\]]+)\]/.exec(line);
+			return {
+				session_id: id,
+				title: titleMatch ? JSON.parse(titleMatch[1]!) : "",
+				running: line.includes("[running]"),
+				lifecycle: lifeMatch ? { returned: lifeMatch[1]!, read: lifeMatch[2] === "read", phase: lifeMatch[3]! } : undefined,
+			};
 		},
 	};
 	live.add(harness);
@@ -154,11 +168,11 @@ describe("exec_command title", { skip: process.platform === "win32" }, () => {
 		await h.emit("session_start");
 		await assert.rejects(h.call("exec_command", { cmd: "echo no-title" }), /title is required/);
 		await assert.rejects(h.call("exec_command", { cmd: "echo blank", title: " \n\t" }), /title is required/);
-		const list = await h.call("list_sessions", {});
-		assert.deepEqual(list.details.sessions, []);
+		const res = await InternalUrlRouter.instance().resolve("term://");
+		assert.match(String(res.content), /\(no terminals\)/);
 	});
 
-	it("names the terminal in list_sessions as one line", async () => {
+	it("names the terminal in term:// as one line", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const { sid } = await startBackground(h, "sleep 30", "  long\nsleep  ");
@@ -228,11 +242,13 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		assert.deepEqual(h.sent, [], "no unread, reclaim-due or reclaimed notice");
 		assert.ok((await readTerminal(url.slice(7))).retainedLines.includes("finished-line"), "the terminal stays readable");
 		await assert.rejects(
-			h.call("write_stdin", { session_id: sid, chars: "x" }),
+			h.call("write_stdin", { session_id: sid, text: "x" }),
 			(error: Error) => error.message.includes(`unknown session_id: ${sid}; it returned normally and was reclaimed: read ${url} or log_path `),
 		);
-		const killed = await h.call("kill_session", { session_id: sid });
-		assert.ok(killed.content[0]!.text.startsWith(`No such session: ${sid}; it returned normally and was reclaimed: read ${url}`), killed.content[0]!.text);
+		await assert.rejects(
+			InternalUrlRouter.instance().write(`term://${sid}/kill`, ""),
+			(error: Error) => error.message.startsWith(`No such session: ${sid}; it returned normally and was reclaimed: read ${url}`),
+		);
 	});
 
 	it("a normal return lingers from the sweep that finds its last process gone", async () => {
@@ -296,8 +312,9 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const { sid } = await startBackground(h, "sleep 300", "killed");
-		const killed = await h.call("kill_session", { session_id: sid });
-		assert.equal(killed.details.killed, true);
+		const killed = await InternalUrlRouter.instance().write(`term://${sid}/kill`, "");
+		assert.equal(killed?.isError, undefined);
+		assert.match(killed!.content[0]!.type === "text" ? killed!.content[0]!.text : "", /killed: true/);
 		await settle();
 		assert.equal(h.notices("abnormal_return").length, 0);
 		const entry = await h.listed(sid);
@@ -313,7 +330,7 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const { sid } = await startBackground(h, "sleep 300", "interrupted");
-		await h.call("write_stdin", { session_id: sid, chars: "\u0003", yield_time_ms: 250 });
+		await h.call("write_stdin", { session_id: sid, special_key: "ctrl-c", yield_time_ms: 250 });
 		assert.ok(await waitFor(async () => (await h.listed(sid))?.running === false), "Ctrl-C ended the command");
 		await settle();
 		assert.equal(h.notices("abnormal_return").length, 0);
@@ -324,9 +341,9 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const { sid } = await startBackground(h, "trap '' INT; read line; exit 3", "survives interrupt");
-		await h.call("write_stdin", { session_id: sid, chars: "\u0003", yield_time_ms: 250 });
+		await h.call("write_stdin", { session_id: sid, special_key: "ctrl-c", yield_time_ms: 250 });
 		assert.equal((await h.listed(sid))?.running, true, "the program ignored the interrupt");
-		await h.call("write_stdin", { session_id: sid, chars: "go\r", yield_time_ms: 250 });
+		await h.call("write_stdin", { session_id: sid, text: "go", enter: true, yield_time_ms: 250 });
 		assert.ok(await waitFor(() => h.notices("abnormal_return").length === 1));
 		assert.match(h.notices("abnormal_return")[0]!.reason, /exit_code=3/);
 	});
@@ -410,7 +427,7 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		const h = makeHarness();
 		await h.emit("session_start");
 		const { sid } = await startBackground(h, "read line; echo got=$line", "answered");
-		const answered = await h.call("write_stdin", { session_id: sid, chars: "yes\r", yield_time_ms: 2000 });
+		const answered = await h.call("write_stdin", { session_id: sid, text: "yes", enter: true, yield_time_ms: 2000 });
 		assert.equal(answered.details.session_id, undefined, "the result reports the exit");
 		assert.deepEqual((await h.listed(sid))?.lifecycle, { returned: "normally", read: true, phase: "linger" });
 	});

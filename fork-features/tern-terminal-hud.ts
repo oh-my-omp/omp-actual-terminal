@@ -1,10 +1,10 @@
 import { homedir } from "node:os";
 import { isAbsolute, relative, sep } from "node:path";
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import type * as NativeState from "@oh-my-pi/pi-tui/native/state";
-import { matchesKey, type Component, type NativeNode } from "@earendil-works/pi-tui";
+import type { Component, NativeNode } from "@oh-my-pi/pi-tui";
 
 import { formatElapsedUi } from "../src/format-time.ts";
 import { sanitizeOutputText } from "../src/output-safety.ts";
@@ -42,9 +42,25 @@ export function parseInteractiveModeModule(value: { readonly InteractiveMode?: u
 	return prototype;
 }
 
+export type HudKeyMatcher = (data: string, key: "escape" | "up" | "down" | "enter") => boolean;
+
+const fallbackMatchesKey: HudKeyMatcher = (data, key) => {
+	switch (key) {
+		case "escape":
+			return data === "\x1b";
+		case "up":
+			return data === "\x1b[A";
+		case "down":
+			return data === "\x1b[B";
+		case "enter":
+			return data === "\r";
+	}
+};
+
 export interface TernHudHost {
 	readonly native: NativeRenderingState;
 	readonly pills: HudPillsPrototype;
+	readonly matchesKey?: HudKeyMatcher;
 }
 
 export const OPEN_ACTION = "unified-exec.terminals.open";
@@ -617,6 +633,7 @@ class TerminalsSheet implements Component {
 		private selectedId: number | undefined,
 		private readonly done: (result: SheetResult) => void,
 		private readonly kill: KillSession,
+		private readonly matchKey: HudKeyMatcher,
 	) {
 		this.watch = new SessionWatch(store, this.changed, () => this.selectedId);
 		this.tick = setInterval(() => {
@@ -692,10 +709,10 @@ class TerminalsSheet implements Component {
 	}
 
 	handleInput(data: string): void {
-		if (matchesKey(data, "escape")) this.done({ kind: "closed" });
-		else if (matchesKey(data, "up")) this.move(-1);
-		else if (matchesKey(data, "down")) this.move(1);
-		else if (matchesKey(data, "enter")) this.openSelected();
+		if (this.matchKey(data, "escape")) this.done({ kind: "closed" });
+		else if (this.matchKey(data, "up")) this.move(-1);
+		else if (this.matchKey(data, "down")) this.move(1);
+		else if (this.matchKey(data, "enter")) this.openSelected();
 		else if (data === "x") this.killSelected();
 	}
 
@@ -725,6 +742,7 @@ class TerminalPage implements Component {
 		private readonly requestRender: () => void,
 		private readonly back: () => void,
 		private readonly kill: KillSession,
+		private readonly matchKey: HudKeyMatcher,
 	) {
 		this.watch = new SessionWatch(store, this.changed, () => id);
 	}
@@ -755,7 +773,7 @@ class TerminalPage implements Component {
 	}
 
 	handleInput(data: string): void {
-		if (matchesKey(data, "escape")) {
+		if (this.matchKey(data, "escape")) {
 			this.back();
 			return;
 		}
@@ -777,14 +795,19 @@ class TerminalPage implements Component {
 }
 
 export async function loadTernHudHost(): Promise<TernHudHost> {
-	const [state, modes] = await Promise.all([
+	const [state, modes, tui] = await Promise.all([
 		import("@oh-my-pi/pi-tui/native/state"),
 		import("@oh-my-pi/pi-coding-agent/modes/interactive-mode"),
+		import("@oh-my-pi/pi-tui"),
 	]);
-	return { native: parseNativeRenderingState(state), pills: parseInteractiveModeModule(modes) };
+	if (typeof tui.matchesKey !== "function") {
+		throw requalify("@oh-my-pi/pi-tui no longer provides matchesKey");
+	}
+	return { native: parseNativeRenderingState(state), pills: parseInteractiveModeModule(modes), matchesKey: tui.matchesKey };
 }
 
 export function mountTerminalHud(pi: ExtensionAPI, store: () => SessionStore, host: TernHudHost, kill: KillSession): void {
+	const matchKey = host.matchesKey ?? fallbackMatchesKey;
 	let ui: ExtensionContext["ui"] | undefined;
 	let provider: SegmentProvider | undefined;
 	let sheetOpen = false;
@@ -798,14 +821,14 @@ export function mountTerminalHud(pi: ExtensionAPI, store: () => SessionStore, ho
 			while (ui === host) {
 				const result = await host.custom<SheetResult>(
 					(tui, _theme, _keybindings, done) =>
-						new TerminalsSheet(store(), () => tui.requestRender(), selected, done, kill),
+						new TerminalsSheet(store(), () => tui.requestRender(), selected, done, kill, matchKey),
 					{ overlay: true },
 				);
 				if (result.kind === "closed" || ui !== host) return;
 				selected = result.id;
 				await host.custom<void>(
 					(tui, _theme, _keybindings, done) =>
-						new TerminalPage(store(), result.id, () => tui.requestRender(), () => done(), kill),
+						new TerminalPage(store(), result.id, () => tui.requestRender(), () => done(), kill, matchKey),
 					{ overlay: true },
 				);
 			}
