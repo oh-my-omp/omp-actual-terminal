@@ -80,11 +80,6 @@ export function signalNameFromNumber(num: number): NodeJS.Signals | null {
 	return SIGNAL_NAMES[num] ?? null;
 }
 
-/**
- * Never spawn the bare name: Windows'
- * CreateProcess checks the parent's cwd before PATH, so a taskkill.exe
- * planted in an untrusted repository would execute with every kill.
- */
 function taskkillPath(): string {
 	const root = process.env.SystemRoot ?? process.env.windir ?? "C:\\Windows";
 	return `${root}\\System32\\taskkill.exe`;
@@ -173,8 +168,6 @@ export function spawnBunPty(runtime: BunPtyRuntime, opts: SpawnOptions): Spawned
 	const emitData = (chunk: Uint8Array) => {
 		if (finalized) return;
 		if (bufferingInitialData) {
-			// Bun may invoke terminal callbacks before spawn() returns. Preserve
-			// those bytes until ExecSession can subscribe to the returned child.
 			pendingData.push(chunk.slice());
 			return;
 		}
@@ -276,7 +269,6 @@ export function spawnBunPty(runtime: BunPtyRuntime, opts: SpawnOptions): Spawned
 		kill(signal = "SIGTERM") {
 			if (finalized) return;
 			if (IS_WINDOWS) {
-				// taskkill /T cannot walk a tree whose root has exited.
 				if (!processExited) killWindowsTree(child.pid);
 				return;
 			}

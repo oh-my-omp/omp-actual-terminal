@@ -132,8 +132,6 @@ export async function initializeTerminalUrls(): Promise<void> {
 			const path = url.rawPathname ?? url.pathname;
 			if (!host || path !== "/screen.png") return null;
 			const key = resolveTerminalKey(host);
-			// Capture the source variant once: a concurrent freeze must not change
-			// cursor policy halfway through a single screenshot read.
 			const resource = getTerminalResource(key);
 			const projection = resource.kind === "live" ? await resource.screen.project() : resource.projection;
 			const image = await writeTerminalImage(projection, resource.kind === "live");

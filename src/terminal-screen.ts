@@ -42,7 +42,6 @@ export type TerminalColor =
 	| { readonly kind: "palette"; readonly value: number }
 	| { readonly kind: "rgb"; readonly value: number };
 
-/** Copied values only: xterm reuses both its line and cell objects. */
 export interface TerminalCell {
 	readonly chars: string;
 	readonly width: 0 | 1 | 2;
@@ -260,16 +259,12 @@ class LineSubscription implements TerminalLineSubscription {
 		this.normal = term.buffer.active.type === "normal" ? this.baseline() : undefined;
 		this.previousAlt = source.readRows("alternate", 0, source.rows);
 		this.previousEpoch = source.altEpoch();
-		// RIS replaces xterm's underlying normal buffer, while its public
-		// BufferApiView object stays identical. Invalidate this cursor at
-		// that authoritative parser boundary, not by guessing from row text.
 		this.reset = term.parser.registerEscHandler({ final: "c" }, () => {
 			this.disposeNormal();
 			this.normal = undefined;
 			this.previousAlt = [];
 			return false;
 		});
-		// Normal markers cannot be created while alternate is active.
 		this.bufferSwitch = term.buffer.onBufferChange((buffer) => {
 			if (buffer.type === "normal" && this.normal === undefined) this.normal = this.baseline();
 		});
@@ -652,9 +647,6 @@ export class TerminalScreen {
 			});
 		});
 	}
-	/**
-	 * Must not be called after release.
-	 */
 	styledScreen(): StyledScreen {
 		const buffer = this.term.buffer.active;
 		const cell = buffer.getNullCell();
@@ -758,7 +750,6 @@ export class TerminalScreen {
 		this.lastNormal = { screen: "normal", rows: screen, cursorRow: view.cursor.row, cursorCol: view.cursor.col, altEpoch: 0 };
 		this.lastScreen = "normal";
 
-		// Never start inside a wrapped logical line.
 		const priorRows = previous?.rows ?? [];
 		let skip = 0;
 		while (

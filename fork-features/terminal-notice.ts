@@ -668,9 +668,9 @@ export class NoticeDispatcher {
 			}
 			if (this.stopped || generation !== this.generation) return;
 			this.deciding = undefined;
-			try { gate.verdict(verdict); } catch { /* a failed log sink must not hold notices */ }
+			try { gate.verdict(verdict); } catch {}
 			if (verdict.kind === "done") {
-				try { await gate.collect(); } catch { /* a terminal that could not be reclaimed keeps its notices */ }
+				try { await gate.collect(); } catch {}
 				if (this.stopped) return;
 				this.dropWhere((entry) => !gate.tracked(entry.notice.identity.sessionId) && !isTerminalProblem(entry.notice.body.kind));
 			}
@@ -704,7 +704,7 @@ export class NoticeDispatcher {
 			}
 			for (const [key, entry] of this.pending) restored.set(key, entry);
 			this.pending = restored;
-			try { this.opts.onSendError?.(error); } catch { /* a failed UI sink must not drop notices */ }
+			try { this.opts.onSendError?.(error); } catch {}
 		};
 		let result: void | Promise<void>;
 		try { result = this.opts.send(buildNoticeMessage(batch.map((entry) => entry.notice), template)); }

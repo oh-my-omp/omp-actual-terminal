@@ -1,10 +1,6 @@
 import type { AgentLifecycleApi } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import type { AgentRegistryApi, AgentRef } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 
-/**
- * One agent generation, as the registry mints it. The lifecycle compares an expected ref by
- * identity (`adopted.ref === expected`), so the ref object itself is the token.
- */
 export type AgentGeneration = AgentRef;
 
 export type AgentIdentity = {
@@ -20,11 +16,9 @@ export interface AgentHost {
 	onEnded(listener: (generation: AgentGeneration) => void): () => void;
 }
 
-/** The registry surface the plugin reads, and the lifecycle surface it drives. */
 export type AgentRegistryHost = Pick<AgentRegistryApi, "get" | "onChange">;
 export type AgentLifecycleHost = Pick<AgentLifecycleApi, "has" | "isParking" | "ensureLive">;
 
-/** The two host modules as the loader receives them; each member is optional because an older omp may lack it. */
 export interface AgentHostModules {
 	readonly AgentRegistry?: { global(): Partial<AgentRegistryHost> };
 }
@@ -42,7 +36,6 @@ function parseRegistry(Class: AgentHostModules["AgentRegistry"]): AgentRegistryH
 	const onChange = registry.onChange;
 	if (typeof get !== "function") throw new Error("omp-unified-exec: AgentRegistry lacks get()");
 	if (typeof onChange !== "function") throw new Error("omp-unified-exec: AgentRegistry lacks onChange()");
-	// Bound: the host registry keeps its state in private fields, so a detached call would lose it.
 	return { get: get.bind(registry), onChange: onChange.bind(registry) };
 }
 

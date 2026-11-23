@@ -20,7 +20,6 @@ export function parseGraceReclaim(settings: Readonly<Record<string, unknown>>): 
 }
 
 export async function loadPluginSettingsReader(): Promise<PluginSettingsReader> {
-	// `Partial` says what the guard below checks: the installed omp may not export `getPluginSettings`.
 	const loader: Partial<typeof Loader> = await import("@oh-my-pi/pi-coding-agent/extensibility/plugins/loader");
 	const getPluginSettings = loader.getPluginSettings;
 	if (typeof getPluginSettings !== "function") {

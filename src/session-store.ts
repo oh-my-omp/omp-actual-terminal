@@ -36,11 +36,6 @@ export class SessionStore {
 		return this.sessions.size;
 	}
 
-	/**
-	 * A removed session's
-	 * terminal emulator is being released by then, so listeners re-read
-	 * `values()` instead of keeping removed sessions.
-	 */
 	subscribe(listener: () => void): () => void {
 		this.membershipListeners.add(listener);
 		return () => this.membershipListeners.delete(listener);

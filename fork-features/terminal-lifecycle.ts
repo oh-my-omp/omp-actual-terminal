@@ -165,7 +165,6 @@ export class TerminalLifecycle {
 	markRead(sessionId: number): void {
 		const entry = this.tracked.get(sessionId);
 		if (!entry) return;
-		// A read can race the shell-exit event; the session state is authoritative.
 		if (entry.life.kind === "running" && (entry.session.shellExited || entry.session.hasExited)) this.returned(entry, entry.session.shellExit);
 		const life = entry.life;
 		if (life.kind !== "returned" || life.phase.kind === "reclaiming") return;

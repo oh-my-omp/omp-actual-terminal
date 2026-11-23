@@ -237,7 +237,6 @@ export interface CommandApprovalHost extends SessionRegistry {
 	readonly helpers: ApprovalHelpers;
 }
 
-/** The unbound path must return before touching any session settings. */
 export function approveBoundCommand(host: CommandApprovalHost, binding: HostBindingState, args: unknown): CommandApproval {
 	if (binding.kind !== "bound") return "exec";
 	const settings = binding.session.settings;

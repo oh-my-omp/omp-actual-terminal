@@ -172,10 +172,6 @@ export class CompletionCoordinator {
 		void this.opts.notices.submit(alert.notice, () => !this.stopped && alert.current());
 	}
 
-	/**
-	 * Call ONLY once exec_command has
-	 * committed to returning a background session_id.
-	 */
 	register(session: CompletionSessionLike): void {
 		if (this.stopped) return;
 		if (this.records.has(session.id)) return;
@@ -201,9 +197,6 @@ export class CompletionCoordinator {
 		return !!r && r.armed && !r.observed && !r.suppressed;
 	}
 
-	/**
-	 * Disarm cannot recall a follow-up that `send` has already handed to pi.
-	 */
 	setOnExit(
 		sessionId: number,
 		policy: OnExitPolicy,
@@ -229,8 +222,6 @@ export class CompletionCoordinator {
 	}
 
 	private recordExit(record: CompletionRecord): void {
-		// Repeated exit callbacks must never create duplicate wakes: the exited
-		// flag latches and the snapshot is captured once.
 		if (record.exited) return;
 		record.exited = true;
 		const s = record.session;
@@ -300,7 +291,6 @@ export class CompletionCoordinator {
 	}
 
 
-	/** Suppress the wake BEFORE signaling the process on an explicit kill. */
 	suppress(sessionId: number): void {
 		const r = this.records.get(sessionId);
 		if (r) r.suppressed = true;
@@ -386,7 +376,6 @@ export class CompletionCoordinator {
 	}
 
 	private submitWake(record: CompletionRecord, s: CompletionSnapshot): void {
-		// Reserve BEFORE submitting so a re-entrant flush cannot double-submit.
 		record.wakeQueued = true;
 		const live = () => !this.stopped && this.records.get(record.sessionId) === record && !record.observed && !record.suppressed;
 		void this.opts.notices.submit({

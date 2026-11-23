@@ -225,11 +225,6 @@ function actionButton(label: string, act: string, keys?: string, tone?: Tone): N
 	};
 }
 
-/**
- * omp's own `shortenPath`
- * lives in `@oh-my-pi/pi-tui/render`, which ships TypeScript source; importing it would
- * stop this module from loading on a Node host before the factory can reject that host.
- */
 function shortenHome(path: string): string {
 	const below = relative(homedir(), path);
 	if (below === "") return "~";
@@ -467,10 +462,6 @@ function renderTargetOf(mode: object): RenderTarget {
 	return { requestRender: () => request.call(ui) };
 }
 
-/**
- * Each mode gets its own
- * component: omp skips a component described twice in one frame.
- */
 class TerminalSegment implements Component {
 	constructor(private readonly provider: SegmentProvider) {}
 
@@ -841,7 +832,6 @@ export function mountTerminalHud(pi: ExtensionAPI, store: () => SessionStore, ho
 		const ended = provider;
 		if (!ended) return;
 		provider = undefined;
-		// A later activation may already own the wrapper; only withdraw this one's decorator.
 		if (pillsRegistry.decorate === ended.decorate) pillsRegistry.decorate = undefined;
 		ended.dispose();
 	};
@@ -857,9 +847,6 @@ export function mountTerminalHud(pi: ExtensionAPI, store: () => SessionStore, ho
 		pillsRegistry.decorate = provider.decorate;
 	};
 
-	// The native-rendering listener set is process-global: a listener left behind
-	// keeps this activation, and through it the disposed (e.g. parked) session,
-	// reachable for the life of the process. Subscribe for each session period only.
 	let unsubscribeNative: (() => void) | undefined;
 	pi.on("session_start", async (_event, eventCtx) => {
 		deactivate();

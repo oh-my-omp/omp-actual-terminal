@@ -35,7 +35,6 @@ export interface StopHost {
 	readonly resolveRoleChain: typeof ModelResolver.resolveRoleChain;
 	readonly roleCandidatePool: typeof ModelRoles.roleCandidatePool;
 	readonly completeSimple: typeof PiAi.completeSimple;
-	/** The host's thinking levels, least to most intensive; the role chain's level is looked up in them. */
 	readonly thinkingLevels: typeof PiAi.THINKING_EFFORTS;
 }
 
@@ -69,11 +68,6 @@ export async function loadStopHost(): Promise<StopHost> {
 	};
 }
 
-/**
- * The session surface the detectors read. `BoundSession` declares the session's settings and
- * manager; the registry's ref is typed as the minimal cross-agent handle, so these members are
- * read off the same object and validated here.
- */
 export interface DetectorSession {
 	readonly settings: AgentRoot.Settings;
 	readonly sessionManager: BoundSession["sessionManager"];
@@ -185,7 +179,6 @@ async function runJudge(chain: Judgment.ChainJudge, prompt: string, signal: Abor
 	return { kind: "undecided", cause: "failed", reason: { kind: "judge_no_choice", payload: JSON.stringify(finished) } };
 }
 
-/** The host's `low` thinking level; a role that names none runs at it. */
 function defaultEffort(levels: typeof PiAi.THINKING_EFFORTS): PiAi.Effort {
 	const low = levels.find((level) => String(level) === "low");
 	if (low === undefined) {

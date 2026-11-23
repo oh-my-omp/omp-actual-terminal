@@ -11,7 +11,6 @@ export const noShellHost: ShellHost = {
 };
 
 export async function loadShellHost(): Promise<ShellHost> {
-	// `Partial` says what the guard below checks: the installed omp may not export `procmgr` at all.
 	const utils: Partial<typeof PiUtils> = await import("@oh-my-pi/pi-utils");
 	const isCmdShell = utils.procmgr?.isCmdShell;
 	if (typeof isCmdShell !== "function") {

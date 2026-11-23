@@ -52,22 +52,10 @@ function streamedArgs<K extends string>(args: unknown): StreamedArgs<K> {
 	return typeof args === "object" ? (args ?? undefined) : undefined;
 }
 
-/**
- * The bash entry of `toolRenderers` with the members the delegate below
- * requires. `describeCall`/`describeResult`/`mergeCallAndResult`/`inline` are
- * optional on the host `ToolRenderer`; {@link parseShellRenderer} proves them
- * present and narrows the entry to this shape.
- */
 type BashRenderer = Required<
 	Pick<PiTuiTools.ToolRenderer, "renderCall" | "renderResult" | "describeCall" | "describeResult" | "mergeCallAndResult" | "inline">
 >;
 
-/**
- * Renderer hooks spliced onto a presented tool definition, typed by the host's
- * `ToolDefinition` hook signatures. `mergeCallAndResult` and `inline` are
- * forwarded for `applyToolProxy` (they are `ToolRenderer` members, absent from
- * `ToolDefinition`).
- */
 type OmpToolHooks = Required<Pick<ToolDefinition, "renderCall" | "renderResult" | "describeCall" | "describeResult">> &
 	Required<Pick<PiTuiTools.ToolRenderer, "mergeCallAndResult" | "inline">>;
 
@@ -161,11 +149,6 @@ function optionalNumber(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-/**
- * A `details.truncation` value persisted by this plugin's own tool results,
- * parsed at the boundary against the host's `TruncationResult` contract
- * (required fields only; optional fields are read through the interface).
- */
 function isTruncationResult(value: unknown): value is TruncationResult {
 	return (
 		typeof value === "object" &&
@@ -340,11 +323,6 @@ export function writeStdinShellArgs(
 	return { command: tr(`# stdin → ${target}: (input required)`, `# 输入 → ${target}：（需要输入）`) };
 }
 
-/**
- * `ToolDefinition` render hooks return a `Component`, but the host
- * `ToolRenderer` signature permits `undefined`. The presented tools cannot
- * paint nothing silently; fail loudly instead of discarding the result.
- */
 function requireComponent(component: Component | undefined): Component {
 	if (component === undefined) {
 		throw new Error(
@@ -383,9 +361,6 @@ function isShellPresented(name: string): name is ShellPresentedTool {
 	return (SHELL_PRESENTED_TOOLS as readonly string[]).includes(name);
 }
 
-/**
- * The bash renderer is required; a missing or reshaped one fails plugin loading.
- */
 async function presentOnOmp(pi: ExtensionAPI): Promise<ExtensionAPI> {
 	const bash = parseShellRenderer(await import("@oh-my-pi/pi-tui/tools"));
 	const hooks: Record<ShellPresentedTool, OmpToolHooks> = {
@@ -478,10 +453,6 @@ export function withHostPresentation(
 			presentOnOmp(host), loadTernHudHost(), loadOmpAppearance(), loadOmpShellPath(host), loadCommandApprovalHost(),
 			loadGithubCacheInvalidation(), loadStopHost(), loadPluginSettingsReader(), loadAgentHost(), loadShellHost(),
 		]).then(async ([pi, hud, appearance, shellPath, approvalHost, invalidateGithubCache, stopHost, pluginSettings, agentHost, shellHost]) => {
-			// The specifier
-			// is non-literal so bundlers leave it deferred: inlining it would hoist
-			// those imports into the bundle and fail module loading before the
-			// host-admission checks above can reject a foreign host.
 			const removal: typeof TernPluginRemoval = await import(TERN_PLUGIN_REMOVAL_MODULE);
 			await removal.retireTernPlugin();
 			if (prepareHost) await prepareHost();

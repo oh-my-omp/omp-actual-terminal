@@ -29,8 +29,6 @@ export function isPosixShell(shell: string): boolean {
 export function buildShellCommand(shellBin: string, cmd: string): string[] {
 	const base = shellBase(shellBin);
 	if (base === "powershell" || base === "pwsh") {
-		// No -NonInteractive: in a PTY it
-		// would block interactive prompts the session is meant to answer.
 		return [shellBin, "-NoProfile", "-NoLogo", "-Command", cmd];
 	}
 	return [shellBin, "-c", cmd];
@@ -51,8 +49,6 @@ export function findOnPath(
 	for (const dir of pathVar.split(delimiter)) {
 		if (!dir) continue;
 		for (const ext of exts) {
-			// resolve() (not join): a relative PATH entry must not yield a
-			// cwd-dependent result that breaks when spawned from another cwd.
 			const full = resolve(dir, bin + ext);
 			if (opts.exclude?.test(full)) continue;
 			if (isFile(full)) return full;
@@ -116,15 +112,9 @@ export function shellArgv(shell: LaunchShell, cmd: string): string[] {
 
 const resolvedBinaryCache = new Map<string, string>();
 
-/**
- * Spawning the resolved absolute path (instead of the bare name) keeps the
- * probed binary and the spawned binary identical, and avoids Windows'
- * CreateProcess cwd-first lookup — a `bash.exe` planted in an untrusted
- * workdir must not shadow the real shell.
- */
 export function resolveBinary(bin: string, env?: NodeJS.ProcessEnv): string {
 	if (/[\\/]/.test(bin)) return bin;
-	if (env) return findOnPath(bin, env) ?? bin; // test hook: no caching
+	if (env) return findOnPath(bin, env) ?? bin;
 	const cached = resolvedBinaryCache.get(bin);
 	if (cached) return cached;
 	const resolved = findOnPath(bin) ?? bin;
@@ -134,15 +124,8 @@ export function resolveBinary(bin: string, env?: NodeJS.ProcessEnv): string {
 
 const SYSTEM32_RE = /[\\/]system32[\\/]/i;
 
-/**
- * Unlike resolveBinary, an unresolvable bare name throws instead of passing
- * through: spawning a bare name lets CreateProcess check the child's cwd
- * (the LLM-supplied workdir) first, so "powershell" with a mangled PATH
- * would happily execute an attacker's powershell.exe from an untrusted
- * repo. Only .com/.exe are accepted (Node can't spawn .cmd/.bat directly).
- */
 export function resolveWindowsShell(bin: string, env?: NodeJS.ProcessEnv): string {
-	if (/[\\/]/.test(bin)) return bin; // explicit path: caller's responsibility
+	if (/[\\/]/.test(bin)) return bin;
 	const cacheKey = `shell:${bin}`;
 	if (!env) {
 		const cached = resolvedBinaryCache.get(cacheKey);
@@ -153,7 +136,6 @@ export function resolveWindowsShell(bin: string, env?: NodeJS.ProcessEnv): strin
 	const override = bash ? effectiveEnv.PI_UNIFIED_EXEC_BASH?.trim() : undefined;
 	const found = override && isFile(override)
 		? override
-		// A bash name must not land on System32's WSL stub (a different OS view).
 		: findOnPath(bin, effectiveEnv, { exts: WINDOWS_SHELL_EXTS, exclude: bash ? SYSTEM32_RE : undefined });
 	if (!found) {
 		throw new Error(

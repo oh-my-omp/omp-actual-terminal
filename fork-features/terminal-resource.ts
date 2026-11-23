@@ -53,9 +53,7 @@ export function noteTerminalRead(idOrKey: string): void {
 	try {
 		const key = resolveTerminalKey(idOrKey);
 		terminalRegistry.resources.get(key)?.onRead?.();
-	} catch {
-		/* the owner's bookkeeping must not fail a read */
-	}
+	} catch {}
 }
 
 export function detachTerminalReader(key: string): void {
@@ -88,10 +86,6 @@ export async function freezeTerminal(key: string): Promise<void> {
 	}
 }
 
-/**
- * Shutdown may discard unfinished live projections, never frozen or other
- * activations' resources.
- */
 export function discardLiveTerminal(key: string): boolean {
 	if (terminalRegistry.resources.get(key)?.kind !== "live") return false;
 	return terminalRegistry.resources.delete(key);

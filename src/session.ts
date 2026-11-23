@@ -17,7 +17,7 @@ export interface SessionSpawnOptions {
 	env: NodeJS.ProcessEnv;
 	cols?: number;
 	rows?: number;
-	displayCommand?: string; // human-readable command for list_sessions/UI
+	displayCommand?: string;
 	title: string;
 	appearance?: () => TerminalAppearance;
 	inputWait?: InputWaitOptions;
@@ -85,7 +85,7 @@ export class ExecSession {
 		this.startedAt = Date.now();
 		this.lastUsedAt = this.startedAt;
 		this.lastOutputAtMs = this.startedAt;
-		this.pid = undefined; // set in `start`
+		this.pid = undefined;
 		this.logPath = join(tmpdir(), sessionLogName(id));
 	}
 
@@ -94,10 +94,6 @@ export class ExecSession {
 
 		try {
 			self.log = SessionLog.open(self.logPath, (err) => {
-				// The child is
-				// still running: record the failure and stop mirroring writes, but
-				// do NOT mark the session exited — that would make it unkillable
-				// (kill() no-ops once hasExited) and orphan the process.
 				self.recordFailure(`log stream error: ${err.message}`);
 				self.log = undefined;
 			});
@@ -129,8 +125,6 @@ export class ExecSession {
 
 		Object.defineProperty(self, "pid", { value: self.child.pid, enumerable: true });
 
-		// A real terminal answers queries (cursor position, device attributes);
-		// a child that waits for the answer would otherwise stall.
 		const screen = new TerminalScreen(cols, rows, (reply) => void self.write(reply), opts.appearance);
 		self.screen = screen;
 		const key = registerTerminal(id, screen, () => {
@@ -333,7 +327,6 @@ export class ExecSession {
 			const screen = this.screen;
 			if (!screen) return NO_OUTPUT;
 			const observation = await screen.observe();
-			// Exit may land while the observation's parser barrier is pending.
 			if (this.hasExited) return this.finalScreenOutput();
 			return { kind: "screen", observation, terminalUrl: this.terminalUrl };
 		} finally {
@@ -364,7 +357,6 @@ export class ExecSession {
 		await this.detachScreen()?.release();
 	}
 
-	/** The retained terminal outlives the session; it must not keep reporting reads to it (or keep it reachable). */
 	private detachReader(): void {
 		this.readListeners.clear();
 		if (this.terminalKey !== undefined) detachTerminalReader(this.terminalKey);

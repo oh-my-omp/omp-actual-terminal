@@ -119,8 +119,6 @@ export class SessionLog {
 		this.pending = batch === this.pending ? [] : this.pending.slice(WRITEV_MAX_BUFFERS);
 		const batchBytes = batch.reduce((bytes, chunk) => bytes + chunk.length, 0);
 		this.writing = true;
-		// `writev` may write fewer bytes than the batch holds — a short write at the
-		// file-size limit, among others — and report no error for it.
 		writev(this.fd, batch, (error, bytesWritten) => {
 			this.writing = false;
 			if (error) {
@@ -133,8 +131,6 @@ export class SessionLog {
 			const written = Math.min(bytesWritten, batchBytes);
 			this.pendingBytes -= written;
 			if (written < batchBytes) {
-				// A write that reports no progress would retry forever and never let
-				// `end` settle: report it once, like any other failed write.
 				if (written === 0) {
 					this.pending = [];
 					this.pendingBytes = 0;
