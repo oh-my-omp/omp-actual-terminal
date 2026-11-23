@@ -237,17 +237,6 @@ describe("command approval host precedence", () => {
 
 describe("approval session binding via activate", () => {
 	it("pending and Unbound do not read settings, including dangerous commands", async () => {
-		const savedLanguage = process.env.OMOMP_LANG;
-		process.env.OMOMP_LANG = "en";
-		try {
-			await runPendingAndUnbound();
-		} finally {
-			if (savedLanguage === undefined) delete process.env.OMOMP_LANG;
-			else process.env.OMOMP_LANG = savedLanguage;
-		}
-	});
-
-	async function runPendingAndUnbound() {
 		const host: CommandApprovalHost = {
 			get: () => undefined,
 			approvalRules() { throw new Error("must not read rules"); },
@@ -265,7 +254,7 @@ describe("approval session binding via activate", () => {
 		}
 		assert.deepEqual(h.tool.formatApprovalDetails!({ cmd: "rm -rf /definitely-not-here-uexec" }), ["Command: rm -rf /definitely-not-here-uexec"]);
 		assert.deepEqual(h.tool.formatApprovalDetails!({}), ["Command: (missing)"]);
-	}
+	});
 
 	it("binds once, reads live settings, and only rechecks identity on switches/branches", async () => {
 		const initial = Settings.isolated();
