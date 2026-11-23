@@ -1,5 +1,5 @@
 import xtermHeadless from "@xterm/headless";
-import type { IBufferCell, IMarker } from "@xterm/headless";
+import type { IBufferCell, IDisposable, IMarker } from "@xterm/headless";
 
 import type { InputScreen } from "../fork-features/input-wait.ts";
 import type { MonitorStart } from "../fork-features/monitor-subscription.ts";
@@ -198,6 +198,245 @@ const DEFAULT_COLORS: Readonly<Record<TerminalAppearance, { readonly fg: string;
 	light: { fg: "rgb:0000/0000/0000", bg: "rgb:ffff/ffff/ffff" },
 };
 
+interface MarkedRow {
+	readonly row: Row;
+	readonly marker: IMarker;
+}
+
+interface NormalCursor {
+	readonly rows: readonly MarkedRow[];
+	readonly frontier: IMarker | undefined;
+}
+
+interface LineSource {
+	readonly term: Terminal;
+	readonly rows: number;
+	readonly carriageReturnListeners: Set<() => void>;
+	altEpoch(): number;
+	readRows(kind: TerminalScreenKind, start: number, end: number): Row[];
+	onChange(listener: () => void): () => void;
+	serialized<T>(work: () => Promise<T>): Promise<T>;
+	parsed(): Promise<void>;
+}
+
+const CURSOR_MOVE_FINALS = ["A", "B", "D", "E", "F", "G", "H", "d", "f"];
+
+function changedLines(rows: readonly Row[], changed: readonly boolean[]): string[] {
+	const lines: string[] = [];
+	for (let start = 0; start < rows.length;) {
+		let end = start + 1;
+		while (end < rows.length && rows[end]!.wrapped) end++;
+		let dirty = false;
+		for (let index = start; index < end; index++) dirty ||= changed[index]!;
+		if (dirty) {
+			const parts: string[] = [];
+			for (let index = start; index < end; index++) parts.push(rows[index]!.text);
+			lines.push(parts.join("").trimEnd());
+		}
+		start = end;
+	}
+	return lines;
+}
+
+class LineSubscription implements TerminalLineSubscription {
+	private readonly source: LineSource;
+	private readonly onLines: (lines: readonly string[]) => void;
+	private active = true;
+	private normal: NormalCursor | undefined;
+	private previousAlt: Row[];
+	private previousEpoch: number;
+	private quiet: NodeJS.Timeout | undefined;
+	private maximum: NodeJS.Timeout | undefined;
+	private changedAt = 0;
+	private readonly reset: IDisposable;
+	private readonly bufferSwitch: IDisposable;
+	private readonly unsubscribe: () => void;
+	private readonly cursorMoves: IDisposable[];
+
+	constructor(source: LineSource, onLines: (lines: readonly string[]) => void) {
+		this.source = source;
+		this.onLines = onLines;
+		const term = source.term;
+		this.normal = term.buffer.active.type === "normal" ? this.baseline() : undefined;
+		this.previousAlt = source.readRows("alternate", 0, source.rows);
+		this.previousEpoch = source.altEpoch();
+		// RIS replaces xterm's underlying normal buffer, while its public
+		// BufferApiView object stays identical. Invalidate this cursor at
+		// that authoritative parser boundary, not by guessing from row text.
+		this.reset = term.parser.registerEscHandler({ final: "c" }, () => {
+			this.disposeNormal();
+			this.normal = undefined;
+			this.previousAlt = [];
+			return false;
+		});
+		// Normal markers cannot be created while alternate is active.
+		this.bufferSwitch = term.buffer.onBufferChange((buffer) => {
+			if (buffer.type === "normal" && this.normal === undefined) this.normal = this.baseline();
+		});
+		this.unsubscribe = source.onChange(() => {
+			this.changedAt = performance.now();
+			this.quiet ??= setTimeout(this.settle, 50);
+			this.maximum ??= setTimeout(this.evaluate, 250);
+		});
+		source.carriageReturnListeners.add(this.sampleCursorRow);
+		this.cursorMoves = CURSOR_MOVE_FINALS.map((final) =>
+			term.parser.registerCsiHandler({ final }, () => { this.sampleCursorRow(); return false; }));
+	}
+
+	cancel(): void {
+		this.active = false;
+		this.clearTimers();
+		this.unsubscribe();
+		this.stopSampling();
+		this.bufferSwitch.dispose();
+		this.reset.dispose();
+		this.disposeNormal();
+	}
+
+	async finish(): Promise<boolean> {
+		this.clearTimers();
+		this.unsubscribe();
+		await this.drain();
+		this.stopSampling();
+		this.bufferSwitch.dispose();
+		if (!this.active) return false;
+		this.active = false;
+		this.reset.dispose();
+		this.disposeNormal();
+		return true;
+	}
+
+	private logicalStart(): number {
+		const buffer = this.source.term.buffer.normal;
+		let start = buffer.baseY;
+		while (start > 0 && buffer.getLine(start)?.isWrapped) start--;
+		return start;
+	}
+
+	private markerAt(line: number): IMarker {
+		const term = this.source.term;
+		const buffer = term.buffer.normal;
+		const marker = term.registerMarker(line - buffer.baseY - buffer.cursorY);
+		if (!marker) throw new Error("normal terminal monitor marker unavailable");
+		return marker;
+	}
+
+	private capture(start: number, rows: readonly Row[], prior: ReadonlyMap<number, MarkedRow>, old?: NormalCursor): NormalCursor {
+		const frontierLine = start - 1;
+		const frontier = old?.frontier && !old.frontier.isDisposed && old.frontier.line === frontierLine
+			? old.frontier : frontierLine >= 0 ? this.markerAt(frontierLine) : undefined;
+		if (old?.frontier !== frontier) old?.frontier?.dispose();
+		const marked = rows.map((row, index): MarkedRow => {
+			const previous = prior.get(start + index);
+			return { row, marker: previous?.marker ?? this.markerAt(start + index) };
+		});
+		for (const [line, previous] of prior) {
+			if (line < start || line >= start + rows.length) previous.marker.dispose();
+		}
+		return { rows: marked, frontier };
+	}
+
+	private baseline(): NormalCursor {
+		const start = this.logicalStart();
+		return this.capture(start, this.source.readRows("normal", start, this.source.term.buffer.normal.baseY + this.source.rows), new Map());
+	}
+
+	private disposeNormal(): void {
+		this.normal?.frontier?.dispose();
+		for (const row of this.normal?.rows ?? []) row.marker.dispose();
+	}
+
+	private clearTimers(): void {
+		clearTimeout(this.quiet);
+		clearTimeout(this.maximum);
+		this.quiet = this.maximum = undefined;
+	}
+
+	private drain(): Promise<void> {
+		return this.source.serialized(async () => {
+			if (!this.active) return;
+			await this.source.parsed();
+			if (!this.active) return;
+			const changed = this.source.term.buffer.active.type === "alternate" ? this.drainAlternate() : this.drainNormal();
+			if (changed.length) this.onLines(changed);
+		});
+	}
+
+	private drainAlternate(): string[] {
+		const previousAlt = this.previousAlt;
+		const altEpoch = this.source.altEpoch();
+		const rows = this.source.readRows("alternate", 0, this.source.rows);
+		const changed = changedLines(rows, rows.map((row, index) =>
+			row.text.trimEnd() !== (previousAlt[index]?.text.trimEnd() ?? "") || row.wrapped !== (previousAlt[index]?.wrapped ?? false) ||
+			(this.previousEpoch !== altEpoch && row.text.trimEnd() !== "")));
+		this.previousAlt = rows;
+		this.previousEpoch = altEpoch;
+		return changed;
+	}
+
+	private drainNormal(): string[] {
+		const buffer = this.source.term.buffer.active;
+		const normal = this.normal;
+		const prior = new Map<number, MarkedRow>();
+		for (const row of normal?.rows ?? []) if (!row.marker.isDisposed) prior.set(row.marker.line, row);
+		const frontier = normal?.frontier;
+		const start = frontier && !frontier.isDisposed ? frontier.line + 1 : 0;
+		const rows = this.source.readRows("normal", start, buffer.baseY + this.source.rows);
+		const oldScreenStart = (normal?.rows.length ?? 0) - this.source.rows;
+		const differences = rows.map((row, index) => {
+			const line = start + index;
+			const positional = normal?.rows[oldScreenStart + line - buffer.baseY];
+			const previous = prior.get(line)?.row ??
+				(line >= buffer.baseY && positional?.marker.isDisposed && ((frontier && !frontier.isDisposed) || buffer.baseY === 0)
+					? positional.row : undefined);
+			if (previous) return row.text !== previous.text || row.wrapped !== previous.wrapped;
+			return row.text.trimEnd() !== "" || line <= buffer.baseY + buffer.cursorY;
+		});
+		const changed = changedLines(rows, differences);
+		const nextStart = this.logicalStart();
+		this.normal = this.capture(nextStart, rows.slice(nextStart - start), prior, normal);
+		return changed;
+	}
+
+	private readonly evaluate = (): void => {
+		this.clearTimers();
+		void this.drain();
+	};
+
+	private readonly settle = (): void => {
+		const silent = performance.now() - this.changedAt;
+		if (silent < 50) this.quiet = setTimeout(this.settle, 50 - silent);
+		else this.evaluate();
+	};
+
+	private readonly sampleCursorRow = (): void => {
+		if (!this.active) return;
+		const buffer = this.source.term.buffer.active;
+		if (buffer.type !== "alternate") return;
+		if (this.previousEpoch !== this.source.altEpoch()) {
+			this.previousAlt = [];
+			this.previousEpoch = this.source.altEpoch();
+		}
+		let start = buffer.cursorY;
+		while (start > 0 && buffer.getLine(start)?.isWrapped) start--;
+		let end = buffer.cursorY + 1;
+		while (end < this.source.rows && buffer.getLine(end)?.isWrapped) end++;
+		const rows = this.source.readRows("alternate", start, end);
+		const previousAlt = this.previousAlt;
+		const changed = rows.some((row, index) =>
+			row.text.trimEnd() !== (previousAlt[start + index]?.text.trimEnd() ?? "") ||
+			row.wrapped !== (previousAlt[start + index]?.wrapped ?? false));
+		if (!changed) return;
+		rows.forEach((row, index) => { previousAlt[start + index] = row; });
+		this.onLines([rows.map((row) => row.text).join("").trimEnd()]);
+	};
+
+	private stopSampling(): void {
+		this.source.carriageReturnListeners.delete(this.sampleCursorRow);
+		for (const move of this.cursorMoves) move.dispose();
+	}
+}
+
 function isBlankCell(cell: IBufferCell): boolean {
 	const chars = cell.getChars();
 	return (chars === "" || chars === " ") && cell.isBgDefault() && !cell.isInverse();
@@ -223,6 +462,7 @@ export class TerminalScreen {
 	private readonly appearance: () => TerminalAppearance;
 	private revision = 0;
 	private presentedRevision = 0;
+	private readonly lineSource: LineSource;
 
 	constructor(
 		cols: number,
@@ -247,6 +487,16 @@ export class TerminalScreen {
 		this.term.buffer.onBufferChange((buffer) => {
 			if (buffer.type === "alternate") this.altEpoch++;
 		});
+		this.lineSource = {
+			term: this.term,
+			rows,
+			carriageReturnListeners: this.carriageReturnListeners,
+			altEpoch: () => this.altEpoch,
+			readRows: (kind, start, end) => this.readRows(kind, start, end),
+			onChange: (listener) => this.onChange(listener),
+			serialized: (work) => this.serialized(work),
+			parsed: () => this.parsed(),
+		};
 	}
 
 	write(chunk: Uint8Array): void {
@@ -297,6 +547,18 @@ export class TerminalScreen {
 			}
 			parsed?.();
 		});
+	}
+
+	private serialized<T>(work: () => Promise<T>): Promise<T> {
+		const run = this.observeChain.then(work);
+		this.observeChain = run.catch(() => undefined);
+		return run;
+	}
+
+	private parsed(): Promise<void> {
+		const { promise, resolve } = Promise.withResolvers<void>();
+		this.term.write("", resolve);
+		return promise;
 	}
 
 	private flushed(): Promise<void> {
@@ -350,9 +612,9 @@ export class TerminalScreen {
 	}
 
 	project(): Promise<TerminalProjection> {
-		const run = this.observeChain.then(async () => {
+		return this.serialized(async () => {
 			if (this.disposed) throw new Error("terminal screen read after release");
-			await new Promise<void>((resolve) => this.term.write("", resolve));
+			await this.parsed();
 			const normal = this.term.buffer.normal;
 			const active = this.term.buffer.active;
 			const physicalLines = (kind: TerminalScreenKind, start: number, end: number): readonly string[] => {
@@ -389,8 +651,6 @@ export class TerminalScreen {
 				historyMayBeTruncated: normal.baseY >= this.scrollback,
 			});
 		});
-		this.observeChain = run.catch(() => undefined);
-		return run;
 	}
 	/**
 	 * Must not be called after release.
@@ -432,191 +692,11 @@ export class TerminalScreen {
 		accept: (handle: TerminalLineSubscription) => boolean,
 		signal?: AbortSignal,
 	): Promise<MonitorStart> {
-		const run = this.observeChain.then(async (): Promise<MonitorStart> => {
-			await new Promise<void>((resolve) => this.term.write("", resolve));
+		return this.serialized(async (): Promise<MonitorStart> => {
+			await this.parsed();
 			if (signal?.aborted || this.disposed) return "cancelled";
 			if (!isRunning()) return "not_running";
-			let active = true;
-			interface MarkedRow { readonly row: Row; readonly marker: IMarker }
-			interface NormalCursor { readonly rows: readonly MarkedRow[]; readonly frontier: IMarker | undefined }
-			const logicalStart = (): number => {
-				const buffer = this.term.buffer.normal;
-				let start = buffer.baseY;
-				while (start > 0 && buffer.getLine(start)?.isWrapped) start--;
-				return start;
-			};
-			const markerAt = (line: number): IMarker => {
-				const buffer = this.term.buffer.normal;
-				const marker = this.term.registerMarker(line - buffer.baseY - buffer.cursorY);
-				if (!marker) throw new Error("normal terminal monitor marker unavailable");
-				return marker;
-			};
-			const capture = (start: number, rows: readonly Row[], prior: ReadonlyMap<number, MarkedRow>, old?: NormalCursor): NormalCursor => {
-				const frontierLine = start - 1;
-				const frontier = old?.frontier && !old.frontier.isDisposed && old.frontier.line === frontierLine
-					? old.frontier : frontierLine >= 0 ? markerAt(frontierLine) : undefined;
-				if (old?.frontier !== frontier) old?.frontier?.dispose();
-				const marked = rows.map((row, index): MarkedRow => {
-					const previous = prior.get(start + index);
-					return { row, marker: previous?.marker ?? markerAt(start + index) };
-				});
-				for (const [line, previous] of prior) {
-					if (line < start || line >= start + rows.length) previous.marker.dispose();
-				}
-				return { rows: marked, frontier };
-			};
-			const baseline = (): NormalCursor => {
-				const start = logicalStart();
-				return capture(start, this.readRows("normal", start, this.term.buffer.normal.baseY + this.rows), new Map());
-			};
-			let normal = this.term.buffer.active.type === "normal" ? baseline() : undefined;
-			let previousAlt = this.readRows("alternate", 0, this.rows);
-			let previousEpoch = this.altEpoch;
-			const disposeNormal = () => {
-				normal?.frontier?.dispose();
-				for (const row of normal?.rows ?? []) row.marker.dispose();
-			};
-			// RIS replaces xterm's underlying normal buffer, while its public
-			// BufferApiView object stays identical. Invalidate this cursor at
-			// that authoritative parser boundary, not by guessing from row text.
-			const reset = this.term.parser.registerEscHandler({ final: "c" }, () => {
-				disposeNormal();
-				normal = undefined;
-				previousAlt = [];
-				return false;
-			});
-			// Normal markers cannot be created while alternate is active.
-			const bufferSwitch = this.term.buffer.onBufferChange((buffer) => {
-				if (buffer.type === "normal" && normal === undefined) normal = baseline();
-			});
-			const changedLines = (rows: readonly Row[], changed: readonly boolean[]): string[] => {
-				const lines: string[] = [];
-				for (let start = 0; start < rows.length;) {
-					let end = start + 1;
-					while (end < rows.length && rows[end]!.wrapped) end++;
-					let dirty = false;
-					for (let index = start; index < end; index++) dirty ||= changed[index]!;
-					if (dirty) {
-						const parts: string[] = [];
-						for (let index = start; index < end; index++) parts.push(rows[index]!.text);
-						lines.push(parts.join("").trimEnd());
-					}
-					start = end;
-				}
-				return lines;
-			};
-			let quiet: NodeJS.Timeout | undefined;
-			let maximum: NodeJS.Timeout | undefined;
-			const clearTimers = () => {
-				clearTimeout(quiet);
-				clearTimeout(maximum);
-				quiet = maximum = undefined;
-			};
-			const drain = (): Promise<void> => {
-				const reading = this.observeChain.then(async () => {
-					if (!active) return;
-					await new Promise<void>((resolve) => this.term.write("", resolve));
-					if (!active) return;
-					const buffer = this.term.buffer.active;
-					let changed: string[];
-					if (buffer.type === "alternate") {
-						const rows = this.readRows("alternate", 0, this.rows);
-						changed = changedLines(rows, rows.map((row, index) =>
-							row.text.trimEnd() !== (previousAlt[index]?.text.trimEnd() ?? "") || row.wrapped !== (previousAlt[index]?.wrapped ?? false) ||
-							(previousEpoch !== this.altEpoch && row.text.trimEnd() !== "")));
-						previousAlt = rows;
-						previousEpoch = this.altEpoch;
-					} else {
-						const prior = new Map<number, MarkedRow>();
-						for (const row of normal?.rows ?? []) if (!row.marker.isDisposed) prior.set(row.marker.line, row);
-						const frontier = normal?.frontier;
-						const start = frontier && !frontier.isDisposed ? frontier.line + 1 : 0;
-						const rows = this.readRows("normal", start, buffer.baseY + this.rows);
-						const oldScreenStart = (normal?.rows.length ?? 0) - this.rows;
-						const differences = rows.map((row, index) => {
-							const line = start + index;
-							const positional = normal?.rows[oldScreenStart + line - buffer.baseY];
-							const previous = prior.get(line)?.row ??
-								(line >= buffer.baseY && positional?.marker.isDisposed && ((frontier && !frontier.isDisposed) || buffer.baseY === 0)
-									? positional.row : undefined);
-							if (previous) return row.text !== previous.text || row.wrapped !== previous.wrapped;
-							return row.text.trimEnd() !== "" || line <= buffer.baseY + buffer.cursorY;
-						});
-						changed = changedLines(rows, differences);
-						const nextStart = logicalStart();
-						normal = capture(nextStart, rows.slice(nextStart - start), prior, normal);
-					}
-					if (changed.length) onLines(changed);
-				});
-				this.observeChain = reading.catch(() => undefined);
-				return reading;
-			};
-			const evaluate = () => {
-				clearTimers();
-				void drain();
-			};
-			let changedAt = 0;
-			const settle = () => {
-				const silent = performance.now() - changedAt;
-				if (silent < 50) quiet = setTimeout(settle, 50 - silent);
-				else evaluate();
-			};
-			const unsubscribe = this.onChange(() => {
-				changedAt = performance.now();
-				quiet ??= setTimeout(settle, 50);
-				maximum ??= setTimeout(evaluate, 250);
-			});
-			const sampleCursorRow = () => {
-				if (!active) return;
-				const buffer = this.term.buffer.active;
-				if (buffer.type !== "alternate") return;
-				if (previousEpoch !== this.altEpoch) {
-					previousAlt = [];
-					previousEpoch = this.altEpoch;
-				}
-				let start = buffer.cursorY;
-				while (start > 0 && buffer.getLine(start)?.isWrapped) start--;
-				let end = buffer.cursorY + 1;
-				while (end < this.rows && buffer.getLine(end)?.isWrapped) end++;
-				const rows = this.readRows("alternate", start, end);
-				const changed = rows.some((row, index) =>
-					row.text.trimEnd() !== (previousAlt[start + index]?.text.trimEnd() ?? "") ||
-					row.wrapped !== (previousAlt[start + index]?.wrapped ?? false));
-				if (!changed) return;
-				rows.forEach((row, index) => { previousAlt[start + index] = row; });
-				onLines([rows.map((row) => row.text).join("").trimEnd()]);
-			};
-			const carriageReturnListeners = this.carriageReturnListeners;
-			carriageReturnListeners.add(sampleCursorRow);
-			const cursorMoves = ["A", "B", "D", "E", "F", "G", "H", "d", "f"].map((final) =>
-				this.term.parser.registerCsiHandler({ final }, () => { sampleCursorRow(); return false; }));
-			const stopSampling = () => {
-				carriageReturnListeners.delete(sampleCursorRow);
-				for (const move of cursorMoves) move.dispose();
-			};
-			const handle: TerminalLineSubscription = {
-				cancel() {
-					active = false;
-					clearTimers();
-					unsubscribe();
-					stopSampling();
-					bufferSwitch.dispose();
-					reset.dispose();
-					disposeNormal();
-				},
-				async finish() {
-					clearTimers();
-					unsubscribe();
-					await drain();
-					stopSampling();
-					bufferSwitch.dispose();
-					if (!active) return false;
-					active = false;
-					reset.dispose();
-					disposeNormal();
-					return true;
-				},
-			};
+			const handle = new LineSubscription(this.lineSource, onLines);
 			try {
 				if (!accept(handle)) { handle.cancel(); return "cancelled"; }
 			} catch (error) {
@@ -625,19 +705,15 @@ export class TerminalScreen {
 			}
 			return "accepted";
 		});
-		this.observeChain = run.catch(() => undefined);
-		return run;
 	}
 
 	observe(): Promise<TerminalObservation> {
-		const run = this.observeChain.then(() => this.observeNow());
-		this.observeChain = run.catch(() => undefined);
-		return run;
+		return this.serialized(() => this.observeNow());
 	}
 
 	private async observeNow(): Promise<TerminalObservation> {
 		if (this.disposed) throw new Error("terminal screen observed after release");
-		await new Promise<void>((resolve) => this.term.write("", resolve));
+		await this.parsed();
 		this.presentedRevision = this.revision;
 		const view = this.view();
 		const buffer = this.term.buffer.active;
@@ -722,13 +798,11 @@ export class TerminalScreen {
 
 	release(): Promise<void> {
 		this.changeListeners.clear();
-		const run = this.observeChain.then(async () => {
+		return this.serialized(async () => {
 			if (this.disposed) return;
 			await this.flushed();
 			this.disposed = true;
 			this.term.dispose();
 		});
-		this.observeChain = run.catch(() => undefined);
-		return run;
 	}
 }
