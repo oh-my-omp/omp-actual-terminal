@@ -105,7 +105,8 @@ describe("term:// registration", () => {
 		await expect(router.resolve("term://77/on_exit")).rejects.toThrow(/write-only/);
 		await expect(router.resolve("term://77/monitor")).rejects.toThrow(/write-only/);
 
-		await router.write("term://77", "echo hello");
+		const stdinWrite = await router.write("term://77", "echo hello");
+		expect(stdinWrite?.isError).toBeUndefined();
 		await router.write("term://77/kill", "SIGINT");
 		await router.write("term://77/kill?signal=SIGKILL", "");
 		await router.write("term://77/on_exit", "wake");

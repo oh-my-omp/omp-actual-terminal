@@ -1180,7 +1180,7 @@ export function activate(
 				undefined,
 				callId,
 			);
-			const isErr = (shape.exit_code !== undefined && shape.exit_code !== 0) || shape.signal !== null || shape.failure_message !== null;
+			const isErr = (shape.exit_code != null && shape.exit_code !== 0) || shape.signal != null || shape.failure_message != null;
 			if (syntheticId !== undefined) {
 				ctx.lifecycle.commitToolReads(syntheticId, isErr);
 				ctx.coordinator.handleToolExecutionEnd(syntheticId, isErr);

@@ -437,6 +437,7 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		await h.emit("session_start");
 		const { sid } = await startBackground(h, 'while IFS= read -r line; do echo "term_echo=$line"; done', "term stdin");
 		const res = await InternalUrlRouter.instance().write(`term://${sid}`, "hello-from-url");
+		assert.equal(res?.isError, undefined);
 		const text = res?.content[0]?.type === "text" ? res.content[0].text : "";
 		assert.match(text, /term_echo=hello-from-url/);
 		await InternalUrlRouter.instance().write(`term://${sid}/kill`, "");
