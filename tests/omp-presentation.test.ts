@@ -11,12 +11,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
 import type { ExtensionAPI, ToolDefinition } from "@oh-my-pi/pi-coding-agent";
+import { loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { DEFAULT_MAX_LINES } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import { Type } from "@oh-my-pi/omptype/typebox";
 
 import {
 	killShellArgs,
 	parseResultView,
+	presentOnOmp,
 	toShellResult,
 	type ActivatedExtension,
 	withHostPresentation,
@@ -532,5 +534,48 @@ describe("host presentation activation", () => {
 		const result = spawnSync(process.execPath, ["--no-install", driver], { cwd: temporary, encoding: "utf8" });
 		assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 		assert.match(result.stdout, /MISSING_RENDERER_REJECTED/);
+	});
+
+	it("preserves tool definition getters during registerTool and loads extensions without Settings.init()", async () => {
+		const registered: Array<ToolDefinition<typeof parameters, ProcessResultDetails>> = [];
+		const host = {
+			registerTool: (tool: ToolDefinition<typeof parameters, ProcessResultDetails>) => {
+				registered.push(tool);
+			},
+		} as unknown as ExtensionAPI;
+		const presented = await presentOnOmp(host);
+		let descriptionGets = 0;
+		let parameterGets = 0;
+		const lazyDefinition: ToolDefinition<typeof parameters, ProcessResultDetails> = {
+			name: "bash",
+			label: "Exec",
+			get description() {
+				descriptionGets++;
+				return "Lazy bash description";
+			},
+			get parameters() {
+				parameterGets++;
+				return parameters;
+			},
+			execute: async () => {
+				throw new Error("This registration test must not execute a tool");
+			},
+		};
+		presented.registerTool(lazyDefinition);
+		assert.equal(registered.length, 1);
+		assert.equal(descriptionGets, 0);
+		assert.equal(parameterGets, 0);
+		assert.equal(typeof Object.getOwnPropertyDescriptor(registered[0], "description")?.get, "function");
+		assert.equal(typeof Object.getOwnPropertyDescriptor(registered[0], "parameters")?.get, "function");
+		assert.equal(registered[0].description, "Lazy bash description");
+		assert.equal(registered[0].parameters, parameters);
+		assert.equal(descriptionGets, 1);
+		assert.equal(parameterGets, 1);
+
+		const entry = fileURLToPath(new URL("../src/index.ts", import.meta.url));
+		const loaded = await loadExtensions([entry], process.cwd());
+		assert.deepEqual(loaded.errors, []);
+		assert.ok(loaded.extensions[0]?.tools.has("bash"));
+		assert.ok(loaded.extensions[0]?.tools.has("write_stdin"));
 	});
 });

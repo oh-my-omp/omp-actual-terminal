@@ -401,7 +401,7 @@ function isShellPresented(name: string): name is ShellPresentedTool {
 /**
  * The bash renderer is required; a missing or reshaped one fails plugin loading.
  */
-async function presentOnOmp(pi: ExtensionAPI): Promise<ExtensionAPI> {
+export async function presentOnOmp(pi: ExtensionAPI): Promise<ExtensionAPI> {
 	const bash = parseShellRenderer(await import("@oh-my-pi/pi-tui/tools"));
 	const hooks: Record<ShellPresentedTool, OmpToolHooks> = {
 		bash: presentBash(bash),
@@ -415,9 +415,9 @@ async function presentOnOmp(pi: ExtensionAPI): Promise<ExtensionAPI> {
 		// Copied by descriptor: a spread would freeze getters such as bash's settings-dependent
 		// `description` and `parameters` at their registration-time value.
 		const presented = Object.defineProperties(
-			{ ...definition, ...overrides },
+			{},
 			{ ...Object.getOwnPropertyDescriptors(definition), ...Object.getOwnPropertyDescriptors(overrides) },
-		);
+		) as typeof definition & typeof overrides;
 		pi.registerTool(presented);
 	};
 	const wrapped: ExtensionAPI = Object.create(pi, { registerTool: { value: registerTool } });
