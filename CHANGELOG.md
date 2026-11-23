@@ -4,6 +4,8 @@ All notable changes to this project. **Newest entries go on top.**
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-11-23
+
 ### Fixed
 
 - Preserved lazy tool definition getters (such as `bash`'s settings-dependent `description` and `parameters`) during `presentOnOmp` registration so `omp install` and `omp plugin upgrade` extension validation succeeds without `Settings.init()`
