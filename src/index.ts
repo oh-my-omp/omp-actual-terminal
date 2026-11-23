@@ -57,6 +57,7 @@ const MAX_YIELD_TIME_MS = 30_000;
 const DEFAULT_EXEC_YIELD_MS = 10_000;
 const DEFAULT_WRITE_STDIN_YIELD_MS = 250;
 const EARLY_EXIT_GRACE_PERIOD_MS = 150;
+const EARLY_EXIT_CLOCK_SLACK_MS = 20;
 const SHUTDOWN_TERM_GRACE_MS = 1000;
 const SHUTDOWN_KILL_GRACE_MS = 500;
 const MAX_SESSIONS = 64;
@@ -100,7 +101,29 @@ const textEncoder = new TextEncoder();
 
 type ResponseShape = ProcessResultDetails;
 type ProcessUpdateDetails = Partial<ProcessResultDetails> & { pid?: number; total_bytes?: number };
-type FinalizeInput = Omit<FinalizeProcessInput, "operation">;
+type ResultScope = Pick<FinalizeProcessInput, "operation" | "cwd" | "command" | "yieldTimeMs">;
+type ResultOutcome = Omit<FinalizeProcessInput, keyof ResultScope>;
+
+function resultIn(scope: ResultScope): (outcome: ResultOutcome) => ResponseShape {
+	return (outcome) => finalizeProcessResult({ ...outcome, ...scope });
+}
+
+function sessionOutcome(
+	session: ExecSession,
+	collected: CollectResult,
+	startedAt: number,
+): Omit<ResultOutcome, "sessionId" | "extra"> {
+	return {
+		wallTimeSec: (Date.now() - startedAt) / 1000,
+		collected,
+		totalBytes: session.totalBytesSeen,
+		exitCode: session.exitCode,
+		signal: session.signal,
+		failure: session.failureMessage,
+		logPath: session.logPath,
+		shell: session.shell,
+	};
+}
 
 function encode(str: string): Uint8Array {
 	return textEncoder.encode(str);
@@ -132,7 +155,6 @@ interface ExtensionCtx extends ParkedRuntime {
 	 * no longer here after the grace must not insert it into the store.
 	 */
 	pendingSessions: Set<ExecSession>;
-	shuttingDown: boolean;
 	appearance: () => TerminalAppearance;
 	shellPath?: () => string | undefined;
 	shellHost: ShellHost;
@@ -213,12 +235,13 @@ function resolveWriteInput(args: WriteStdinArgs): Uint8Array | undefined {
 	const hasText = typeof args.text === "string" && args.text.length > 0;
 	const hasEnter = args.enter === true;
 	const hasSpecialKey = args.special_key !== undefined;
-	const hasB64 = typeof args.raw_base64 === "string" && args.raw_base64.length > 0;
+	const rawBase64 = args.raw_base64 ?? "";
+	const hasB64 = rawBase64.length > 0;
 	if (hasB64 && (hasText || hasEnter || hasSpecialKey)) {
 		throw new Error("write_stdin: `raw_base64` cannot be combined with `text`, `enter`, or `special_key`.");
 	}
 	if (hasB64) {
-		const b64 = args.raw_base64!.replace(/\s+/g, "");
+		const b64 = rawBase64.replace(/\s+/g, "");
 		if (!/^[A-Za-z0-9+/]*={0,2}$/.test(b64)) {
 			throw new Error("write_stdin: `raw_base64` is not valid base64.");
 		}
@@ -272,9 +295,7 @@ async function runExecCommand(
 	cwd: string,
 	toolCallId: string,
 ): Promise<ResponseShape> {
-	const finalizeResponse = (input: FinalizeInput): ResponseShape =>
-		finalizeProcessResult({ ...input, operation: "exec_command" });
-	if (ctx.shuttingDown) {
+	if (ctx.host.kind === "ended") {
 		throw new Error("unified-exec: session is shutting down; not starting new commands.");
 	}
 	const title = parseTerminalTitle(args.title);
@@ -290,7 +311,8 @@ async function runExecCommand(
 	const effectiveCwd = args.workdir && args.workdir.length > 0 ? resolve(cwd, args.workdir) : cwd;
 	const yieldTimeMs = clampYield(args.yield_time_ms, DEFAULT_EXEC_YIELD_MS);
 	const wantsWake = args.on_exit === "wake";
-	const setupFailure = (shell: string, failure: string): ResponseShape => finalizeResponse({
+	const result = resultIn({ operation: "exec_command", cwd: effectiveCwd, command: args.cmd, yieldTimeMs });
+	const setupFailure = (shell: string | undefined, failure: string): ResponseShape => result({
 		wallTimeSec: 0,
 		collected: NO_OUTPUT,
 		sessionId: undefined,
@@ -298,11 +320,10 @@ async function runExecCommand(
 		signal: null,
 		failure,
 		logPath: undefined,
-		cwd: effectiveCwd,
 		shell,
-		command: args.cmd,
-		yieldTimeMs,
 	});
+	const directDelivery = (): Partial<ResponseShape> =>
+		wantsWake ? { completion_delivery: "direct", tool_time_utc: nowUtcIso() } : {};
 	if (chosen.kind === "refused") {
 		const origin = refuseOrigin(chosen.source);
 		ctx.ui?.notify(
@@ -349,79 +370,36 @@ async function runExecCommand(
 		inputWait: { quietMs: INPUT_WAIT_QUIET_MS, onAlert: (alert) => ctx.coordinator.alertInputWait(alert) },
 	});
 
-	if (session.failureMessage) {
-		return finalizeResponse({
-			wallTimeSec: 0,
-			collected: NO_OUTPUT,
-			sessionId: undefined,
-			exitCode: -1,
-			signal: null,
-			failure: session.failureMessage,
-			logPath: undefined, // spawn failed — no log file
-			cwd: effectiveCwd,
-			shell: session.shell,
-			command: args.cmd,
-			yieldTimeMs,
-		});
-	}
+	if (session.failureMessage) return setupFailure(session.shell, session.failureMessage);
 
 	ctx.pendingSessions.add(session);
 	try {
 		const start = Date.now();
-		const earlyDeadline = start + EARLY_EXIT_GRACE_PERIOD_MS;
-		await Promise.race([
-			new Promise<void>((resolve) => {
-				if (session.hasExited) return resolve();
-				session.exited.addEventListener("abort", () => resolve(), { once: true });
-			}),
-			sleep(EARLY_EXIT_GRACE_PERIOD_MS, signal),
-		]);
+		const exitSeen = Promise.withResolvers<void>();
+		if (session.hasExited) exitSeen.resolve();
+		else session.exited.addEventListener("abort", () => exitSeen.resolve(), { once: true });
+		await Promise.race([exitSeen.promise, sleep(EARLY_EXIT_GRACE_PERIOD_MS, signal)]);
 
-		if (session.hasExited && Date.now() <= earlyDeadline + 20) {
+		if (session.hasExited && Date.now() <= start + EARLY_EXIT_GRACE_PERIOD_MS + EARLY_EXIT_CLOCK_SLACK_MS) {
 			const collected = await session.collect({ deadlineMs: Date.now() + 500, externalAbort: signal });
-			const wallSec = (Date.now() - start) / 1000;
-			return finalizeResponse({
-				wallTimeSec: wallSec,
-				collected,
-				totalBytes: session.totalBytesSeen,
+			return result({
+				...sessionOutcome(session, collected, start),
 				sessionId: undefined,
-				exitCode: session.exitCode,
-				signal: session.signal,
-				failure: session.failureMessage,
-				logPath: session.logPath,
-				cwd: effectiveCwd,
-				shell: session.shell,
-				command: args.cmd,
-				yieldTimeMs,
-				extra: {
-					on_exit: args.on_exit,
-					...(wantsWake ? { completion_delivery: "direct" as const, tool_time_utc: nowUtcIso() } : {}),
-				},
+				extra: { on_exit: args.on_exit, ...directDelivery() },
 			});
 		}
 		if (!ctx.pendingSessions.has(session)) {
 			await waitForExitOrDeadline({ exited: session.exited, durationMs: SHUTDOWN_TERM_GRACE_MS + SHUTDOWN_KILL_GRACE_MS });
 			const exited = session.hasExited;
 			const collected = exited ? await session.collect({ deadlineMs: Date.now() + 500 }) : NO_OUTPUT;
-			return finalizeResponse({
-				wallTimeSec: (Date.now() - start) / 1000,
-				collected,
-				totalBytes: session.totalBytesSeen,
+			return result({
+				...sessionOutcome(session, collected, start),
 				sessionId: undefined,
-				exitCode: session.exitCode,
-				signal: session.signal,
 				failure: exited ? session.failureMessage : "terminated by session_shutdown; exit not confirmed",
-				logPath: session.logPath,
-				cwd: effectiveCwd,
-				shell: session.shell,
-				command: args.cmd,
-				yieldTimeMs,
 				extra: { on_exit: args.on_exit, ...(exited ? {} : { status: "running" as const, running: true }) },
 			});
 		}
 
-		// Live session: register it BEFORE we keep polling, so an early abort
-		// doesn't let the session be GC'd / lose its place.
 		const { pruned, count } = ctx.store.insert(session);
 		watchSessionExit(ctx, session);
 		if (pruned) {
@@ -446,32 +424,19 @@ async function runExecCommand(
 			);
 		}
 
-		const deadlineMs = start + yieldTimeMs;
-		const pollStream = startStreaming(session, onUpdate, deadlineMs, signal);
-		const collected = await session.collect({ deadlineMs, externalAbort: signal });
-		pollStream.stop();
-
+		const collected = await collectStreaming(session, onUpdate, start + yieldTimeMs, signal);
 		session.touch();
-		const stillAlive = !session.hasExited;
-		const wallSec = (Date.now() - start) / 1000;
 
-		if (stillAlive) {
+		if (!session.hasExited) {
 			if (wantsWake) ctx.coordinator.register(session);
 			ctx.lifecycle.track(session);
 			ctx.lifecycle.noteToolRead(toolCallId, session.id);
-			return finalizeResponse({
-				wallTimeSec: wallSec,
-				collected,
-				totalBytes: session.totalBytesSeen,
+			return result({
+				...sessionOutcome(session, collected, start),
 				sessionId: session.id,
 				exitCode: undefined,
 				signal: null,
 				failure: null,
-				logPath: session.logPath,
-				cwd: effectiveCwd,
-				shell: session.shell,
-				command: args.cmd,
-				yieldTimeMs,
 				extra: {
 					on_exit: args.on_exit,
 					...(wantsWake ? { completion_notification: "armed" as const } : {}),
@@ -481,23 +446,10 @@ async function runExecCommand(
 			});
 		}
 		removeSession(ctx, session.id);
-		return finalizeResponse({
-			wallTimeSec: wallSec,
-			collected,
-			totalBytes: session.totalBytesSeen,
+		return result({
+			...sessionOutcome(session, collected, start),
 			sessionId: undefined,
-			exitCode: session.exitCode,
-			signal: session.signal,
-			failure: session.failureMessage,
-			logPath: session.logPath,
-			cwd: effectiveCwd,
-			shell: session.shell,
-			command: args.cmd,
-			yieldTimeMs,
-			extra: {
-				on_exit: args.on_exit,
-				...(wantsWake ? { completion_delivery: "direct" as const, tool_time_utc: nowUtcIso() } : {}),
-			},
+			extra: { on_exit: args.on_exit, ...directDelivery() },
 		});
 	} finally {
 		ctx.pendingSessions.delete(session);
@@ -520,94 +472,50 @@ async function runWriteStdin(
 	onUpdate: AgentToolUpdateCallback<ProcessUpdateDetails> | undefined,
 	toolCallId: string,
 ): Promise<ResponseShape> {
-	const finalizeResponse = (input: FinalizeInput): ResponseShape =>
-		finalizeProcessResult({ ...input, operation: "write_stdin" });
 	const writeBytes = resolveWriteInput(args);
 	const session = ctx.store.get(args.session_id);
 	if (!writeBytes?.length) throw new EmptyPollRemovedError(session?.terminalUrl);
 	if (!session) throw new Error(missingSessionText(ctx, args.session_id, `unknown session_id: ${args.session_id}`));
 
 	const yieldTimeMs = clampYield(args.yield_time_ms, DEFAULT_WRITE_STDIN_YIELD_MS);
-
+	const result = resultIn({ operation: "write_stdin", cwd: session.cwd, command: session.displayCommand, yieldTimeMs });
 	const start = Date.now();
+	const exitedResult = (collected: CollectResult, failure: string | null): ResponseShape => {
+		const armed = ctx.coordinator.isArmed(session.id);
+		ctx.lifecycle.noteToolRead(toolCallId, session.id);
+		ctx.coordinator.markPendingTerminal(session.id, toolCallId);
+		return result({
+			...sessionOutcome(session, collected, start),
+			sessionId: undefined,
+			failure,
+			extra: terminalWriteExtra(armed),
+		});
+	};
 	session.touch();
 
 	ctx.coordinator.beginObservation(session.id, toolCallId);
 	try {
-		let writeFailure: string | null = null;
-		if (writeBytes) {
-			const ok = session.write(writeBytes);
-			if (ok) ctx.lifecycle.noteInput(session.id, writeBytes);
-			if (!ok && !session.hasExited) {
-				writeFailure = "PTY write failed: the terminal no longer accepts input; bytes were not delivered";
-			}
-			if (!ok && session.hasExited) {
-				const collected = await session.collect({ deadlineMs: Date.now() + 50, externalAbort: signal });
-				const armed = ctx.coordinator.isArmed(session.id);
-				ctx.lifecycle.noteToolRead(toolCallId, session.id);
-				ctx.coordinator.markPendingTerminal(session.id, toolCallId);
-				const wallSec = (Date.now() - start) / 1000;
-				return finalizeResponse({
-					wallTimeSec: wallSec,
-					collected,
-					totalBytes: session.totalBytesSeen,
-					sessionId: undefined,
-					exitCode: session.exitCode,
-					signal: session.signal,
-					failure: session.failureMessage,
-					logPath: session.logPath,
-					cwd: session.cwd,
-					shell: session.shell,
-					command: session.displayCommand,
-					yieldTimeMs,
-					extra: terminalWriteExtra(armed),
-				});
-			}
-			await sleep(100, signal);
+		const written = session.write(writeBytes);
+		if (written) ctx.lifecycle.noteInput(session.id, writeBytes);
+		else if (session.hasExited) {
+			const collected = await session.collect({ deadlineMs: Date.now() + 50, externalAbort: signal });
+			return exitedResult(collected, session.failureMessage);
 		}
+		const writeFailure = written ? null : "PTY write failed: the terminal no longer accepts input; bytes were not delivered";
+		await sleep(100, signal);
 
-		const deadlineMs = start + yieldTimeMs;
-		const pollStream = startStreaming(session, onUpdate, deadlineMs, signal);
-		const collected = await session.collect({ deadlineMs, externalAbort: signal });
-		pollStream.stop();
-		const wallSec = (Date.now() - start) / 1000;
+		const collected = await collectStreaming(session, onUpdate, start + yieldTimeMs, signal);
+		if (session.hasExited) return exitedResult(collected, session.failureMessage ?? writeFailure);
 
-		if (session.hasExited) {
-			const armed = ctx.coordinator.isArmed(session.id);
-			ctx.lifecycle.noteToolRead(toolCallId, session.id);
-			ctx.coordinator.markPendingTerminal(session.id, toolCallId);
-			return finalizeResponse({
-				wallTimeSec: wallSec,
-				collected,
-				totalBytes: session.totalBytesSeen,
-				sessionId: undefined,
-				exitCode: session.exitCode,
-				signal: session.signal,
-				failure: session.failureMessage ?? writeFailure,
-				logPath: session.logPath,
-				cwd: session.cwd,
-				shell: session.shell,
-				command: session.displayCommand,
-				yieldTimeMs,
-				extra: terminalWriteExtra(armed),
-			});
-		}
 		const armed = ctx.coordinator.isArmed(session.id);
 		ctx.coordinator.releaseObservation(session.id, toolCallId);
 		ctx.lifecycle.noteToolRead(toolCallId, session.id);
-		return finalizeResponse({
-			wallTimeSec: wallSec,
-			collected,
-			totalBytes: session.totalBytesSeen,
+		return result({
+			...sessionOutcome(session, collected, start),
 			sessionId: session.id,
 			exitCode: undefined,
 			signal: null,
 			failure: writeFailure,
-			logPath: session.logPath,
-			cwd: session.cwd,
-			shell: session.shell,
-			command: session.displayCommand,
-			yieldTimeMs,
 			extra: {
 				tool_time_utc: nowUtcIso(),
 				...(armed ? { on_exit: "wake" as const, completion_notification: "armed" as const } : {}),
@@ -711,6 +619,18 @@ function oneLineCommand(command: string, max = 120): string {
 	return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1)}…`;
 }
 
+function sessionLabel(ctx: ExtensionCtx, session: ExecSession, now: number): string {
+	const wake = ctx.coordinator.isArmed(session.id) ? tr(" [wake]", " [已唤醒]") : "";
+	const held = session.shellExited ? tr(" (shell exited, terminal held)", "（shell 已退出，终端仍被占用）") : "";
+	const elapsed = formatElapsedUi(now - session.startedAt);
+	return `#${session.id} ${elapsed}${wake}${held} ${oneLineCommand(session.title, 40)} — ${oneLineCommand(session.displayCommand, 60)}`;
+}
+
+function noSuchSession(ctx: ExtensionCtx, sid: number, target: string): Error {
+	const text = `No such session: ${target}`;
+	return new Error(sid >= 0 ? missingSessionText(ctx, sid, text) : text);
+}
+
 function formatRunningSessionsWidget(ctx: ExtensionCtx, sessions: ExecSession[]): string[] {
 	const now = Date.now();
 	const shown = sessions.slice(0, 5);
@@ -719,15 +639,7 @@ function formatRunningSessionsWidget(ctx: ExtensionCtx, sessions: ExecSession[])
 			`⚠ unified-exec: ${sessions.length} ${sessionWord(sessions.length)} still running`,
 			`⚠ unified-exec：${sessions.length} 个会话仍在运行`,
 		),
-		...shown.map((s) => {
-			const wake = ctx.coordinator.isArmed(s.id) ? tr(" [wake]", " [已唤醒]") : "";
-			const held = s.shellExited ? tr(" (shell exited, terminal held)", "（shell 已退出，终端仍被占用）") : "";
-			const elapsed = formatElapsedUi(now - s.startedAt);
-			return tr(
-				`  #${s.id} ${elapsed}${wake}${held} ${oneLineCommand(s.title, 40)} — ${oneLineCommand(s.displayCommand, 60)} (${s.cwd})`,
-				`  #${s.id} ${elapsed}${wake}${held} ${oneLineCommand(s.title, 40)} — ${oneLineCommand(s.displayCommand, 60)}（${s.cwd}）`,
-			);
-		}),
+		...shown.map((s) => `  ${sessionLabel(ctx, s, now)}${tr(` (${s.cwd})`, `（${s.cwd}）`)}`),
 	];
 	if (sessions.length > shown.length) {
 		lines.push(tr(
@@ -840,10 +752,7 @@ function startStreaming(
 		const bytes = session.totalBytesSeen;
 		if (sent === undefined || sent.revision !== revision || sent.running !== running || sent.bytes !== bytes) {
 			sent = { revision, running, bytes };
-			try {
-				onUpdate(buildStreamUpdate(session));
-			} catch {
-			}
+			deliverStreamUpdate(onUpdate, session);
 		}
 		if (stopped) return;
 		if (Date.now() >= deadlineMs) return;
@@ -857,6 +766,28 @@ function startStreaming(
 			if (timer) clearTimeout(timer);
 		},
 	};
+}
+
+function deliverStreamUpdate(onUpdate: AgentToolUpdateCallback<ProcessUpdateDetails>, session: ExecSession): void {
+	try {
+		onUpdate(buildStreamUpdate(session));
+	} catch {
+		return;
+	}
+}
+
+async function collectStreaming(
+	session: ExecSession,
+	onUpdate: AgentToolUpdateCallback<ProcessUpdateDetails> | undefined,
+	deadlineMs: number,
+	externalAbort: AbortSignal | undefined,
+): Promise<CollectResult> {
+	const stream = startStreaming(session, onUpdate, deadlineMs, externalAbort);
+	try {
+		return await session.collect({ deadlineMs, externalAbort });
+	} finally {
+		stream.stop();
+	}
 }
 
 function finalResponseText(event: SessionStopEvent): string | undefined {
@@ -926,7 +857,6 @@ function createRuntime(opts: RuntimeOptions): ExtensionCtx {
 		widgetVisible: false,
 		exitUnsubscribers: new Map(),
 		pendingSessions: new Set(),
-		shuttingDown: false,
 		appearance: opts.appearance,
 		shellPath: opts.shellPath,
 		shellHost: opts.shellHost,
@@ -949,7 +879,6 @@ async function deliverNotice(ctx: ExtensionCtx, agentHost: AgentHost | undefined
 
 async function endRuntime(ctx: ExtensionCtx): Promise<void> {
 	ctx.host = { kind: "ended" };
-	ctx.shuttingDown = true;
 	// Cancel lifecycle sweeps, wake timers/listeners and pending notices
 	// first: these kills create no notices, and no stale prompt may ever be
 	// injected into a new or closed session.
@@ -1004,7 +933,7 @@ export function activate(pi: ExtensionAPI, deps: ActivateDeps = {}): ActivatedEx
 	let binding: HostBindingState = { kind: "pending" };
 	let hostCwd: string | undefined;
 	let agentId: string | undefined;
-	let activeSessionManager: object | undefined;
+	let activeSessionManager: ExtensionContext["sessionManager"] | undefined;
 	let cachedStopConfig: StopConfig = DEFAULT_STOP_CONFIG;
 	const reportedConfigProblems = new Set<string>();
 	const warnConfigProblems = (load: Awaited<ReturnType<typeof loadStopConfig>>): void => {
@@ -1168,11 +1097,11 @@ export function activate(pi: ExtensionAPI, deps: ActivateDeps = {}): ActivatedEx
 		writeStdin: async (target, content, toolCallId, signal) => {
 			const { sid, session: resolved } = resolveSessionTarget(target);
 			if (!resolved) {
-				throw new Error(sid >= 0 ? missingSessionText(ctx, sid, `No such session: ${target}`) : `No such session: ${target}`);
+				throw noSuchSession(ctx, sid, target);
 			}
 			const data = /[\r\n]$/.test(content) ? content : `${content}\r`;
-			const syntheticId = toolCallId === undefined ? `write-term-${sid}-${Date.now()}` : undefined;
-			const callId = toolCallId ?? syntheticId!;
+			const synthetic = toolCallId === undefined;
+			const callId = toolCallId ?? `write-term-${sid}-${Date.now()}`;
 			const shape = await runWriteStdin(
 				ctx,
 				{ session_id: sid, text: data, yield_time_ms: DEFAULT_WRITE_STDIN_YIELD_MS },
@@ -1181,9 +1110,9 @@ export function activate(pi: ExtensionAPI, deps: ActivateDeps = {}): ActivatedEx
 				callId,
 			);
 			const isErr = (shape.exit_code != null && shape.exit_code !== 0) || shape.signal != null || shape.failure_message != null;
-			if (syntheticId !== undefined) {
-				ctx.lifecycle.commitToolReads(syntheticId, isErr);
-				ctx.coordinator.handleToolExecutionEnd(syntheticId, isErr);
+			if (synthetic) {
+				ctx.lifecycle.commitToolReads(callId, isErr);
+				ctx.coordinator.handleToolExecutionEnd(callId, isErr);
 			}
 			updateRunningSessionsUi(ctx);
 			return { text: renderProcessResultText(shape), isError: isErr };
@@ -1191,13 +1120,13 @@ export function activate(pi: ExtensionAPI, deps: ActivateDeps = {}): ActivatedEx
 		killSession: async (target, rawSignal, toolCallId) => {
 			const { sid, session: resolved } = resolveSessionTarget(target);
 			if (!resolved) {
-				throw new Error(sid >= 0 ? missingSessionText(ctx, sid, `No such session: ${target}`) : `No such session: ${target}`);
+				throw noSuchSession(ctx, sid, target);
 			}
 			const initial = normalizeSignal(rawSignal);
 			const startedAt = Date.now();
 			const outcome = await terminateSessionById(ctx, sid, initial, { kind: "model", toolCallId });
 			if (!outcome) {
-				throw new Error(missingSessionText(ctx, sid, `No such session: ${target}`));
+				throw noSuchSession(ctx, sid, target);
 			}
 			const { session, escalated, collected, killed } = outcome;
 			updateRunningSessionsUi(ctx);
@@ -1232,11 +1161,11 @@ export function activate(pi: ExtensionAPI, deps: ActivateDeps = {}): ActivatedEx
 		setOnExit: (target, policy) => {
 			const { sid, session } = resolveSessionTarget(target);
 			if (sid < 0 || (policy === "wake" && !session)) {
-				throw new Error(sid >= 0 ? missingSessionText(ctx, sid, `No such session: ${target}`) : `No such session: ${target}`);
+				throw noSuchSession(ctx, sid, target);
 			}
 			const status = ctx.coordinator.setOnExit(sid, policy, session);
 			if (!session && status === "already_none") {
-				throw new Error(missingSessionText(ctx, sid, `No such session: ${target}`));
+				throw noSuchSession(ctx, sid, target);
 			}
 			updateRunningSessionsUi(ctx);
 			const running = session ? !session.hasExited : false;
@@ -1250,7 +1179,7 @@ export function activate(pi: ExtensionAPI, deps: ActivateDeps = {}): ActivatedEx
 		cancelMonitor: (target) => {
 			const { sid, session } = resolveSessionTarget(target);
 			if (sid < 0 || (!session && !ctx.coordinator.monitorStatus(sid))) {
-				throw new Error(sid >= 0 ? missingSessionText(ctx, sid, `No such session: ${target}`) : `No such session: ${target}`);
+				throw noSuchSession(ctx, sid, target);
 			}
 			const cancelled = ctx.coordinator.cancelMonitor(sid);
 			updateRunningSessionsUi(ctx);
@@ -1291,7 +1220,6 @@ export function activate(pi: ExtensionAPI, deps: ActivateDeps = {}): ActivatedEx
 		if (resumed) {
 			ctx = resumed;
 		} else {
-			ctx.shuttingDown = false; // reload/new/resume re-arms the extension
 			// Never resurrect notices or wakes from a previous session.
 			compactNoticeSender.clearQueued();
 			ctx.notices.reset();
@@ -1360,15 +1288,7 @@ export function activate(pi: ExtensionAPI, deps: ActivateDeps = {}): ActivatedEx
 				return;
 			}
 			const now = Date.now();
-			const labels = sessions.map((s) => {
-				const wake = ctx.coordinator.isArmed(s.id) ? tr(" [wake]", " [已唤醒]") : "";
-				const held = s.shellExited ? tr(" (shell exited, terminal held)", "（shell 已退出，终端仍被占用）") : "";
-				const elapsed = formatElapsedUi(now - s.startedAt);
-				return tr(
-					`#${s.id} ${elapsed}${wake}${held} ${oneLineCommand(s.title, 40)} — ${oneLineCommand(s.displayCommand, 60)}`,
-					`#${s.id} ${elapsed}${wake}${held} ${oneLineCommand(s.title, 40)} — ${oneLineCommand(s.displayCommand, 60)}`,
-				);
-			});
+			const labels = sessions.map((s) => sessionLabel(ctx, s, now));
 			const KILL_ALL = tr(
 				`Kill all ${sessions.length} ${sessionWord(sessions.length)}`,
 				`结束全部 ${sessions.length} 个会话`,

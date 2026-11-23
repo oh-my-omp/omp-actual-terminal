@@ -239,12 +239,15 @@ export function finalizeProcessResult(input: FinalizeProcessInput): ProcessResul
 	if (input.shell) shape.shell = input.shell;
 	if (input.command) shape.command = input.command;
 	if (input.yieldTimeMs) shape.yield_time_ms = input.yieldTimeMs;
-	if (input.extra) {
-		for (const [key, value] of Object.entries(input.extra)) {
-			if (value !== undefined) (shape as unknown as Record<string, unknown>)[key] = value;
-		}
-	}
+	if (input.extra) assignDefined(shape, input.extra);
 	return shape;
+}
+
+function assignDefined<T extends object>(target: T, source: Partial<T>): void {
+	for (const key in source) {
+		const value = source[key];
+		if (value !== undefined) target[key] = value;
+	}
 }
 
 export function finalizeKillResult(input: FinalizeKillInput): KillResultDetails {
