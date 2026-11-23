@@ -107,7 +107,7 @@ results remain in English.
 - **One notice channel.** Wakes, monitor returns and reminders, input-wait
   alerts and lifecycle notices are all terminal notices: each names the
   terminal by `job_id` and the title given to its `bash` call, with a short
-  reason. A running agent reads them at its next step boundary, as omp-todo-more
+  reason. A running agent reads them at its next step boundary, as omp-todo-ng
   delivers its reminders; an idle agent is woken with a turn of its own rather
   than seeing them at the user's next prompt.
 - **Quiet after finished work.** When the main agent stops, its final response
@@ -738,7 +738,7 @@ background processes may still hold the terminal — or the terminal closes.
 
 Every follow-up about a terminal is one `omp-actual-terminal-notice` message, and
 notices pending within about 250 ms are merged into one. They are delivered
-the way omp-todo-more delivers its reminders:
+the way omp-todo-ng delivers its reminders:
 
 - **While a run is in progress** (omp's `agent_start` until an `agent_end` it
   does not continue) the message goes out with `deliverAs: "aside"`: omp
@@ -818,7 +818,7 @@ once omp adopts its task, see
 | `auto` (default) | `judge` when OMP's judge role resolves a model, else `llm` when `@smol` resolves one, else `todo` |
 | `judge` | One done / not-done choice through OMP's judge role chain, billed to the session like OMP's own judgments |
 | `llm` | The chat models of the `@smol` role in order, each answering `DONE` or `NOT_DONE` on its first line; a provider error moves to the next |
-| `todo` | Done when omp-todo-more's list has items and every one is completed or abandoned; a pending or in-progress item keeps it open; an empty list or no omp-todo-more gives no decision |
+| `todo` | Done when omp-todo-ng's list has items and every one is completed or abandoned; a pending or in-progress item keeps it open; an empty list or no omp-todo-ng gives no decision |
 | `off` | No decision; lifecycle notices (`abnormal_return`, `unread`, `reclaim_due`, `reclaimed`) are not delivered, while monitor, wake and input-wait notices are |
 
 An explicitly chosen detector that is unavailable gives no decision; one that

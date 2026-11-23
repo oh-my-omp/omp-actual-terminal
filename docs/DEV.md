@@ -572,7 +572,7 @@ windows, not in `tern serve`) with the owner's settings, isolated
 `TERN_CONFIG_DIR` and `TERN_DAEMON_SOCKET`, a running turn, a background agent
 and a background bash job, at 1100×850 and 700px width, with a light and a
 dark appearance (`palette "Dark appearance"`; `theme dark NAME` only picks the
-dark theme), both with no Tern plugin and with omp-todo-more's extension and
+dark theme), both with no Tern plugin and with omp-todo-ng's extension and
 Tern plugin. A terminal's tray card, its closer look and the jobs page's output
 pane must show its current screen and follow a change within a second; the
 card's Open must show the jobs page with the terminal selected. omp's jobs page

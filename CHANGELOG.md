@@ -4,6 +4,10 @@ All notable changes to this project. **Newest entries go on top.**
 
 ## [Unreleased]
 
+### Changed
+
+- The `todo` stop check's malformed-reply stop reason names the renamed omp-todo-ng plugin instead of omp-todo-more
+
 ## [0.17.1] - 2026-11-23
 
 ### Fixed

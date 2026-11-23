@@ -59,7 +59,7 @@ export function renderStopReason(reason: StopReason, language: Language): string
 	const zh = language === "zh";
 	switch (reason.kind) {
 		case "todo_unavailable": return zh ? "待办列表不可用" : "todo list unavailable";
-		case "todo_malformed": return zh ? `omp-todo-more 回复格式错误：${reason.detail}` : `malformed omp-todo-more reply: ${reason.detail}`;
+		case "todo_malformed": return zh ? `omp-todo-ng 回复格式错误：${reason.detail}` : `malformed omp-todo-ng reply: ${reason.detail}`;
 		case "todo_empty": return zh ? "待办列表为空" : "todo list is empty";
 		case "off": return zh ? "完成检测已关闭" : "stop detection is off";
 		case "no_session": return zh ? "没有绑定的 omp 会话" : "no bound omp session";
