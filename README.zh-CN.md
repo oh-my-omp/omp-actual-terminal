@@ -79,19 +79,20 @@ HUD 直接读取会话。终端视图只读取选中会话的屏幕，且只在�
 
 在一个持久的 PTY 会话里运行命令。用于长命令、交互程序（REPL、TUI、`ssh`、`sudo`）、并发计算和开发期 daemon；短的一次性命令用宿主的 `bash`。没有命令截止时间，退出的进程也不会被重启。用 `monitor` 和 `read term://…` 观察会话，用 `write_stdin` 发送输入；输出是渲染后的终端屏幕（见[终端输出](#terminal-output)）。
 
-三个工具（`exec_command`、`write_stdin`、`monitor`）都是 omp 的顶层工具（`loadMode: "essential"`）。共享的文档 topic 注册在 `tool://exec_command/<topic>`（`fork-features/topics/*.md`）：
+三个工具（`exec_command`、`write_stdin`、`monitor`）都是 omp 的顶层工具（`loadMode: "essential"`）。共享的文档 topic 通过 `docTopics()` 与 `registerToolTopics` 暴露在 `help://exec_command/<topic>`（`fork-features/topics/*.md`）：
 
-- `tool://exec_command/pty-io`：交互输入（`write_stdin`）、远程 heredoc 与 `term://` 读写。
-- `tool://exec_command/pty-lifecycle`：终端回收、`on_exit` 唤醒与 `monitor`。
+- `help://exec_command/pty-io`：交互输入（`write_stdin`）、远程 heredoc 与 `term://` 读写。
+- `help://exec_command/pty-lifecycle`：终端回收、`on_exit` 唤醒与 `monitor`。
 
 会话清单与控制（原 `list_sessions`、`kill_session`、`set_on_exit` 与 `monitor` 取消）直接通过 `term://` URL 完成：
 
 - `read term://`：列出当前全部 PTY 会话（`session_id`、`key`、`title`、运行状态、`term://<id>` URL）。
+- `write term://<id_or_key>`：直接向终端写入 stdin 文本（不以 CR/LF 结尾时自动追加回车；空正文发回车）并返回更新后的屏幕输出。
 - `write term://<id_or_key>/kill`：终止会话（正文可为空或信号名，也支持 `?signal=`）。
 - `write term://<id_or_key>/on_exit`：设置退出唤醒策略（`"wake"` 或 `"none"`）。
 - `write term://<id_or_key>/monitor`：取消活动 monitor（`"cancel"`）。
 
-不存在的 `tool://` topic 返回缺失 topic 错误。
+不存在的 `help://` topic 返回缺失 topic 错误。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
@@ -219,6 +220,7 @@ alias omp='omp --hide-thinking'
 | `read term://<key>/page/2` | `term://<key>` 所读行的第二页，每页是会话的 `rows` 行。 |
 | `read term://<key>/page/-1` | 最后一页；负页码从末尾计数。 |
 | `read term://<key>:raw:1-2` / `term://<key>:raw:-3` | 使用 `read` 现有的 head/tail 选择器，raw 模式不附上下文行。 |
+| `write term://<id>` | 直接发送 stdin 文本（不以 CR/LF 结尾时自动追加回车；空正文发回车）并返回更新后的屏幕输出。 |
 | `write term://<id>/kill` | 终止会话（正文可为空或信号名，也支持 `?signal=`，默认 `SIGTERM`，2 秒后升级 `SIGKILL`）。 |
 | `write term://<id>/on_exit` | 修改退出唤醒策略（`"wake"` 或 `"none"`），不杀进程。 |
 | `write term://<id>/monitor` | 取消活动的 monitor（`"cancel"`）。 |

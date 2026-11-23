@@ -432,6 +432,17 @@ describe("terminal lifecycle", { skip: process.platform === "win32" }, () => {
 		assert.deepEqual((await h.listed(sid))?.lifecycle, { returned: "normally", read: true, phase: "linger" });
 	});
 
+	it("write term://<id> sends stdin like proc:// and returns updated screen output", async () => {
+		const h = makeHarness();
+		await h.emit("session_start");
+		const { sid } = await startBackground(h, 'while IFS= read -r line; do echo "term_echo=$line"; done', "term stdin");
+		const res = await InternalUrlRouter.instance().write(`term://${sid}`, "hello-from-url");
+		const text = res?.content[0]?.type === "text" ? res.content[0].text : "";
+		assert.match(text, /term_echo=hello-from-url/);
+		await InternalUrlRouter.instance().write(`term://${sid}/kill`, "");
+		assert.deepEqual((await h.listed(sid))?.lifecycle, { returned: "normally", read: true, phase: "linger" });
+	});
+
 	it("session shutdown ends the lifecycle without notices", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");

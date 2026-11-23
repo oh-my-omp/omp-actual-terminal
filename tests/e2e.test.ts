@@ -110,7 +110,7 @@ function makeHarness(shellPath: () => string | undefined = STUB_SHELL_PATH) {
 		},
 		async listSessions() {
 			const text = await this.readTerm("term://");
-			const headerMatch = /\((\d+) running, (\d+) returned\)/.exec(text);
+			const headerMatch = /\((\d+) running, (\d+) exited\)/.exec(text);
 			const runningCount = headerMatch ? Number(headerMatch[1]) : 0;
 			const returnedCount = headerMatch ? Number(headerMatch[2]) : 0;
 			const lines = text.split("\n");

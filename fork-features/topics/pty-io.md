@@ -12,8 +12,9 @@
 
 ## Reading and controlling sessions via `term://`
 - Sessions can be addressed by numeric `session_id` (`term://1`) or retained session `key` (`term://1-<uuid>`).
-- `read term://`: list all running and returned (not yet reclaimed) PTY sessions with `session_id`, `key`, `title`, running status, lifecycle phase, and `term://<id>` URLs. Observing an exited session in the listing suppresses an unsent `on_exit` wake without marking output as read.
+- `read term://`: list all running and exited (not yet reclaimed) PTY sessions with `session_id`, `key`, `title`, status, lifecycle phase, and `term://<id>` URLs. Observing an exited session in the listing suppresses an unsent `on_exit` wake without marking output as read.
 - `read term://<id>`: retained history (normal screen) or active screen (alternate screen). Subpaths: `/screen` (active screen text), `/page/<n>` (1-based page, or `-1` for last), `/screen.png` (styled screenshot). `term://` remains readable after reclaim.
+- `write term://<id>` (line/text input): send stdin text directly to the terminal (appends Enter unless ending in CR/LF; empty content sends Enter) and return the updated screen output, just like `proc://`. Use `write_stdin` when you need `special_key`, `raw_base64`, no Enter, or a custom `yield_time_ms`.
 - `write term://<id>/kill` (empty content or signal name such as `SIGTERM`, `SIGINT`, `SIGKILL`, or `?signal=...`): terminate the session (SIGTERM, then SIGKILL after 2 s; on Windows any signal force-kills the process tree).
 - `write term://<id>/on_exit` (`"wake"` or `"none"`): arm or disarm completion wake without stopping the process.
 - `write term://<id>/monitor` (`"cancel"`): cancel an active `monitor` subscription silently.

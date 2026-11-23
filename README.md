@@ -203,21 +203,23 @@ with `monitor` and `read term://…`, and send input with `write_stdin`; its out
 rendered terminal screen (see [Terminal output](#terminal-output)).
 
 All three tools (`exec_command`, `write_stdin`, `monitor`) register as top-level
-omp tools (`loadMode: "essential"`). Shared documentation topics are registered
-under `tool://exec_command/<topic>` (`fork-features/topics/*.md`):
+omp tools (`loadMode: "essential"`). Shared documentation topics are exposed
+under `help://exec_command/<topic>` (`fork-features/topics/*.md` via `docTopics()`
+and `registerToolTopics`):
 
-- `tool://exec_command/pty-io`: interactive input (`write_stdin`), remote heredocs, and `term://` read/write URLs.
-- `tool://exec_command/pty-lifecycle`: terminal reclaim, `on_exit` wakes, and `monitor`.
+- `help://exec_command/pty-io`: interactive input (`write_stdin`), remote heredocs, and `term://` read/write URLs.
+- `help://exec_command/pty-lifecycle`: terminal reclaim, `on_exit` wakes, and `monitor`.
 
 Session inventory and control (`list_sessions`, `kill_session`, `set_on_exit`,
 and `monitor` cancellation) are handled directly through `term://` URLs:
 
 - `read term://` — list all stored PTY sessions (`session_id`, `key`, `title`, status, URL).
+- `write term://<id_or_key>` — send stdin line input directly (appends Enter unless ending in CR/LF; empty = Enter) and return updated screen output.
 - `write term://<id_or_key>/kill` — terminate a session (optional body signal or `?signal=`).
 - `write term://<id_or_key>/on_exit` — set exit wake policy (`"wake"` or `"none"`).
 - `write term://<id_or_key>/monitor` — cancel an active monitor (`"cancel"`).
 
-An unknown `tool://` topic returns a missing-topic error.
+An unknown `help://` topic returns a missing-topic error.
 
 | Param | Type | Default | Notes |
 |---|---|---|---|
@@ -416,6 +418,7 @@ remains readable independently of result consumption:
 | `read term://<key>/page/2` | The second page of the rows `term://<key>` reads; each page has the session's `rows` rows. |
 | `read term://<key>/page/-1` | The last page; negative page numbers count from the end. |
 | `read term://<key>:raw:1-2` / `term://<key>:raw:-3` | The existing `read` head/tail selectors, with no context rows in raw mode. |
+| `write term://<id>` | Sends stdin text directly (appends Enter unless ending in CR/LF; empty sends Enter) and returns updated screen output. |
 | `write term://<id>/kill` | Terminates the session (optional body signal or `?signal=`, default `SIGTERM`, escalates to `SIGKILL` after 2s). |
 | `write term://<id>/on_exit` | Sets the exit wake policy (`"wake"` or `"none"`) without killing the process. |
 | `write term://<id>/monitor` | Cancels an active monitor (`"cancel"`). |
@@ -1058,7 +1061,7 @@ fork-features/
 ├── stop-gate.ts          # judge / @smol / todo stop detectors over factory-loaded omp modules
 ├── screen-judge.ts       # judge monitors' screen judgment through omp's judge role chain
 ├── stop-reasons.ts       # structured stop/config reasons; English/Chinese boundary rendering
-├── exec-command-docs.ts  # registers tool://exec_command/pty-io & pty-lifecycle topics
+├── exec-command-docs.ts  # mounts help://exec_command/pty-io & pty-lifecycle via docTopics & registerToolTopics
 ├── topics/               # packaged body-only tool documentation (pty-io.md, pty-lifecycle.md)
 ├── monitor-subscription.ts # monitor conditions, batching, judgments and reminders as terminal notices
 ├── input-wait.ts         # input prompt detection; input-wait alerts as terminal notices

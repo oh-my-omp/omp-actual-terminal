@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { registerToolTopics, type ToolTopicDoc } from "./omomp-shared/internal-url.ts";
+import { registerToolTopics, toDocTopics, type ToolTopicDoc } from "./omomp-shared/internal-url.ts";
 
 export function loadExecCommandTopics(): readonly ToolTopicDoc[] {
 	return [
@@ -22,10 +22,12 @@ export function loadExecCommandTopics(): readonly ToolTopicDoc[] {
 
 export const TOOL_TOPIC_OWNER = "omp-actual-terminal";
 
-export function registerExecCommandTopics(): void {
-	registerToolTopics(TOOL_TOPIC_OWNER, loadExecCommandTopics());
+export function registerExecCommandTopics(): () => Record<string, string> {
+	const docs = loadExecCommandTopics();
+	registerToolTopics(TOOL_TOPIC_OWNER, docs);
+	return toDocTopics(docs);
 }
 
-export const execCommandTopicPointers = "Topics: `tool://exec_command/pty-io`, `tool://exec_command/pty-lifecycle`.";
-export const writeStdinTopicPointers = "Topic: `tool://exec_command/pty-io`.";
-export const monitorTopicPointers = "Topic: `tool://exec_command/pty-lifecycle`.";
+export const execCommandTopicPointers = "Topics: `help://exec_command/pty-io`, `help://exec_command/pty-lifecycle`.";
+export const writeStdinTopicPointers = "Topic: `help://exec_command/pty-io`.";
+export const monitorTopicPointers = "Topic: `help://exec_command/pty-lifecycle`.";

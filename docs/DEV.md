@@ -69,7 +69,7 @@ A sibling view, indexed by concern:
 | Concern | File(s) |
 |---|---|
 | Tool schemas and orchestration | `src/index.ts` (`exec_command`, `write_stdin`, `monitor`) |
-| Tool-owned topics (`read tool://exec_command/<topic>`) and description pointers for the retained PTY tools | `fork-features/exec-command-docs.ts`, `fork-features/topics/*.md` (`pty-io.md`, `pty-lifecycle.md`); registered via `omomp-shared/internal-url.ts` in `src/index.ts`, included by `package.json` `files` |
+| Tool-owned topics (`read help://exec_command/<topic>`) and description pointers for the retained PTY tools | `fork-features/exec-command-docs.ts`, `fork-features/topics/*.md` (`pty-io.md`, `pty-lifecycle.md`); exposed via `docTopics()` + `registerToolTopics` in `src/index.ts`, included by `package.json` `files` |
 | Session lifecycle (spawn, write, kill, log-stream) | `src/session.ts` |
 | Session registry, LRU eviction, shutdown | `src/session-store.ts` |
 | Per-call observation (`CollectResult`: screen, final screen or none) | `src/collect.ts`; produced by `ExecSession.collect` in `src/session.ts` |

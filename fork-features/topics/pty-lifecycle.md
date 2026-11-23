@@ -10,7 +10,7 @@
 
 ## `on_exit` exit wakes
 - `on_exit: "wake"` resumes you once when the process exits unobserved; set it only when the human explicitly asked, never for servers or watchers.
-- A tool result observing the exit (`write_stdin`, `write term://<id>/kill`, or `read term://`) consumes or suppresses the wake.
+- A tool result observing the exit (`write_stdin`, `write term://<id>`, `write term://<id>/kill`, or `read term://`) consumes or suppresses the wake.
 - Change at any time via `write term://<id>/on_exit` with `"wake"` or `"none"`; a queued follow-up cannot be recalled.
 
 ## Background `monitor`

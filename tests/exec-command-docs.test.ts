@@ -12,8 +12,9 @@ import {
 import { clearToolTopics, listToolTopics, resolveToolTopic } from "../fork-features/omomp-shared/internal-url.ts";
 import { activate } from "../src/index.ts";
 
-test("exec_command registers the two pty topics under tool:// without legacy device scheme", () => {
-	const legacyScheme = `${"xd"}://`;
+test("exec_command registers the two pty topics under help:// and docTopics without legacy schemes", () => {
+	const legacyXd = `${"xd"}://`;
+	const legacyTool = `${"tool"}://`;
 	clearToolTopics(TOOL_TOPIC_OWNER);
 	const tools = new Map<string, ToolDefinition>();
 	activate({
@@ -31,13 +32,23 @@ test("exec_command registers the two pty topics under tool:// without legacy dev
 		const fileBody = readFileSync(new URL(`../fork-features/topics/${doc.topic}.md`, import.meta.url), "utf8");
 		assert.equal(resolved.content, fileBody);
 		assert.ok(fileBody.startsWith("# "));
-		assert.ok(!fileBody.includes(legacyScheme));
+		assert.ok(!fileBody.includes(legacyXd));
+		assert.ok(!fileBody.includes(legacyTool));
 	}
 	assert.equal(resolveToolTopic("exec_command", "nope"), undefined);
 
+	const docTopics = (tools.get("exec_command") as ToolDefinition & { docTopics?: () => Record<string, string> }).docTopics?.();
+	assert.ok(docTopics);
+	assert.deepEqual(Object.keys(docTopics).sort(), ["pty-io", "pty-lifecycle"]);
+	for (const doc of loadExecCommandTopics()) {
+		assert.equal(docTopics[doc.topic], resolveToolTopic(doc.tool, doc.topic)!.content);
+	}
+	assert.equal("docTopics" in tools.get("write_stdin")!, false);
+	assert.equal("docTopics" in tools.get("monitor")!, false);
+
 	for (const tool of tools.values()) {
-		assert.equal("docTopics" in tool, false);
-		assert.ok(!tool.description.includes(legacyScheme));
+		assert.ok(!tool.description.includes(legacyXd));
+		assert.ok(!tool.description.includes(legacyTool));
 	}
 	assert.ok(tools.get("exec_command")!.description.endsWith(execCommandTopicPointers));
 	assert.ok(tools.get("write_stdin")!.description.endsWith(writeStdinTopicPointers));

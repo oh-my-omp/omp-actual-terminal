@@ -1162,8 +1162,31 @@ export function activate(
 						return `  session_id=${s.session_id}  ${JSON.stringify(s.title)}  [${state}]  url=${s.url}${s.key ? `  key=${s.key}` : ""}  pid=${s.pid ?? "?"}  ${(s.elapsed_ms / 1000).toFixed(1)}s${wake}${monitor}  ${oneLineCommand(s.command, 60)}${life}\n        shell: ${sanitizeMeta(s.shell ?? "")}\n        log: ${s.log_path}${s.terminal_url ? `\n        terminal_url: ${s.terminal_url}` : ""}`;
 					})
 				: ["  (no terminals)"];
-			const header = `unified-exec terminals (${runningCount} running, ${returnedCount} returned):`;
+			const header = `Active terminals (${runningCount} running, ${returnedCount} exited):`;
 			return `${header}\n${lines.join("\n")}\ntool_time_utc: ${toolTimeUtc}`;
+		},
+		writeStdin: async (target, content, toolCallId, signal) => {
+			const { sid, session: resolved } = resolveSessionTarget(target);
+			if (!resolved) {
+				throw new Error(sid >= 0 ? missingSessionText(ctx, sid, `No such session: ${target}`) : `No such session: ${target}`);
+			}
+			const data = /[\r\n]$/.test(content) ? content : `${content}\r`;
+			const syntheticId = toolCallId === undefined ? `write-term-${sid}-${Date.now()}` : undefined;
+			const callId = toolCallId ?? syntheticId!;
+			const shape = await runWriteStdin(
+				ctx,
+				{ session_id: sid, text: data, yield_time_ms: DEFAULT_WRITE_STDIN_YIELD_MS },
+				signal,
+				undefined,
+				callId,
+			);
+			const isErr = (shape.exit_code !== undefined && shape.exit_code !== 0) || shape.signal !== null || shape.failure_message !== null;
+			if (syntheticId !== undefined) {
+				ctx.lifecycle.commitToolReads(syntheticId, isErr);
+				ctx.coordinator.handleToolExecutionEnd(syntheticId, isErr);
+			}
+			updateRunningSessionsUi(ctx);
+			return { text: renderProcessResultText(shape), isError: isErr };
 		},
 		killSession: async (target, rawSignal, toolCallId) => {
 			const { sid, session: resolved } = resolveSessionTarget(target);
@@ -1378,7 +1401,7 @@ export function activate(
 	});
 
 
-	registerExecCommandTopics();
+	const execCommandDocTopics = registerExecCommandTopics();
 
 	const execCommandParameters = Type.Object({
 		cmd: Type.String({ description: "Shell command to execute." }),
@@ -1402,7 +1425,9 @@ export function activate(
 		)),
 	});
 
-	pi.registerTool({
+	const execCommandTool: ToolDefinition<typeof execCommandParameters> & {
+		readonly docTopics: () => Record<string, string>;
+	} = {
 		name: "exec_command",
 		label: tr("Execute command", "执行命令"),
 		...(approvalHost ? {
@@ -1415,8 +1440,9 @@ export function activate(
 			],
 		} : {}),
 		description:
-			"Run a command in a PTY for long-running, interactive, concurrent or daemon work; bash for one-shot commands. Returns session_id or exit_code. " +
+			"Run an interactive or long-lived command in a PTY terminal (complements non-interactive `bash` for REPLs, TUIs, SSH, sudo, or stateful shells). Returns session_id or exit_code; inspect or control via `term://`. " +
 			execCommandTopicPointers,
+		docTopics: execCommandDocTopics,
 		parameters: execCommandParameters,
 		async execute(toolCallId, params, signal, onUpdate, eventCtx) {
 			ctx.ui ??= eventCtx.ui;
@@ -1427,7 +1453,8 @@ export function activate(
 				details: shape,
 			};
 		},
-	} satisfies ToolDefinition<typeof execCommandParameters>);
+	};
+	pi.registerTool(execCommandTool);
 
 	const writeStdinParameters = Type.Object({
 		session_id: Type.Number({ description: "Session id from exec_command." }),
@@ -1452,7 +1479,7 @@ export function activate(
 		name: "write_stdin",
 		label: tr("Send input", "发送输入"),
 		description:
-			"Send input (text, enter, special_key, or raw_base64) to a running session's PTY; returns output like exec_command. " +
+			"Send verbatim text, Enter, special keys (ctrl-c, arrow keys, etc.), or raw_base64 to an active PTY session (or write line input directly via `write term://<id>`). " +
 			writeStdinTopicPointers,
 		parameters: writeStdinParameters,
 		async execute(toolCallId, params, signal, onUpdate, eventCtx) {
@@ -1478,7 +1505,7 @@ export function activate(
 		name: "monitor",
 		label: tr("Monitor", "监视"),
 		description:
-			"Wait for a running session's future output (condition regex, judge intent, or completion). Cancel via write term://<id>/monitor (\"cancel\"). " +
+			"Subscribe to future output or completion events from a running PTY session (regex condition, judge intent, or exit). Cancel via `write term://<id>/monitor` (`\"cancel\"`). " +
 			monitorTopicPointers,
 		parameters: monitorParameters,
 		async execute(_toolCallId, params, signal) {
