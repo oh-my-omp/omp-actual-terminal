@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { loadStopConfig, parseStopSection, parseStopSettings } from "../fork-features/stop-config.ts";
-import { renderStopConfigReason, renderStopReason, type StopConfigReason, type StopReason } from "../fork-features/stop-reasons.ts";
+import { loadStopConfig, parseStopSection, parseStopSettings } from "../src/stop-config.ts";
+import { renderStopConfigReason, renderStopReason, type StopConfigReason, type StopReason } from "../src/stop-reasons.ts";
 
 const configCases: readonly [StopConfigReason, string, string][] = [
 	[{ kind: "non_mapping", scope: "section" }, "section is not a mapping", "配置段不是映射"],
@@ -45,15 +45,15 @@ describe("stop diagnostic facts and boundary rendering", () => {
 		assert.deepEqual(parseStopSection({ judgePrompt: " " }), { kind: "error", reason: { kind: "invalid_template", key: "judgePrompt" } });
 		assert.deepEqual(parseStopSection({ noticeTemplate: "{typo}" }), { kind: "error", reason: { kind: "unknown_placeholders", key: "noticeTemplate", names: ["typo"], known: ["summary", "items", "instruction", "terminal_count", "notice_count"] } });
 	});
-	it("ignores unrelated plugin settings keys and loads valid stop settings via getPluginSettings", async () => {
-		const parsed = parseStopSettings({ "notice.graceReclaim": true, "exec.initFile": "~/.bashrc", stop: "off" });
-		assert.equal(parsed.config.mode, "off");
-		assert.deepEqual(parsed.problems, []);
+	it("loads stop settings from plugin settings and keeps problems structured", async () => {
+		const valid = await loadStopConfig(async () => ({ stop: "off" }), "/tmp");
+		assert.equal(valid.config.mode, "off");
+		assert.deepEqual(valid.problems, []);
 
-		const invalid = await loadStopConfig(async () => ({ stop: "always" }), "/tmp");
+		const invalid = parseStopSettings({ stop: "bogus" });
 		assert.equal(invalid.config.mode, "auto");
 		assert.equal(invalid.problems.length, 1);
-		const reason = invalid.problems[0]!.reason;
+		const reason = invalid.problems[0].reason;
 		const identity = JSON.stringify(reason);
 		assert.equal(renderStopConfigReason(reason, "zh"), "stop：必须为以下值之一：off, auto, judge, llm, todo");
 		assert.equal(renderStopConfigReason(reason, "en"), "stop: must be one of off, auto, judge, llm, todo");

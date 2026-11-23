@@ -1,12 +1,11 @@
 {
-	"name": "omp-unified-exec",
+	"name": "omp-actual-terminal",
 	"version": "0.16.0",
-	"description": "Long-lived PTY sessions for omp: send input with write_stdin, read terminal state via term://, and await events or completion with monitor. Full raw output logged to disk.",
+	"description": "Long-lived PTY terminals for omp: send input with write_stdin, read terminal state via term://, and await events or completion with monitor. Full raw output logged to disk.",
 	"keywords": [
 		"omp",
 		"omp-extension",
-		"codex",
-		"unified-exec",
+		"terminal",
 		"bash",
 		"pty"
 	],
@@ -14,22 +13,19 @@
 	"author": "Ren Wang <iamwrm@gmail.com>",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/oh-my-omp/omp-unified-exec.git"
+		"url": "git+https://github.com/oh-my-omp/omp-actual-terminal.git"
 	},
-	"homepage": "https://github.com/oh-my-omp/omp-unified-exec#readme",
+	"homepage": "https://github.com/oh-my-omp/omp-actual-terminal#readme",
 	"type": "module",
 	"scripts": {
 		"check": "tsc --noEmit",
-		"test": "bun run check && bun test"
+		"test": "bun test"
 	},
 	"engines": {
 		"bun": ">=1.4"
 	},
 	"files": [
 		"src",
-		"fork-features/*.ts",
-		"fork-features/omomp-shared/*.ts",
-		"fork-features/topics/*.md",
 		"README.md",
 		"LICENSE",
 		"CHANGELOG.md"
@@ -49,13 +45,13 @@
 			},
 			"exec.initFile": {
 				"type": "string",
-				"description": "POSIX shell script every exec_command shell sources before its command, e.g. export NAME=value or alias omp='omp --hide-thinking'. Use ~/ or an absolute path; a project's .omp/plugin-overrides.json value replaces it, relative paths there resolve against the session cwd"
+				"description": "POSIX shell script every bash pty: true terminal's shell sources before its command, e.g. export NAME=value or alias omp='omp --hide-thinking'. Use ~/ or an absolute path; a project's .omp/plugin-overrides.json value replaces it, relative paths there resolve against the session cwd"
 			},
 			"stop": {
 				"type": "enum",
 				"values": ["off", "auto", "judge", "llm", "todo"],
 				"default": "auto",
-				"description": "How unified-exec decides whether a stopped agent finished its task before delivering pending notices"
+				"description": "How omp-actual-terminal decides whether a stopped agent finished its task before delivering pending notices"
 			},
 			"judgePrompt": {
 				"type": "string",

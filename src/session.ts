@@ -1,10 +1,10 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { SessionLog, sessionLogName } from "../fork-features/log-archive.ts";
-import { detachTerminalReader, discardLiveTerminal, freezeTerminal, readTerminal, registerTerminal } from "../fork-features/terminal-resource.ts";
-import { detectInputPrompt, inputWaitNotice, type InputWaitAlert } from "../fork-features/input-wait.ts";
-import type { MonitorListener, MonitorSourceHandle, MonitorStart } from "../fork-features/monitor-subscription.ts";
+import { SessionLog, sessionLogName } from "./log-archive.ts";
+import { detachTerminalReader, discardLiveTerminal, freezeTerminal, readTerminal, registerTerminal } from "./terminal-resource.ts";
+import { detectInputPrompt, inputWaitNotice, type InputWaitAlert } from "./input-wait.ts";
+import type { MonitorListener, MonitorSourceHandle, MonitorStart } from "./monitor-subscription.ts";
 import { type CollectResult, type FinalScreenOutput, NO_OUTPUT, type NoOutput } from "./collect.ts";
 import { waitForExitOrDeadline } from "./long-wait.ts";
 import { Gate, Notify } from "./notify.ts";
@@ -12,12 +12,14 @@ import { DEFAULT_PTY_COLS, DEFAULT_PTY_ROWS, type ProcessExit, type SpawnedChild
 import { type StyledScreen, type TerminalAppearance, TerminalScreen, type TerminalSnapshot } from "./terminal-screen.ts";
 
 export interface SessionSpawnOptions {
-	command: string[];
+	command: readonly string[];
+	/** The shell the terminal runs, as results name it. */
+	shell: string;
 	cwd: string;
 	env: NodeJS.ProcessEnv;
 	cols?: number;
 	rows?: number;
-	displayCommand?: string;
+	displayCommand?: string; // human-readable command for list_sessions/UI
 	title: string;
 	appearance?: () => TerminalAppearance;
 	inputWait?: InputWaitOptions;
@@ -37,17 +39,17 @@ export interface SessionState {
 }
 
 export class ExecSession {
-	readonly id: number;
-	readonly command: string[];
-	get shell(): string | undefined {
-		return this.command[0];
-	}
+	readonly id: string;
+	readonly command: readonly string[];
+	readonly shell: string;
 	readonly displayCommand: string;
 	readonly title: string;
 	readonly cwd: string;
 	readonly startedAt: number;
 	readonly pid: number | undefined;
 	readonly logPath: string;
+	/** The size the call started the terminal with; a Console that resized it restores this size on leaving. */
+	readonly size: { readonly cols: number; readonly rows: number };
 	private log: SessionLog | undefined;
 
 	private screen: TerminalScreen | undefined;
@@ -76,36 +78,41 @@ export class ExecSession {
 	private lastUsedAt: number;
 	private child!: SpawnedChild;
 
-	private constructor(id: number, opts: SessionSpawnOptions) {
+	private constructor(id: string, opts: SessionSpawnOptions) {
 		this.id = id;
 		this.command = opts.command;
+		this.shell = opts.shell;
 		this.displayCommand = opts.displayCommand ?? opts.command.join(" ");
 		this.title = opts.title;
 		this.cwd = opts.cwd;
 		this.startedAt = Date.now();
 		this.lastUsedAt = this.startedAt;
 		this.lastOutputAtMs = this.startedAt;
-		this.pid = undefined;
+		this.pid = undefined; // set in `start`
 		this.logPath = join(tmpdir(), sessionLogName(id));
+		this.size = { cols: opts.cols ?? DEFAULT_PTY_COLS, rows: opts.rows ?? DEFAULT_PTY_ROWS };
 	}
 
-	static spawn(id: number, opts: SessionSpawnOptions): ExecSession {
+	static spawn(id: string, opts: SessionSpawnOptions): ExecSession {
 		const self = new ExecSession(id, opts);
 
 		try {
 			self.log = SessionLog.open(self.logPath, (err) => {
-				self.recordFailure(`log stream error: ${err.message}`);
+				// The child is
+				// still running: record the failure and stop mirroring writes, but
+				// do NOT mark the session exited — that would make it unkillable
+				// (kill() no-ops once hasExited) and orphan the process.
+				self.recordFailure(`log stream error: ${err?.message ?? err}`);
 				self.log = undefined;
 			});
-		} catch (err: unknown) {
-			self.markFailure(`failed to open log file ${self.logPath}: ${err instanceof Error ? err.message : String(err)}`);
+		} catch (err: any) {
+			self.markFailure(`failed to open log file ${self.logPath}: ${err?.message ?? err}`);
 			self.exitedAc.abort();
 			self.outputClosed.close();
 			return self;
 		}
 
-		const cols = opts.cols ?? DEFAULT_PTY_COLS;
-		const rows = opts.rows ?? DEFAULT_PTY_ROWS;
+		const { cols, rows } = self.size;
 		try {
 			self.child = spawnChild({
 				command: opts.command,
@@ -114,8 +121,8 @@ export class ExecSession {
 				cols,
 				rows,
 			});
-		} catch (err: unknown) {
-			self.markFailure(err instanceof Error ? err.message : String(err));
+		} catch (err: any) {
+			self.markFailure(err?.message ?? String(err));
 			void self.log?.end();
 			self.log = undefined;
 			self.exitedAc.abort();
@@ -125,6 +132,8 @@ export class ExecSession {
 
 		Object.defineProperty(self, "pid", { value: self.child.pid, enumerable: true });
 
+		// A real terminal answers queries (cursor position, device attributes);
+		// a child that waits for the answer would otherwise stall.
 		const screen = new TerminalScreen(cols, rows, (reply) => void self.write(reply), opts.appearance);
 		self.screen = screen;
 		const key = registerTerminal(id, screen, () => {
@@ -184,7 +193,7 @@ export class ExecSession {
 			alerted = fingerprint;
 			onAlert({
 				notice: inputWaitNotice({
-					sessionId: this.id, title: this.title, command: this.displayCommand, prompt, screen: probe.kind, quietMs,
+					jobId: this.id, title: this.title, command: this.displayCommand, prompt, screen: probe.kind, quietMs,
 					terminalUrl: this.terminalUrl, logPath: this.logPath,
 				}),
 				current: () => !this.hasExited && this.screen === screen && screen.unseen(probe.revision),
@@ -204,6 +213,11 @@ export class ExecSession {
 			clearTimeout(quiet);
 			unsubscribe();
 		});
+	}
+
+	/** The call's `timeout` ran out; the caller ends the process. */
+	recordDeadline(seconds: number): void {
+		this.recordFailure(`timeout: ended after ${seconds}s`);
 	}
 
 	private recordFailure(message: string): void {
@@ -256,8 +270,17 @@ export class ExecSession {
 		return this.screen?.snapshot();
 	}
 
+	/** The visible screen once the output read so far is parsed; undefined once the screen is released. */
+	settledSnapshot(): Promise<TerminalSnapshot | undefined> {
+		return this.screen?.settledSnapshot() ?? Promise.resolve(undefined);
+	}
+
 	styledScreen(): StyledScreen | undefined {
 		return this.screen?.styledScreen();
+	}
+
+	applicationCursorKeys(): boolean {
+		return this.screen?.applicationCursorKeys() ?? false;
 	}
 
 	screenRevision(): number | undefined {
@@ -327,6 +350,7 @@ export class ExecSession {
 			const screen = this.screen;
 			if (!screen) return NO_OUTPUT;
 			const observation = await screen.observe();
+			// Exit may land while the observation's parser barrier is pending.
 			if (this.hasExited) return this.finalScreenOutput();
 			return { kind: "screen", observation, terminalUrl: this.terminalUrl };
 		} finally {
@@ -357,6 +381,7 @@ export class ExecSession {
 		await this.detachScreen()?.release();
 	}
 
+	/** The retained terminal outlives the session; it must not keep reporting reads to it (or keep it reachable). */
 	private detachReader(): void {
 		this.readListeners.clear();
 		if (this.terminalKey !== undefined) detachTerminalReader(this.terminalKey);
@@ -371,6 +396,13 @@ export class ExecSession {
 	write(data: Uint8Array): boolean {
 		if (this.state.hasExited) return false;
 		return this.child.write(data);
+	}
+
+	/** Gives the child and the screen model `cols`×`rows`; false once the terminal is gone. */
+	resize(cols: number, rows: number): boolean {
+		if (this.state.hasExited || !this.child.resize(cols, rows)) return false;
+		this.screen?.resize(cols, rows);
+		return true;
 	}
 
 	kill(signal: NodeJS.Signals = "SIGTERM"): void {

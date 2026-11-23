@@ -8,7 +8,7 @@ export const DEFAULT_PTY_COLS = 120;
 export const DEFAULT_PTY_ROWS = 80;
 
 export interface SpawnOptions {
-	command: string[];
+	command: readonly string[];
 	cwd: string;
 	env: NodeJS.ProcessEnv;
 	cols?: number;
@@ -26,6 +26,8 @@ export interface SpawnedChild {
 	readonly processExited: boolean;
 	readonly processExit: ProcessExit | undefined;
 	write(data: Uint8Array): boolean;
+	/** Changes the terminal's size the child sees; false once the terminal is gone. */
+	resize(cols: number, rows: number): boolean;
 	onData(handler: (chunk: Uint8Array) => void): () => void;
 	onExit(handler: ExitCallback): void;
 	onProcessExit(handler: (exit: ProcessExit) => void): () => void;
@@ -58,7 +60,7 @@ function providesBunPty(candidate: object): candidate is BunHost {
 export function requireBunRuntime(
 	candidate: unknown = Reflect.get(globalThis, "Bun"),
 ): BunPtyRuntime {
-	const requirement = "omp-unified-exec requires a Bun host with Bun.Terminal";
+	const requirement = "omp-actual-terminal requires a Bun host with Bun.Terminal";
 	if ((typeof candidate !== "object" || candidate === null) && typeof candidate !== "function") {
 		throw new Error(`${requirement}; the current runtime is not Bun. Load this plugin in omp.`);
 	}
@@ -235,6 +237,16 @@ export function spawnBunPty(runtime: BunPtyRuntime, opts: SpawnOptions): Spawned
 				return false;
 			}
 		},
+		resize(cols, rows) {
+			const activeTerminal = terminal;
+			if (finalized || processExited || !activeTerminal || activeTerminal.closed) return false;
+			try {
+				activeTerminal.resize(cols, rows);
+				return true;
+			} catch {
+				return false;
+			}
+		},
 		onData(handler) {
 			bufferingInitialData = false;
 			for (const chunk of pendingData) notifyEach([handler], chunk);
@@ -284,4 +296,3 @@ export function spawnBunPty(runtime: BunPtyRuntime, opts: SpawnOptions): Spawned
 		},
 	};
 }
-

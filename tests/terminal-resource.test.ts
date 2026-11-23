@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 
-import { freezeTerminal, parseTerminalTarget, readTerminal, registerTerminal, terminalText } from "../fork-features/terminal-resource.ts";
+import { freezeTerminal, parseTerminalTarget, readTerminal, registerTerminal, terminalText } from "../src/terminal-resource.ts";
 import { TerminalScreen } from "../src/terminal-screen.ts";
 
 const encoder = new TextEncoder();
@@ -55,8 +55,8 @@ describe("non-consuming terminal resources", () => {
 		const first = new TerminalScreen(10, 2, () => {});
 		const second = new TerminalScreen(10, 2, () => {});
 		try {
-			const a = registerTerminal(1, first);
-			const b = registerTerminal(1, second);
+			const a = registerTerminal("bg_1", first);
+			const b = registerTerminal("bg_1", second);
 			assert.notEqual(a, b);
 			first.write(encoder.encode("first"));
 			second.write(encoder.encode("second"));

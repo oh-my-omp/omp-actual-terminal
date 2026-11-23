@@ -11,7 +11,7 @@ import {
 	TERN_PLUGIN_ID,
 	TernPluginRemovalError,
 	type RemovalOutcome,
-} from "../fork-features/tern-plugin-removal.ts";
+} from "../src/tern-plugin-removal.ts";
 
 const fixtureBin = mkdtempSync(join(tmpdir(), "tern-plugin-bin-"));
 after(() => { rmSync(fixtureBin, { recursive: true, force: true }); });

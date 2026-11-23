@@ -33,7 +33,7 @@ function screenResult(observation: TerminalObservation) {
 		operation: "write_stdin",
 		wallTimeSec: 0.1,
 		collected: { kind: "screen", observation },
-		sessionId: 5,
+		jobId: "bg_5",
 		exitCode: undefined,
 		signal: null,
 		failure: null,
@@ -43,11 +43,11 @@ function screenResult(observation: TerminalObservation) {
 describe("bounded tool results", () => {
 	it("preserves the existing process response contract with explicit operation state", () => {
 		const details = finalizeProcessResult({
-			operation: "exec_command",
+			operation: "bash",
 			wallTimeSec: 0.25,
 			collected: finalScreen("hello\nworld\n"),
 			totalBytes: 12,
-			sessionId: 7,
+			jobId: "bg_7",
 			exitCode: undefined,
 			signal: null,
 			failure: null,
@@ -57,10 +57,10 @@ describe("bounded tool results", () => {
 			yieldTimeMs: 250,
 		});
 
-		assert.equal(details.operation, "exec_command");
+		assert.equal(details.operation, "bash");
 		assert.equal(details.status, "running");
 		assert.equal(details.running, true);
-		assert.equal(details.session_id, 7);
+		assert.equal(details.job_id, "bg_7");
 		assert.equal(details.output, "hello\nworld\n");
 		assert.match(renderProcessResultText(details), /^\[still running\]/);
 	});
@@ -71,7 +71,7 @@ describe("bounded tool results", () => {
 			wallTimeSec: 0.5,
 			collected: finalScreen(raw),
 			totalBytes: Buffer.byteLength(raw),
-			sessionId: 42,
+			jobId: "bg_42",
 			pid: 1234,
 			requestedSignal: "SIGTERM",
 			exitCode: undefined,
@@ -104,10 +104,10 @@ describe("bounded tool results", () => {
 	it("bounds model-visible metadata outside the output body", () => {
 		const huge = `bad\x1b]52;c;payload\x07${"x".repeat(100_000)}`;
 		const details = finalizeProcessResult({
-			operation: "exec_command",
+			operation: "bash",
 			wallTimeSec: 0,
 			collected: finalScreen("small output"),
-			sessionId: undefined,
+			jobId: undefined,
 			exitCode: -1,
 			signal: null,
 			failure: huge,
@@ -127,7 +127,7 @@ describe("bounded tool results", () => {
 			operation: "write_stdin",
 			wallTimeSec: 0.1,
 			collected: finalScreen(dangerous),
-			sessionId: 5,
+			jobId: "bg_5",
 			exitCode: undefined,
 			signal: null,
 			failure: null,
@@ -180,10 +180,10 @@ describe("bounded tool results", () => {
 		assert.equal((await screen.observe()).kind, "unchanged");
 		const projection = await screen.project();
 		const details = finalizeProcessResult({
-			operation: "exec_command",
+			operation: "bash",
 			wallTimeSec: 0.1,
 			collected: { kind: "final-screen", projection, terminalUrl: "term://unit" },
-			sessionId: undefined,
+			jobId: undefined,
 			exitCode: 0,
 			signal: null,
 			failure: null,
@@ -200,7 +200,7 @@ describe("bounded tool results", () => {
 		const details = finalizeKillResult({
 			wallTimeSec: 2.5,
 			collected: finalScreen("last diagnostic\n"),
-			sessionId: 9,
+			jobId: "bg_9",
 			pid: 999,
 			requestedSignal: "SIGTERM",
 			exitCode: undefined,

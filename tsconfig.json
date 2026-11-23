@@ -12,5 +12,5 @@
 		"resolveJsonModule": true,
 		"types": ["bun", "node"]
 	},
-	"include": ["src/**/*.ts", "fork-features/**/*.ts", "tests/**/*.ts"]
+	"include": ["src/**/*.ts", "tests/**/*.ts"]
 }

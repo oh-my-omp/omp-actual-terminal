@@ -1,8 +1,8 @@
 import xtermHeadless from "@xterm/headless";
 import type { IBufferCell, IDisposable, IMarker } from "@xterm/headless";
 
-import type { InputScreen } from "../fork-features/input-wait.ts";
-import type { MonitorStart } from "../fork-features/monitor-subscription.ts";
+import type { InputScreen } from "./input-wait.ts";
+import type { MonitorStart } from "./monitor-subscription.ts";
 
 const { Terminal } = xtermHeadless;
 type Terminal = InstanceType<typeof Terminal>;
@@ -42,6 +42,7 @@ export type TerminalColor =
 	| { readonly kind: "palette"; readonly value: number }
 	| { readonly kind: "rgb"; readonly value: number };
 
+/** Copied values only: xterm reuses both its line and cell objects. */
 export interface TerminalCell {
 	readonly chars: string;
 	readonly width: 0 | 1 | 2;
@@ -196,6 +197,11 @@ const DEFAULT_COLORS: Readonly<Record<TerminalAppearance, { readonly fg: string;
 	dark: { fg: "rgb:ffff/ffff/ffff", bg: "rgb:0000/0000/0000" },
 	light: { fg: "rgb:0000/0000/0000", bg: "rgb:ffff/ffff/ffff" },
 };
+
+/** History rows a `cols`-wide grid keeps within `TERMINAL_HISTORY_CELLS`, at least one screen. */
+function historyRows(cols: number, rows: number): number {
+	return Math.max(rows, Math.floor(TERMINAL_HISTORY_CELLS / cols));
+}
 
 interface MarkedRow {
 	readonly row: Row;
@@ -438,9 +444,11 @@ function isBlankCell(cell: IBufferCell): boolean {
 }
 
 export class TerminalScreen {
-	readonly cols: number;
-	readonly rows: number;
-	private readonly scrollback: number;
+	private size: { cols: number; rows: number };
+	/** The size the last `resize` asked for; it becomes `size` once the writes queued before it are parsed. */
+	private requested: { cols: number; rows: number };
+	/** History rows the cell budget allows at the current width. */
+	private scrollback: number;
 	private readonly term: Terminal;
 	private pendingWrites = 0;
 	private flushWaiters: Array<() => void> = [];
@@ -465,10 +473,10 @@ export class TerminalScreen {
 		reply: (bytes: Uint8Array) => void,
 		appearance: () => TerminalAppearance = () => "dark",
 	) {
-		this.cols = cols;
-		this.rows = rows;
+		this.size = { cols, rows };
+		this.requested = this.size;
 		this.appearance = appearance;
-		this.scrollback = Math.max(rows, Math.floor(TERMINAL_HISTORY_CELLS / cols));
+		this.scrollback = historyRows(cols, rows);
 		this.term = new Terminal({ cols, rows, scrollback: this.scrollback, allowProposedApi: true });
 		const encoder = new TextEncoder();
 		this.term.onData((data) => reply(encoder.encode(data)));
@@ -482,9 +490,12 @@ export class TerminalScreen {
 		this.term.buffer.onBufferChange((buffer) => {
 			if (buffer.type === "alternate") this.altEpoch++;
 		});
+		const self = this;
 		this.lineSource = {
 			term: this.term,
-			rows,
+			get rows() {
+				return self.rows;
+			},
 			carriageReturnListeners: this.carriageReturnListeners,
 			altEpoch: () => this.altEpoch,
 			readRows: (kind, start, end) => this.readRows(kind, start, end),
@@ -511,6 +522,37 @@ export class TerminalScreen {
 			start = index + 1;
 		}
 		this.enqueue(chunk.subarray(start), this.notifyChange);
+	}
+
+	get cols(): number {
+		return this.size.cols;
+	}
+
+	get rows(): number {
+		return this.size.rows;
+	}
+
+	/**
+	 * Reflows the grid to `cols`×`rows`, keeping history within the cell budget at the new width;
+	 * queued after pending writes so they parse at the size they were written for.
+	 */
+	resize(cols: number, rows: number): void {
+		if (this.disposed || (cols === this.requested.cols && rows === this.requested.rows)) return;
+		const size = { cols, rows };
+		this.requested = size;
+		this.enqueue(NO_BYTES, () => {
+			if (this.disposed) return;
+			this.size = size;
+			this.term.resize(cols, rows);
+			this.scrollback = historyRows(cols, rows);
+			this.term.options.scrollback = this.scrollback;
+			this.notifyChange();
+		});
+	}
+
+	/** Whether the program asked for application cursor keys (DECCKM); arrow keys a person types must follow it. */
+	applicationCursorKeys(): boolean {
+		return this.term.modes.applicationCursorKeysMode;
 	}
 
 	onChange(listener: () => void): () => void {
@@ -544,6 +586,13 @@ export class TerminalScreen {
 		});
 	}
 
+	private flushed(): Promise<void> {
+		if (this.pendingWrites === 0) return Promise.resolve();
+		const { promise, resolve } = Promise.withResolvers<void>();
+		this.flushWaiters.push(resolve);
+		return promise;
+	}
+
 	private serialized<T>(work: () => Promise<T>): Promise<T> {
 		const run = this.observeChain.then(work);
 		this.observeChain = run.catch(() => undefined);
@@ -551,16 +600,7 @@ export class TerminalScreen {
 	}
 
 	private parsed(): Promise<void> {
-		const { promise, resolve } = Promise.withResolvers<void>();
-		this.term.write("", resolve);
-		return promise;
-	}
-
-	private flushed(): Promise<void> {
-		if (this.pendingWrites === 0) return Promise.resolve();
-		const { promise, resolve } = Promise.withResolvers<void>();
-		this.flushWaiters.push(resolve);
-		return promise;
+		return new Promise<void>((resolve) => this.term.write("", resolve));
 	}
 
 	private view(): TerminalView {
@@ -589,6 +629,17 @@ export class TerminalScreen {
 		return { view: this.view(), text: toLines(rows).lines.join("\n") };
 	}
 
+	/** The visible screen once every write so far is parsed; undefined after release. */
+	settledSnapshot(): Promise<TerminalSnapshot | undefined> {
+		const run = this.observeChain.then(async () => {
+			if (this.disposed) return undefined;
+			await this.flushed();
+			return this.snapshot();
+		});
+		this.observeChain = run.catch(() => undefined);
+		return run;
+	}
+
 	inputProbe(): (InputScreen & { readonly revision: number; readonly presented: boolean }) | undefined {
 		if (this.disposed || this.pendingWrites > 0) return undefined;
 		const buffer = this.term.buffer.active;
@@ -607,9 +658,9 @@ export class TerminalScreen {
 	}
 
 	project(): Promise<TerminalProjection> {
-		return this.serialized(async () => {
+		const run = this.observeChain.then(async () => {
 			if (this.disposed) throw new Error("terminal screen read after release");
-			await this.parsed();
+			await new Promise<void>((resolve) => this.term.write("", resolve));
 			const normal = this.term.buffer.normal;
 			const active = this.term.buffer.active;
 			const physicalLines = (kind: TerminalScreenKind, start: number, end: number): readonly string[] => {
@@ -646,7 +697,12 @@ export class TerminalScreen {
 				historyMayBeTruncated: normal.baseY >= this.scrollback,
 			});
 		});
+		this.observeChain = run.catch(() => undefined);
+		return run;
 	}
+	/**
+	 * Must not be called after release.
+	 */
 	styledScreen(): StyledScreen {
 		const buffer = this.term.buffer.active;
 		const cell = buffer.getNullCell();
@@ -700,12 +756,14 @@ export class TerminalScreen {
 	}
 
 	observe(): Promise<TerminalObservation> {
-		return this.serialized(() => this.observeNow());
+		const run = this.observeChain.then(() => this.observeNow());
+		this.observeChain = run.catch(() => undefined);
+		return run;
 	}
 
 	private async observeNow(): Promise<TerminalObservation> {
 		if (this.disposed) throw new Error("terminal screen observed after release");
-		await this.parsed();
+		await new Promise<void>((resolve) => this.term.write("", resolve));
 		this.presentedRevision = this.revision;
 		const view = this.view();
 		const buffer = this.term.buffer.active;
@@ -750,6 +808,7 @@ export class TerminalScreen {
 		this.lastNormal = { screen: "normal", rows: screen, cursorRow: view.cursor.row, cursorCol: view.cursor.col, altEpoch: 0 };
 		this.lastScreen = "normal";
 
+		// Never start inside a wrapped logical line.
 		const priorRows = previous?.rows ?? [];
 		let skip = 0;
 		while (
@@ -789,11 +848,13 @@ export class TerminalScreen {
 
 	release(): Promise<void> {
 		this.changeListeners.clear();
-		return this.serialized(async () => {
+		const run = this.observeChain.then(async () => {
 			if (this.disposed) return;
 			await this.flushed();
 			this.disposed = true;
 			this.term.dispose();
 		});
+		this.observeChain = run.catch(() => undefined);
+		return run;
 	}
 }

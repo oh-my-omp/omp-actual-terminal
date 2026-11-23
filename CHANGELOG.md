@@ -4,9 +4,56 @@ All notable changes to this project. **Newest entries go on top.**
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed the `/omp-actual-terminal-sessions` command and the Tern terminals segment and Terminals view: a person opens a terminal's Console, renamed from the terminal page, from omp's jobs page instead, where Leave replaces Back and End replaces Kill
+- Replaced the `exec_command` tool with terminals opened through `bash` with `pty: true` (`cmd` and `workdir` became `command` and `cwd`), while `bash` calls without `pty`, named services included, still run as omp's own `bash`
+- Ran terminals without `shell` in the session's shell, omp's shell process started with the session's exports, functions, aliases and URL paths, instead of omp's `shellPath`, `SHELL` or the platform default
+- Approved terminal calls with omp's own `bash` approval, `bash.allowedEnvVars` included, instead of the plugin's copy of its rules
+- Renamed the plugin to `omp-actual-terminal`: install it from `https://github.com/oh-my-omp/omp-actual-terminal#release` and uninstall `omp-unified-exec`
+- Moved stop gate settings (`stop`, `judgePrompt`, `noticeTemplate`) into `omp.settings` plugin configuration instead of `omomp.{yml,yaml,json,toml}` files
+- Renamed `PI_UNIFIED_EXEC_BASH` to `OMP_ACTUAL_TERMINAL_BASH`
+- Renamed the notice message type to `omp-actual-terminal-notice` and session logs to `omp-actual-terminal-<pid>-<job_id>-<hex>.log`
+
+### Added
+
+- Expanded `term://` internal URL CRUD: `read term://` lists terminals, `read term://<job_id>` reads by job id or key, and `write term://<job_id>` (stdin), `/kill`, `/on_exit` (`wake`|`none`) and `/monitor` (`cancel`) control terminals directly
+- Showed each terminal's current screen as its job's progress in omp's tray and jobs page, updated within half a second of a change, and its last screen followed by how it returned once the terminal settled
+- Added an Open action on omp's jobs page that opens a terminal in a full Console view and closes the page through its own Close action, whatever key closes it
+- Registered each terminal as an omp background job under its title in the root agent's job manager, counting toward `async.maxJobs` so a call at the limit fails
+- Surfaced terminals on omp's jobs page, where cancelling a job ends the terminal and marks its job cancelled
+- Let terminals without `shell` read a bound session's attached images through their `attachment://` paths
+- Rejected `ready` on `pty: true` calls without `name` before anything runs, since it only applies to a named service
+- Added `timeout` to terminal calls: it ends the terminal and reports an abnormal `timeout=<n>s` return
+- Added `async: true` to terminal calls, returning the terminal's `job_id` at once
+- Added `notify` to terminal calls, starting a monitor whose start the result's `monitor` line reports
+- Offered terminals in subagents and `omp -p`, whose `bash` schema now carries `pty` and the terminal fields
+- Rejected terminal-only fields on `bash` calls without `pty: true` before anything runs
+
 ### Changed
 
-- Updated the shared copy of `compact-handoff.ts` to oh-my-omp/shared@db9dde4.
+- Updated the shared copies in `src/omomp-shared/` (`compact-handoff.ts`, `context-delta.ts`, `internal-url.ts`) to oh-my-omp/shared@db9dde4 and adapted compaction handoff terminal tables to `job_id`
+- Read tool topics at `help://<tool>/<topic>` addresses instead of `xd://<tool>/<topic>`
+- Resized the terminal to the Console's size while it is open, trimming its history to the cell budget at the new width, and restored its previous size on leaving
+- Sent SIGKILL to an LRU-evicted running terminal that had not exited 2s after its SIGTERM, and marked its job cancelled only once it ended, keeping the job running when it outlived the SIGKILL
+- Ended the main agent's terminals, its subagents' included, when `/new` or a session switch cancels its jobs
+- Reported the terminal's job as completed on exit 0, failed on failure or timeout, and cancelled with a normal return, not a failure, once a terminal ended by `kill_session`, a person or a job cancel actually returned, keeping it running when the kill failed
+- Identified terminals by a string `job_id` (`bg_N`) in results, notices and session listings, and took `job_id` in `write_stdin`, `kill_session`, `set_on_exit` and monitor calls
+- Mounted the bound session's skills in terminals without `shell`, so `skill://` paths follow the session rather than the process
+- Switched host integration to the `@oh-my-pi/pi-*` packages and dropped the `@earendil-works` path aliases
+
+### Fixed
+
+- Reset terminals on a session switch to a different session: the previous session's running and returned terminals end, and their notices and wakes no longer reach the new session
+- Counted only live terminals in the shutdown notice, and stopped announcing a termination when every remaining terminal had already exited
+- Clamped `yield_time_ms: 0` on `bash` with `pty: true` to the 250 ms lower bound instead of falling back to the 10 s default
+- Started terminals from the session's shell while the Spotlight experiment is on; they had started from a fresh shell without the session's exports, functions and aliases
+- Described `notify`'s regex syntax by `name`: a `pty: true` call with `name` is omp's own service and takes its Rust syntax, while a terminal takes JavaScript regex source
+- Sent `on_exit` of `bash` and `set_on_exit`, and `action` of `monitor`, to the model with their allowed values and descriptions, and rejected other values; their schemas had reached omp as an unconstrained field
+
+### Removed
+
+- Detached from `iamwrm/pi-unified-exec`: upstream sync, npm publishing and the fork records are gone
 
 ## [0.16.0] - 2026-11-23
 

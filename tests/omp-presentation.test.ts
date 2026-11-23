@@ -10,18 +10,18 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
-import { type ExtensionAPI, type ToolDefinition } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import { DEFAULT_MAX_LINES } from "@oh-my-pi/pi-tui/tools/streaming-output";
 import { Type } from "@oh-my-pi/omptype/typebox";
 
 import {
-	execShellArgs,
+	killShellArgs,
 	parseResultView,
 	toShellResult,
 	type ActivatedExtension,
 	withHostPresentation,
 	writeStdinShellArgs,
-} from "../fork-features/omp-presentation.ts";
+} from "../src/omp-presentation.ts";
 import { SessionStore } from "../src/session-store.ts";
 import {
 	finalizeKillResult,
@@ -55,7 +55,7 @@ const exitedDetails: ProcessResultDetails = {
 	original_token_count: 1,
 	log_path: "/tmp/omp-presentation-exit.log",
 	output_bytes_total: 3,
-	operation: "exec_command",
+	operation: "bash",
 	status: "exited",
 	running: false,
 	exit_code: 0,
@@ -65,10 +65,10 @@ const exitedDetails: ProcessResultDetails = {
 };
 
 const processInput: FinalizeProcessInput = {
-	operation: "exec_command",
+	operation: "bash",
 	wallTimeSec: 0.25,
 	collected: finalScreen("last output\n"),
-	sessionId: undefined,
+	jobId: undefined,
 	exitCode: 0,
 	signal: null,
 	failure: null,
@@ -79,7 +79,7 @@ const killInput: FinalizeKillInput = {
 	wallTimeSec: 0.003,
 	collected: finalScreen("last output\n"),
 	totalBytes: 12,
-	sessionId: 1,
+	jobId: "bg_1",
 	pid: 45828,
 	requestedSignal: "SIGTERM",
 	exitCode: undefined,
@@ -124,7 +124,7 @@ describe("omp shell result presentation", () => {
 		});
 	});
 
-	for (const operation of ["exec_command", "write_stdin"] as const) {
+	for (const operation of ["bash", "write_stdin"] as const) {
 		it(`presents a yielded live ${operation} result as backgrounded`, () => {
 			const details: ProcessResultDetails = {
 				chunk_id: "6cba2f",
@@ -136,7 +136,7 @@ describe("omp shell result presentation", () => {
 				operation,
 				status: "running",
 				running: true,
-				session_id: 1,
+				job_id: "bg_1",
 				cwd: "/repo",
 				command: "sleep 3; echo done",
 				tool_time_utc: "2026-10-10T11:34:59.455Z",
@@ -145,7 +145,7 @@ describe("omp shell result presentation", () => {
 			assert.equal(view.kind, "backgrounded");
 			assert.deepEqual(toShellResult(view), {
 				content: [{ type: "text", text: "" }],
-				details: { wallTimeMs: 501, async: { state: "running", jobId: "session 1", type: "bash" } },
+				details: { wallTimeMs: 501, async: { state: "running", jobId: "bg_1", type: "bash" } },
 				isError: false,
 			});
 		});
@@ -153,7 +153,7 @@ describe("omp shell result presentation", () => {
 
 	it("presents partial details as streaming without terminal or background metadata", () => {
 		const details = {
-			session_id: 1,
+			job_id: "bg_1",
 			pid: 45842,
 			running: true,
 			total_bytes: 18,
@@ -256,13 +256,13 @@ describe("omp shell result presentation", () => {
 	for (const isError of [false, undefined]) {
 		it(`marks no-such-session kill as an error with outer isError=${isError}`, () => {
 			const view = parseResultView({
-				details: { operation: "kill_session", status: "kill_failed", running: false, session_id: 9, found: false },
-				content: [{ type: "text", text: "No such session: 9" }],
+				details: { operation: "kill_session", status: "kill_failed", running: false, job_id: "bg_9", found: false },
+				content: [{ type: "text", text: "No such terminal: bg_9" }],
 				isError,
 			}, false);
-			assert.deepEqual(view, { kind: "message", text: "No such session: 9", isError: true });
+			assert.deepEqual(view, { kind: "message", text: "No such terminal: bg_9", isError: true });
 			assert.deepEqual(toShellResult(view), {
-				content: [{ type: "text", text: "No such session: 9" }],
+				content: [{ type: "text", text: "No such terminal: bg_9" }],
 				details: {},
 				isError: true,
 			});
@@ -272,12 +272,12 @@ describe("omp shell result presentation", () => {
 	it("preserves thrown-error text and error status without details", () => {
 		const view = parseResultView({
 			details: undefined,
-			content: [{ type: "text", text: "unknown session_id: 999999" }],
+			content: [{ type: "text", text: "unknown job_id: bg_999999" }],
 			isError: true,
 		}, false);
-		assert.deepEqual(view, { kind: "message", text: "unknown session_id: 999999", isError: true });
+		assert.deepEqual(view, { kind: "message", text: "unknown job_id: bg_999999", isError: true });
 		assert.deepEqual(toShellResult(view), {
-			content: [{ type: "text", text: "unknown session_id: 999999" }],
+			content: [{ type: "text", text: "unknown job_id: bg_999999" }],
 			details: {},
 			isError: true,
 		});
@@ -325,28 +325,26 @@ describe("omp shell result presentation", () => {
 });
 
 describe("omp shell argument presentation", () => {
-	it("projects exec command and workdir without inventing a cwd for empty or absent args", () => {
-		assert.deepEqual(execShellArgs({ cmd: "echo ok", workdir: "/repo" }), { command: "echo ok", cwd: "/repo" });
-		assert.deepEqual(execShellArgs({ cmd: "echo ok", workdir: "" }), { command: "echo ok", cwd: undefined });
-		assert.deepEqual(execShellArgs({}), { command: undefined, cwd: undefined });
-		assert.deepEqual(execShellArgs(undefined), { command: undefined, cwd: undefined });
+	it("describes required input, escaped stdin, and base64 byte counts as shell comments", () => {
+		assert.deepEqual(writeStdinShellArgs({ job_id: "bg_1" }), { command: "# stdin → bg_1: (input required)" });
+		assert.deepEqual(writeStdinShellArgs({ job_id: "bg_1", chars: "" }), { command: "# stdin → bg_1: (input required)" });
+		assert.deepEqual(writeStdinShellArgs({ job_id: "bg_1", chars: "q\n" }), { command: '# stdin → bg_1: "q\\n"' });
+		assert.deepEqual(writeStdinShellArgs({ job_id: "bg_1", chars_b64: "aGk=" }), { command: "# stdin → bg_1: 2 bytes" });
+		assert.deepEqual(writeStdinShellArgs({}), { command: "# stdin → ?: (input required)" });
+		assert.deepEqual(writeStdinShellArgs(undefined), { command: "# stdin → ?: (input required)" });
 	});
 
-	it("describes required input, text/enter/special_key, and base64 byte counts as shell comments", () => {
-		assert.deepEqual(writeStdinShellArgs({ session_id: 1 }), { command: "# stdin → session 1: (input required)" });
-		assert.deepEqual(writeStdinShellArgs({ session_id: 1, text: "" }), { command: "# stdin → session 1: (input required)" });
-		assert.deepEqual(writeStdinShellArgs({ session_id: 1, text: "q", enter: true }), { command: '# stdin → session 1: "q" <enter>' });
-		assert.deepEqual(writeStdinShellArgs({ session_id: 1, special_key: "ctrl-c" }), { command: "# stdin → session 1: <ctrl-c>" });
-		assert.deepEqual(writeStdinShellArgs({ session_id: 1, raw_base64: "aGk=" }), { command: "# stdin → session 1: 2 bytes" });
-		assert.deepEqual(writeStdinShellArgs({}), { command: "# stdin → session ?: (input required)" });
-		assert.deepEqual(writeStdinShellArgs(undefined), { command: "# stdin → session ?: (input required)" });
+	it("describes default and custom kill signals, including streamed missing args", () => {
+		assert.deepEqual(killShellArgs({ job_id: "bg_1" }), { command: "# kill bg_1 (SIGTERM)" });
+		assert.deepEqual(killShellArgs({ job_id: "bg_1", signal: "SIGINT" }), { command: "# kill bg_1 (SIGINT)" });
+		assert.deepEqual(killShellArgs(undefined), { command: "# kill ? (SIGTERM)" });
 	});
 });
 
 describe("host presentation activation", () => {
-	const parameters = Type.Object({ cmd: Type.Optional(Type.String()) });
+	const parameters = Type.Object({ command: Type.Optional(Type.String()) });
 	const definition: ToolDefinition<typeof parameters, ProcessResultDetails> = {
-		name: "exec_command",
+		name: "bash",
 		label: "Exec",
 		description: "Test registration",
 		parameters,
@@ -364,7 +362,7 @@ describe("host presentation activation", () => {
 		});
 		assert.throws(() => factory(api), {
 			name: "Error",
-			message: /^omp-unified-exec only supports omp \(oh-my-pi\).*current host is not omp/,
+			message: /^omp-actual-terminal only supports omp \(oh-my-pi\).*current host is not omp/,
 		});
 		assert.equal(activations, 0);
 		assert.deepEqual(registered, []);
@@ -377,12 +375,12 @@ describe("host presentation activation", () => {
 		const compiled = join(temporary, "plugin.mjs");
 		const build = spawnSync(process.execPath, [
 			"build", fileURLToPath(new URL("../src/index.ts", import.meta.url)),
-			"--target=node", "--packages=external", "--external", "@oh-my-pi/*", "--outfile", compiled,
+			"--target=node", "--packages=external", "--outfile", compiled,
 		], { cwd: root, encoding: "utf8" });
 		assert.equal(build.status, 0, `${build.stdout}\n${build.stderr}`);
-		// --external "@earendil-works/*" keeps the bundle's imports external, but
-		// Node cannot load them: those packages are not installed, and the
-		// @oh-my-pi packages ship TypeScript source. Stage a temporary
+		// --packages=external keeps the bundle's package imports external, but
+		// Node cannot load them: the @oh-my-pi packages ship TypeScript
+		// source. Stage a temporary
 		// node_modules mirroring the specifiers the bundle actually imports so
 		// Node reaches the factory's Bun guard; the guard throws before any of
 		// these exports is invoked, so a universal stub export is sufficient.
@@ -463,23 +461,21 @@ describe("host presentation activation", () => {
 		const root = fileURLToPath(new URL("../", import.meta.url));
 		const compiled = join(temporary, "presentation.mjs");
 		const build = spawnSync(process.execPath, [
-			"build", fileURLToPath(new URL("../fork-features/omp-presentation.ts", import.meta.url)),
-			"--target=bun", "--packages=external", "--external", "@oh-my-pi/*", "--outfile", compiled,
+			"build", fileURLToPath(new URL("../src/omp-presentation.ts", import.meta.url)),
+			"--target=bun", "--packages=external", "--outfile", compiled,
 		], { cwd: root, encoding: "utf8" });
 		assert.equal(build.status, 0, `${build.stdout}\n${build.stderr}`);
-		// --external "@earendil-works/*" leaves the bundle's imports verbatim.
+		// --packages=external leaves the bundle's package imports verbatim.
 		// Stage a node_modules that links every imported package to the
-		// repository's real copy — @earendil-works/* names to the @oh-my-pi/*
-		// packages they are resolved to on the real host — except the
-		// @oh-my-pi/pi-tui specifier, which must stay absent so the
-		// wrapper's own import("@oh-my-pi/pi-tui/tools") fails with
-		// ERR_MODULE_NOT_FOUND (@earendil-works/pi-tui is still linked: the
-		// bundle reads it at module scope). Linked host packages resolve
-		// their own dependencies from their real locations, so the staged
-		// dir only needs the packages the bundle itself imports. Bun's
-		// fallback/auto-install would otherwise satisfy the missing package
-		// from its global cache; the child runs with --no-install to keep
-		// it genuinely unresolved.
+		// repository's real copy. @oh-my-pi/pi-tui is staged as a package
+		// whose root and ./tools/streaming-output re-export the real ones
+		// but which has no ./tools subpath, so the bundle's static imports
+		// load and only the wrapper's own import("@oh-my-pi/pi-tui/tools")
+		// fails. Linked host packages resolve their own dependencies from
+		// their real locations, so the staged dir only needs the packages the bundle
+		// itself imports. Bun's fallback/auto-install would otherwise
+		// satisfy the missing subpath from its global cache; the child runs
+		// with --no-install to keep it genuinely unresolved.
 		const linkRealModules = (modules: string): void => {
 			const bundle = readFileSync(compiled, "utf8");
 			const staged = new Set<string>();
@@ -489,10 +485,22 @@ describe("host presentation activation", () => {
 				const segments = specifier.split("/");
 				const base = specifier.startsWith("@") ? segments.slice(0, 2).join("/") : (segments[0] ?? specifier);
 				if (specifier.startsWith("node:") || builtinModules.includes(base)) continue;
-				const realName = base.startsWith("@earendil-works/") ? base.replace("@earendil-works/", "@oh-my-pi/") : base;
-				if (base === "@oh-my-pi/pi-tui" || staged.has(base)) continue;
+				if (staged.has(base)) continue;
 				staged.add(base);
-				const source = join(root, "node_modules", realName);
+				if (base === "@oh-my-pi/pi-tui") {
+					const stub = join(modules, base);
+					mkdirSync(stub, { recursive: true });
+					writeFileSync(join(stub, "package.json"), JSON.stringify({
+						name: base,
+						type: "module",
+						exports: { ".": "./index.mjs", "./tools/streaming-output": "./streaming-output.mjs" },
+					}));
+					const real = (path: string): string => JSON.stringify(pathToFileURL(join(root, "node_modules", base, "src", path)).href);
+					writeFileSync(join(stub, "index.mjs"), `export * from ${real("index.ts")};\n`);
+					writeFileSync(join(stub, "streaming-output.mjs"), `export * from ${real("tools/streaming-output.ts")};\n`);
+					continue;
+				}
+				const source = join(root, "node_modules", base);
 				if (!existsSync(source)) continue;
 				mkdirSync(dirname(join(modules, base)), { recursive: true });
 				symlinkSync(source, join(modules, base), "junction");
@@ -508,7 +516,7 @@ describe("host presentation activation", () => {
 			let registrations = 0;
 			const activate = withHostPresentation((host) => {
 				activations++;
-				host.registerTool({ name: "exec_command" });
+				host.registerTool({ name: "bash" });
 				return { store: () => null, kill: async () => false };
 			});
 			const result = activate({ arktype: {}, registerTool() { registrations++; } });

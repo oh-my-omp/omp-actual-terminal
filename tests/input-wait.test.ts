@@ -2,8 +2,8 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { detectInputPrompt, inputWaitNotice, type InputPrompt, type InputWaitAlert } from "../fork-features/input-wait.ts";
-import { buildNoticeMessage, NoticeDispatcher, type NoticeMessage } from "../fork-features/terminal-notice.ts";
+import { detectInputPrompt, inputWaitNotice, type InputPrompt, type InputWaitAlert } from "../src/input-wait.ts";
+import { buildNoticeMessage, NoticeDispatcher, type NoticeMessage } from "../src/terminal-notice.ts";
 import { CompletionCoordinator } from "../src/completion.ts";
 import { ExecSession } from "../src/session.ts";
 import { TerminalScreen } from "../src/terminal-screen.ts";
@@ -90,8 +90,8 @@ const PROMPTER = [
 	"process.stdin.on('data', () => setTimeout(() => process.stdout.write('\\r\\nNext? [y/N] '), 50));",
 ].join("");
 
-function prompter(id: number, alerts: InputWaitAlert[]): ExecSession {
-	return ExecSession.spawn(id, { title: "Test terminal", command: [process.execPath, "-e", PROMPTER],
+function prompter(id: string, alerts: InputWaitAlert[]): ExecSession {
+	return ExecSession.spawn(id, { title: "Test terminal", shell: "node", command: [process.execPath, "-e", PROMPTER],
 		cwd: process.cwd(), env: { ...process.env },
 		inputWait: { quietMs: 150, onAlert: (alert) => alerts.push(alert) }, });
 }
@@ -105,7 +105,7 @@ async function close(session: ExecSession): Promise<void> {
 describe("session input-wait alerts", () => {
 	it("alerts once for an unseen prompt, again for a new prompt, and goes stale once a result shows it", async (t) => {
 		const alerts: InputWaitAlert[] = [];
-		const session = prompter(9201, alerts);
+		const session = prompter("bg_9201", alerts);
 		t.after(() => close(session));
 		await delay(600);
 		assert.equal(alerts.length, 1, "one alert per prompt screen");
@@ -115,7 +115,7 @@ describe("session input-wait alerts", () => {
 		assert.equal(first!.notice.body.prompt, "inline");
 		assert.deepEqual(first!.notice.body.lines, ["Proceed? [Y/n]"]);
 		assert.match(buildNoticeMessage([first!.notice]).content, /appears to be waiting for input/);
-		assert.equal(first!.notice.identity.sessionId, 9201);
+		assert.equal(first!.notice.identity.jobId, "bg_9201");
 		assert.equal(first!.current(), true);
 
 		session.write(encoder.encode("y"));
@@ -131,7 +131,7 @@ describe("session input-wait alerts", () => {
 
 	it("stays silent when the attached tool result shows the prompt", async (t) => {
 		const alerts: InputWaitAlert[] = [];
-		const session = prompter(9202, alerts);
+		const session = prompter("bg_9202", alerts);
 		t.after(() => close(session));
 		const result = await session.collect({ deadlineMs: Date.now() + 500 });
 		assert.ok(result.kind === "screen" && result.observation.kind === "rendered");
@@ -143,7 +143,7 @@ describe("session input-wait alerts", () => {
 	it("alerts through the coordinator while a non-matching monitor watches the same session", async (t) => {
 		const delivered: NoticeMessage[] = [];
 		const coordinator = new CompletionCoordinator({ notices: new NoticeDispatcher({ send: (message) => { delivered.push(message); }, debounceMs: 5 }) });
-		const session = ExecSession.spawn(9203, { title: "Test terminal", command: [process.execPath, "-e", PROMPTER],
+		const session = ExecSession.spawn("bg_9203", { title: "Test terminal", shell: "node", command: [process.execPath, "-e", PROMPTER],
 			cwd: process.cwd(), env: { ...process.env },
 			inputWait: { quietMs: 150, onAlert: (alert) => coordinator.alertInputWait(alert) }, });
 		t.after(async () => { coordinator.shutdown(); await close(session); });
@@ -171,9 +171,9 @@ describe("input-wait delivery", () => {
 		});
 		const coordinator = new CompletionCoordinator({ notices });
 		const notice = (id: number) => inputWaitNotice({
-			sessionId: id, title: `Prompt ${id}`, command: "ask",
+			jobId: `bg_${id}`, title: `Prompt ${id}`, command: "ask",
 			prompt: { kind: "inline", lines: [`alert ${id}`] }, screen: "normal", quietMs: 5000,
-			terminalUrl: `term://${id}`, logPath: "/tmp/x.log",
+			terminalUrl: `term://bg_${id}`, logPath: "/tmp/x.log",
 		});
 		let current = true;
 		coordinator.alertInputWait({ notice: notice(1), current: () => true });
@@ -181,7 +181,7 @@ describe("input-wait delivery", () => {
 		assert.equal(errors.length, 1);
 		coordinator.flushPending();
 		await Promise.resolve();
-		assert.deepEqual(sent.flatMap((m) => m.details.notices).map((n) => n.session_id), [1]);
+		assert.deepEqual(sent.flatMap((m) => m.details.notices).map((n) => n.job_id), ["bg_1"]);
 		assert.match(sent[0]!.content, /alert 1/);
 		coordinator.flushPending();
 		assert.equal(sent.length, 1, "a delivered alert is not sent again");

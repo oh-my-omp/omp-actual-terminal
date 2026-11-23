@@ -5,28 +5,17 @@ import { delimiter, join } from "node:path";
 import { after, describe, it } from "node:test";
 import {
 	buildShellCommand,
-	type DefaultShellOptions,
+	chooseShell,
 	findOnPath,
 	IS_WINDOWS,
 	resetDefaultShellCache,
 	resolveBinary,
-	resolveDefaultShell,
 	resolveWindowsShell,
-	shellArgv,
-	type ShellChoice,
 } from "../src/shell.ts";
 
 const WIN_EXTS = [".exe", ".cmd", ".bat", ""];
 
 const isCmdShell = (shell: string): boolean => /(^|[\\/])cmd(\.exe)?$/i.test(shell);
-
-function choose(
-	env: NodeJS.ProcessEnv | undefined,
-	requested?: string,
-	options: Partial<DefaultShellOptions> = {},
-): ShellChoice {
-	return resolveDefaultShell(env, requested, { isCmdShell, ...options });
-}
 
 const tempRoots: string[] = [];
 function makePathDir(name: string, files: string[]): string {
@@ -73,34 +62,6 @@ describe("buildShellCommand", () => {
 
 	it("multiline commands are passed through unchanged", () => {
 		assert.deepEqual(buildShellCommand("bash", "echo one\necho two"), ["bash", "-c", "echo one\necho two"]);
-	});
-});
-
-describe("shellArgv", () => {
-	it("runs pi-shell through omp's own bash subcommand", () => {
-		assert.deepEqual(shellArgv({ kind: "pi-shell", shell: "C:\\omp\\omp.exe" }, "echo hi"), [
-			"C:\\omp\\omp.exe",
-			"bash",
-			"-c",
-			"echo hi",
-		]);
-		assert.deepEqual(shellArgv({ kind: "pi-shell", shell: "/opt/omp/bin/omp" }, "echo hi"), [
-			"/opt/omp/bin/omp",
-			"bash",
-			"-c",
-			"echo hi",
-		]);
-	});
-
-	it("builds an explicit shell's own argv", () => {
-		assert.deepEqual(shellArgv({ kind: "shell", shell: "/bin/bash" }, "echo hi"), ["/bin/bash", "-c", "echo hi"]);
-		assert.deepEqual(shellArgv({ kind: "shell", shell: "pwsh" }, "Get-Date"), [
-			"pwsh",
-			"-NoProfile",
-			"-NoLogo",
-			"-Command",
-			"Get-Date",
-		]);
 	});
 });
 
@@ -167,23 +128,23 @@ describe("resolveWindowsShell", () => {
 		assert.equal(resolveWindowsShell("C:\\tools\\x.exe", { PATH: "" }), "C:\\tools\\x.exe");
 	});
 
-	it("PI_UNIFIED_EXEC_BASH names the bash that a bash name resolves to", () => {
+	it("OMP_ACTUAL_TERMINAL_BASH names the bash that a bash name resolves to", () => {
 		const override = makePathDir("envbash", ["custom-bash.exe"]);
 		const pathDir = makePathDir("pathbash", ["bash.exe"]);
-		const env = { PATH: pathDir, PI_UNIFIED_EXEC_BASH: join(override, "custom-bash.exe") };
+		const env = { PATH: pathDir, OMP_ACTUAL_TERMINAL_BASH: join(override, "custom-bash.exe") };
 		assert.equal(resolveWindowsShell("bash", env), join(override, "custom-bash.exe"));
 		assert.equal(resolveWindowsShell("bash.exe", env), join(override, "custom-bash.exe"));
 	});
 
-	it("ignores PI_UNIFIED_EXEC_BASH for other shells and when it names no file", () => {
+	it("ignores OMP_ACTUAL_TERMINAL_BASH for other shells and when it names no file", () => {
 		const override = makePathDir("envbash2", ["custom-bash.exe"]);
 		const pathDir = makePathDir("pathbash2", ["powershell.exe", "bash.exe"]);
 		assert.equal(
-			resolveWindowsShell("powershell", { PATH: pathDir, PI_UNIFIED_EXEC_BASH: join(override, "custom-bash.exe") }),
+			resolveWindowsShell("powershell", { PATH: pathDir, OMP_ACTUAL_TERMINAL_BASH: join(override, "custom-bash.exe") }),
 			join(pathDir, "powershell.exe"),
 		);
 		assert.equal(
-			resolveWindowsShell("bash", { PATH: pathDir, PI_UNIFIED_EXEC_BASH: join(override, "nope.exe") }),
+			resolveWindowsShell("bash", { PATH: pathDir, OMP_ACTUAL_TERMINAL_BASH: join(override, "nope.exe") }),
 			join(pathDir, "bash.exe"),
 		);
 	});
@@ -198,110 +159,29 @@ describe("resolveWindowsShell", () => {
 		assert.throws(() => resolveWindowsShell("bash", { PATH: join(stub, "System32") }), /pi-shell/);
 	});
 
-	it("unresolvable bash points at pi-shell and PI_UNIFIED_EXEC_BASH", () => {
-		assert.throws(() => resolveWindowsShell("bash", { PATH: "" }), /PI_UNIFIED_EXEC_BASH/);
+	it("unresolvable bash points at pi-shell and OMP_ACTUAL_TERMINAL_BASH", () => {
+		assert.throws(() => resolveWindowsShell("bash", { PATH: "" }), /OMP_ACTUAL_TERMINAL_BASH/);
 		assert.throws(() => resolveWindowsShell("bash", { PATH: "" }), /pi-shell/);
 	});
 });
 
-describe("resolveDefaultShell", () => {
-	it("Windows: the platform default is omp's pi-shell", () => {
+describe("chooseShell", () => {
+	it("a missing or blank shell is the session's shell", () => {
 		for (const requested of [undefined, "", " \t\n"]) {
-			assert.deepEqual(choose({ PATH: "" }, requested, { isWindows: true, omp: "C:\\omp\\omp.exe" }), {
-				kind: "pi-shell",
-				shell: "C:\\omp\\omp.exe",
-			});
-		}
-		const bashDir = makePathDir("defaultbash", ["bash.exe"]);
-		assert.deepEqual(choose({ PATH: bashDir }, undefined, { isWindows: true, omp: "C:\\omp\\omp.exe" }), {
-			kind: "pi-shell",
-			shell: "C:\\omp\\omp.exe",
-		});
-	});
-
-	it("Windows: the pi-shell executable defaults to the omp process's own binary", () => {
-		assert.deepEqual(choose({}, undefined, { isWindows: true }), { kind: "pi-shell", shell: process.execPath });
-	});
-
-	it("POSIX: the platform default stays bash", () => {
-		for (const requested of [undefined, "", " \t\n"]) {
-			assert.deepEqual(choose({ PATH: "" }, requested, { isWindows: false }), { kind: "shell", shell: "bash" });
+			assert.deepEqual(chooseShell(requested, isCmdShell), { kind: "session" });
 		}
 	});
 
-	it("prefers the caller's trimmed choice over SHELL and the default", () => {
-		assert.deepEqual(choose({ SHELL: "/bin/dash" }, "  /bin/zsh \n", { isWindows: true }), {
-			kind: "shell",
-			shell: "/bin/zsh",
-		});
-		assert.deepEqual(choose({ SHELL: "/bin/dash" }, "nonexistent-host-shell-4711", { isWindows: true }), {
-			kind: "shell",
-			shell: "nonexistent-host-shell-4711",
-		});
+	it("keeps the caller's trimmed choice, even one not on PATH", () => {
+		assert.deepEqual(chooseShell("  /bin/zsh \n", isCmdShell), { kind: "explicit", shell: "/bin/zsh" });
+		assert.deepEqual(chooseShell("nonexistent-host-shell-4711", isCmdShell), { kind: "explicit", shell: "nonexistent-host-shell-4711" });
 	});
 
-	it("uses trimmed SHELL when the call and the host setting name nothing", () => {
-		for (const requested of [undefined, "", " \t\n"]) {
-			assert.deepEqual(choose({ SHELL: " \t /bin/dash \n" }, requested, { isWindows: true }), {
-				kind: "shell",
-				shell: "/bin/dash",
-			});
+	it("refuses cmd but keeps a shell that merely contains the name", () => {
+		for (const shell of ["C:\\Windows\\System32\\cmd.exe", "cmd", " cmd.exe "]) {
+			assert.deepEqual(chooseShell(shell, isCmdShell), { kind: "refused", shell: shell.trim(), reason: "cmd" });
 		}
-	});
-
-	it("refuses an explicit cmd and names the setting that supplied it", () => {
-		assert.deepEqual(
-			choose({}, "C:\\Windows\\System32\\cmd.exe", { isWindows: true, requestedSource: "call" }),
-			{ kind: "refused", shell: "C:\\Windows\\System32\\cmd.exe", reason: "cmd", source: "call" },
-		);
-		assert.deepEqual(choose({}, "cmd", { isWindows: true, requestedSource: "shellPath" }), {
-			kind: "refused",
-			shell: "cmd",
-			reason: "cmd",
-			source: "shellPath",
-		});
-		assert.deepEqual(choose({ SHELL: " cmd.exe " }, undefined, { isWindows: true }), {
-			kind: "refused",
-			shell: "cmd.exe",
-			reason: "cmd",
-			source: "SHELL",
-		});
-	});
-
-	it("keeps a non-cmd shell that merely contains the name", () => {
-		assert.deepEqual(choose({}, "C:\\tools\\cmdline.exe", { isWindows: true }), {
-			kind: "shell",
-			shell: "C:\\tools\\cmdline.exe",
-		});
-	});
-
-	it("reads each supplied environment without caching SHELL", () => {
-		const env: NodeJS.ProcessEnv = { SHELL: "first-env-shell" };
-		assert.deepEqual(choose(env), { kind: "shell", shell: "first-env-shell" });
-		env.SHELL = "second-env-shell";
-		assert.deepEqual(choose(env), { kind: "shell", shell: "second-env-shell" });
-		assert.deepEqual(choose({ SHELL: "third-env-shell" }), { kind: "shell", shell: "third-env-shell" });
-	});
-
-	it("reads live process settings and does not inherit them into an explicit environment", () => {
-		const previous = process.env.SHELL;
-		try {
-			process.env.SHELL = "first-process-shell";
-			assert.deepEqual(choose(undefined), { kind: "shell", shell: "first-process-shell" });
-			process.env.SHELL = " \t second-process-shell \n";
-			assert.deepEqual(choose(undefined), { kind: "shell", shell: "second-process-shell" });
-			assert.deepEqual(choose(undefined, "first-host-shell"), { kind: "shell", shell: "first-host-shell" });
-			assert.deepEqual(choose(undefined, "second-host-shell"), { kind: "shell", shell: "second-host-shell" });
-			assert.deepEqual(choose(undefined, " \t"), { kind: "shell", shell: "second-process-shell" });
-			assert.deepEqual(choose({ PATH: "" }, undefined, { isWindows: false }), { kind: "shell", shell: "bash" });
-			assert.deepEqual(choose({ PATH: "" }, undefined, { isWindows: true, omp: "omp" }), {
-				kind: "pi-shell",
-				shell: "omp",
-			});
-		} finally {
-			if (previous === undefined) delete process.env.SHELL;
-			else process.env.SHELL = previous;
-		}
+		assert.deepEqual(chooseShell("C:\\tools\\cmdline.exe", isCmdShell), { kind: "explicit", shell: "C:\\tools\\cmdline.exe" });
 	});
 });
 

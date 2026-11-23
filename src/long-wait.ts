@@ -1,6 +1,6 @@
 export type LongWaitOutcome = "exit" | "deadline" | "cancelled";
 
-export const MAX_TIMER_ARM_MS = 2_147_483_647;
+export const MAX_TIMER_ARM_MS = 2_147_483_647; // 2^31 - 1
 
 export interface LongWaitInputs {
 	exited: AbortSignal;
@@ -24,6 +24,7 @@ export async function waitForExitOrDeadline(inputs: LongWaitInputs): Promise<Lon
 	if (externalAbort?.aborted) return "cancelled";
 	if (durationMs <= 0) return "deadline";
 
+	// Never consult wall time.
 	const startedAt = monotonicNow();
 	const remainingMs = () => durationMs - (monotonicNow() - startedAt);
 

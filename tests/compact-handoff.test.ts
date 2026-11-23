@@ -16,15 +16,15 @@ import {
 	createCompactNoticeSender,
 	formatPtySessionsSnapshot,
 	registerActualTerminalCompactHandoff,
-} from "../fork-features/compact-handoff-wiring.ts";
+} from "../src/compact-handoff-wiring.ts";
 import {
 	type CompactExtensionAPI,
 	enterCompactionBarrier,
 	getSharedCompactCoordinator,
 	isCompacting,
 	releaseCompactionBarrier,
-} from "../fork-features/omomp-shared/compact-handoff.ts";
-import type { NoticeMessage } from "../fork-features/terminal-notice.ts";
+} from "../src/omomp-shared/compact-handoff.ts";
+import type { NoticeMessage } from "../src/terminal-notice.ts";
 import type { ExecSession } from "../src/session.ts";
 import { SessionStore } from "../src/session-store.ts";
 
@@ -91,7 +91,7 @@ function fakeNotice(label: string): NoticeMessage {
 }
 
 function fakeSession(overrides: {
-	id: number;
+	id: string;
 	title: string;
 	displayCommand: string;
 	cwd: string;
@@ -115,7 +115,7 @@ beforeEach(() => {
 });
 
 describe("omp-actual-terminal compact handoff", () => {
-	test("Plane 1 notice barrier defers unified-exec-notice while compacting and drains in FIFO order after commit/abort", async () => {
+	test("Plane 1 notice barrier defers omp-actual-terminal-notice while compacting and drains in FIFO order after commit/abort", async () => {
 		const sm = {};
 		const sent: string[] = [];
 		const sender = createCompactNoticeSender({
@@ -123,12 +123,10 @@ describe("omp-actual-terminal compact handoff", () => {
 			sessionManager: () => sm,
 		});
 
-		// Idle: sends immediately
 		sender.send(fakeNotice("idle-1"));
 		expect(sent).toEqual(["notice:idle-1"]);
 		expect(sender.queuedCount()).toBe(0);
 
-		// Compacting: holds exit_wake + monitor_match without calling sendImmediate
 		enterCompactionBarrier(sm);
 		expect(isCompacting(sm)).toBe(true);
 		sender.send(fakeNotice("exit_wake"));
@@ -136,13 +134,11 @@ describe("omp-actual-terminal compact handoff", () => {
 		expect(sent).toEqual(["notice:idle-1"]);
 		expect(sender.queuedCount()).toBe(2);
 
-		// Barrier released -> flushes both queued notices in FIFO order
 		releaseCompactionBarrier(sm);
 		expect(isCompacting(sm)).toBe(false);
 		expect(sent).toEqual(["notice:idle-1", "notice:exit_wake", "notice:monitor_match"]);
 		expect(sender.queuedCount()).toBe(0);
 
-		// Session switch clears queued notices before barrier release
 		enterCompactionBarrier(sm);
 		sender.send(fakeNotice("stale-before-switch"));
 		expect(sender.queuedCount()).toBe(1);
@@ -156,35 +152,34 @@ describe("omp-actual-terminal compact handoff", () => {
 		const host = createMockHost();
 		registerActualTerminalCompactHandoff(host.pi, () => store);
 
-		// 1. Empty store -> silent gating (no claim, no post-compact injection)
 		const emptyCtx = makeCtx();
 		const emptyCompacting = await host.emitCompacting({ type: "session.compacting", sessionId: "s-empty", messages: [] }, emptyCtx);
 		expect(emptyCompacting?.context?.join("\n") ?? "").not.toContain("[omp-actual-terminal]");
 
 		store.insert(
 			fakeSession({
-				id: 1,
+				id: "bg_1",
 				title: "astro preview 4391",
 				displayCommand: "node_modules/.bin/astro preview --port 4391",
 				cwd: "/repo/site",
 				hasExited: false,
 				exitCode: null,
 				pid: 4242,
-				terminalUrl: "term://astro-preview-4391",
-				logPath: "/tmp/pi-unified-exec-1.log",
+				terminalUrl: "term://bg_1-astro",
+				logPath: "/tmp/omp-actual-terminal-1.log",
 			}),
 		);
 		store.insert(
 			fakeSession({
-				id: 2,
+				id: "bg_2",
 				title: "build check",
 				displayCommand: "bun run build",
 				cwd: "/repo",
 				hasExited: true,
 				exitCode: 0,
 				pid: 4243,
-				terminalUrl: "term://build-check",
-				logPath: "/tmp/pi-unified-exec-2.log",
+				terminalUrl: "term://bg_2-build",
+				logPath: "/tmp/omp-actual-terminal-2.log",
 			}),
 		);
 
@@ -216,7 +211,7 @@ describe("omp-actual-terminal compact handoff", () => {
 		const extra = activeCompacting?.context?.join("\n") ?? "";
 		expect(extra).toContain("[omp-actual-terminal]");
 		expect(extra).toContain(`source="${COMPACT_HANDOFF_SOURCE}"`);
-		expect(extra).toContain("2 session(s): 1 running, 1 exited");
+		expect(extra).toContain("2 terminal(s): 1 running, 1 exited");
 
 		await host.emitCompact({ type: "session_compact", compactionEntry: cmpEntry, fromExtension: false }, activeCtx);
 		expect(isCompacting(activeCtx.sessionManager)).toBe(false);
@@ -228,25 +223,25 @@ describe("omp-actual-terminal compact handoff", () => {
 		expect(startResults.length).toBe(1);
 		const content = typeof startResults[0]?.message === "object" ? String(startResults[0].message.content) : "";
 		expect(content).toContain(`<system-reminder source="${COMPACT_HANDOFF_SOURCE}">`);
-		expect(content).toContain("#1 [running] pid=4242 term://astro-preview-4391");
-		expect(content).toContain("#2 [exited(0)] pid=4243 term://build-check");
-		expect(content).toContain("/tmp/pi-unified-exec-1.log");
+		expect(content).toContain("bg_1 [running] pid=4242 term://bg_1-astro");
+		expect(content).toContain("bg_2 [exited(0)] pid=4243 term://bg_2-build");
+		expect(content).toContain("/tmp/omp-actual-terminal-1.log");
 
 		const formatted = formatPtySessionsSnapshot({
 			sessions: [
 				{
-					id: 1,
+					jobId: "bg_1",
 					title: "astro preview",
 					command: "astro preview",
 					cwd: "/repo",
 					status: "running",
 					exitCode: null,
 					pid: 100,
-					terminalUrl: "term://astro",
+					terminalUrl: "term://bg_1-astro",
 					logPath: "/tmp/a.log",
 				},
 			],
 		});
-		expect(formatted).toContain("[Authoritative PTY Session Table — omp-actual-terminal]");
+		expect(formatted).toContain("[Authoritative PTY Terminal Table — omp-actual-terminal]");
 	});
 });

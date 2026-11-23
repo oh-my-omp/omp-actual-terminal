@@ -4,10 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
-import { initializeTerminalUrls } from "../fork-features/terminal-url.ts";
 import { activate } from "../src/index.ts";
-import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";
+import { STUB_SESSION, stubShellHost, stubTerminalHost } from "./stub-shell.ts";
+
 
 interface ToolDef {
 	name: string;
@@ -30,6 +29,7 @@ function makeHarness() {
 			setStatus: (_k: string, _v: unknown) => {},
 		},
 		hasUI: false,
+		...STUB_SESSION,
 	};
 	const pi = {
 		registerTool: (def: ToolDef) => {
@@ -47,16 +47,12 @@ function makeHarness() {
 		setActiveTools: () => {},
 	};
 	const api = pi as unknown as Parameters<typeof activate>[0];
-	activate(api, { shellPath: STUB_SHELL_PATH, shellHost: stubShellHost });
+	activate(api, undefined, stubTerminalHost(), undefined, {}, undefined, undefined, undefined, stubShellHost);
 	return {
 		async call(toolName: string, params: any, signal?: AbortSignal) {
 			const def = tools[toolName];
 			if (!def) throw new Error(`no such tool: ${toolName}`);
 			return def.execute("test-call-id", params, signal, undefined, stubCtx);
-		},
-		async kill(sid: number) {
-			await initializeTerminalUrls();
-			return InternalUrlRouter.instance().write(`term://${sid}/kill`, "");
 		},
 		async emit(event: string, evt: any = {}) {
 			for (const h of handlers[event] ?? []) await h(evt, stubCtx);
@@ -65,17 +61,14 @@ function makeHarness() {
 }
 
 type ExecCaller = {
-	call(toolName: string, params: Record<string, unknown>): Promise<{ details: { session_id?: unknown; log_path?: unknown } }>;
+	call(toolName: string, params: Record<string, unknown>): Promise<{ details: { job_id?: unknown; log_path?: unknown } }>;
 };
 
-async function startRawCat(h: ExecCaller, out: string): Promise<number> {
-	const r1 = await h.call("exec_command", {
-		title: "Test command",
-		cmd: `stty raw -echo; printf raw-ready; exec cat > '${out}'`,
-		yield_time_ms: 300,
-	});
-	const { session_id: sid, log_path: logPath } = r1.details;
-	assert.ok(typeof sid === "number", `expected session_id; got ${JSON.stringify(r1.details)}`);
+async function startRawCat(h: ExecCaller, out: string): Promise<string> {
+	const r1 = await h.call("bash", { pty: true, title: "Test command", command: `stty raw -echo; printf raw-ready; exec cat > '${out}'`,
+		yield_time_ms: 300, });
+	const { job_id: sid, log_path: logPath } = r1.details;
+	assert.ok(typeof sid === "string", `expected job_id; got ${JSON.stringify(r1.details)}`);
 	assert.ok(typeof logPath === "string");
 	const deadline = Date.now() + 8000;
 	while (!readFileSync(logPath, "utf8").includes("raw-ready")) {
@@ -86,7 +79,7 @@ async function startRawCat(h: ExecCaller, out: string): Promise<number> {
 }
 
 async function spawnCapture() {
-	const dir = mkdtempSync(join(tmpdir(), "unified-exec-chars-"));
+	const dir = mkdtempSync(join(tmpdir(), "omp-actual-terminal-chars-"));
 	const out = join(dir, "stdin.bin");
 	const h = makeHarness();
 	await h.emit("session_start");
@@ -96,11 +89,11 @@ async function spawnCapture() {
 		outFile: out,
 		dir,
 		harness: h,
-		async send(params: Record<string, unknown>) {
-			await h.call("write_stdin", { session_id: sid, yield_time_ms: 250, ...params });
+		async send(chars: string) {
+			await h.call("write_stdin", { job_id: sid, chars, yield_time_ms: 250 });
 		},
 		async finish(): Promise<Buffer> {
-			await h.kill(sid);
+			await h.call("kill_session", { job_id: sid });
 			await new Promise((r) => setTimeout(r, 50));
 			const buf = readFileSync(out);
 			await h.emit("session_shutdown");
@@ -110,101 +103,116 @@ async function spawnCapture() {
 	};
 }
 
-describe("write_stdin zero-escape encoding", () => {
-	it("writes text verbatim without C-escape decoding (preserves literal \\n and \\\\)", async () => {
+describe("write_stdin chars encoding", () => {
+	it("writes a real LF (0x0A) when chars contains a real LF", async () => {
 		const c = await spawnCapture();
-		await c.send({ text: "A\\nB\\\\C" });
+		await c.send("A\nB");
 		const buf = await c.finish();
-		assert.deepEqual([...buf], [...Buffer.from("A\\nB\\\\C", "utf8")]);
+		assert.deepEqual([...buf], [0x41, 0x0a, 0x42], `bytes=${[...buf].map((b) => b.toString(16))}`);
 	});
 
-	it("writes real LF and ESC when text contains real characters", async () => {
+	it("writes a real ESC (0x1B) when chars contains a real ESC", async () => {
 		const c = await spawnCapture();
-		await c.send({ text: "A\nB\u001bC" });
+		await c.send("A\u001bB");
 		const buf = await c.finish();
-		assert.deepEqual([...buf], [0x41, 0x0a, 0x42, 0x1b, 0x43]);
+		assert.deepEqual([...buf], [0x41, 0x1b, 0x42], `bytes=${[...buf].map((b) => b.toString(16))}`);
 	});
 
-	it("appends CR (0x0D) when enter is true, or sends CR alone", async () => {
+	it("writes a real Ctrl-C (0x03) when chars contains it", async () => {
 		const c = await spawnCapture();
-		await c.send({ text: "hi", enter: true });
-		await c.send({ enter: true });
+		await c.send("\u0003");
 		const buf = await c.finish();
-		assert.deepEqual([...buf], [0x68, 0x69, 0x0d, 0x0d]);
+		assert.deepEqual([...buf], [0x03], `bytes=${[...buf].map((b) => b.toString(16))}`);
 	});
 
-	it("maps special_key values to exact control/ANSI byte sequences", async () => {
+	it("decodes \\n (backslash + n) into a real LF byte", async () => {
 		const c = await spawnCapture();
-		await c.send({ special_key: "ctrl-c" });
-		await c.send({ special_key: "ctrl-d" });
-		await c.send({ special_key: "ctrl-z" });
-		await c.send({ special_key: "esc" });
-		await c.send({ special_key: "tab" });
-		await c.send({ special_key: "up" });
-		await c.send({ special_key: "down" });
-		await c.send({ special_key: "left" });
-		await c.send({ special_key: "right" });
-		await c.send({ special_key: "backspace" });
-		await c.send({ special_key: "delete" });
+		await c.send("A\\nB");
 		const buf = await c.finish();
-		assert.deepEqual(
-			[...buf],
-			[
-				0x03, 0x04, 0x1a, 0x1b, 0x09,
-				0x1b, 0x5b, 0x41,
-				0x1b, 0x5b, 0x42,
-				0x1b, 0x5b, 0x44,
-				0x1b, 0x5b, 0x43,
-				0x7f,
-				0x1b, 0x5b, 0x33, 0x7e,
-			],
-		);
+		assert.deepEqual([...buf], [0x41, 0x0a, 0x42], `bytes=${[...buf].map((b) => b.toString(16))}`);
+	});
+
+	it("decodes \\x1b (4 chars) into a real ESC byte", async () => {
+		const c = await spawnCapture();
+		await c.send("A\\x1bB");
+		const buf = await c.finish();
+		assert.deepEqual([...buf], [0x41, 0x1b, 0x42], `bytes=${[...buf].map((b) => b.toString(16))}`);
+	});
+
+	it("decodes \\u001b (6 chars) into a real ESC byte", async () => {
+		const c = await spawnCapture();
+		await c.send("A\\u001bB");
+		const buf = await c.finish();
+		assert.deepEqual([...buf], [0x41, 0x1b, 0x42], `bytes=${[...buf].map((b) => b.toString(16))}`);
+	});
+
+	it("decodes \\x03 (Ctrl-C) into a real 0x03 byte", async () => {
+		const c = await spawnCapture();
+		await c.send("\\x03");
+		const buf = await c.finish();
+		assert.deepEqual([...buf], [0x03], `bytes=${[...buf].map((b) => b.toString(16))}`);
+	});
+
+	it("decodes \\\\ into a single literal backslash (0x5C)", async () => {
+		const c = await spawnCapture();
+		await c.send("\\\\");
+		const buf = await c.finish();
+		assert.deepEqual([...buf], [0x5c], `bytes=${[...buf].map((b) => b.toString(16))}`);
+	});
+
+	it("full vim-escape sequence \\x1b:wq\\n lands as 5 bytes", async () => {
+		const c = await spawnCapture();
+		await c.send("\\x1b:wq\\n");
+		const buf = await c.finish();
+		assert.deepEqual([...buf], [0x1b, 0x3a, 0x77, 0x71, 0x0a], `bytes=${[...buf].map((b) => b.toString(16))}`);
 	});
 
 	it("UTF-8 multi-byte chars are passed through verbatim", async () => {
 		const c = await spawnCapture();
-		await c.send({ text: "é" });
+		await c.send("é"); // U+00E9 → 0xC3 0xA9 in UTF-8
 		const buf = await c.finish();
-		assert.deepEqual([...buf], [0xc3, 0xa9]);
+		assert.deepEqual([...buf], [0xc3, 0xa9], `bytes=${[...buf].map((b) => b.toString(16))}`);
 	});
 
-	it("raw_base64 delivers the exact decoded bytes (binary-safe)", async () => {
-		const c = await spawnCapture();
-		const b64 = Buffer.from([0x1b, 0x03, 0x41, 0x0a, 0xc3, 0xa9]).toString("base64");
-		await c.send({ raw_base64: b64 });
-		const buf = await c.finish();
-		assert.deepEqual([...buf], [0x1b, 0x03, 0x41, 0x0a, 0xc3, 0xa9]);
-	});
-
-	it("rejects combining raw_base64 with text, enter, or special_key", async () => {
+	it("chars_b64 delivers the exact decoded bytes (binary-safe)", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "omp-actual-terminal-chars-"));
+		const out = join(dir, "stdin.bin");
 		const h = makeHarness();
 		await h.emit("session_start");
-		const r1 = await h.call("exec_command", { title: "Test command", cmd: "cat > /dev/null", yield_time_ms: 200 });
-		const sid = r1.details.session_id as number;
-		for (const combo of [
-			{ text: "hi", raw_base64: "aGk=" },
-			{ enter: true, raw_base64: "aGk=" },
-			{ special_key: "esc", raw_base64: "aGk=" },
-		]) {
-			await assert.rejects(
-				() => h.call("write_stdin", { session_id: sid, ...combo }),
-				/raw_base64.*cannot be combined/,
-			);
-		}
-		await h.kill(sid);
+		const sid = await startRawCat(h, out);
+		const b64 = Buffer.from([0x1b, 0x03, 0x41, 0x0a, 0xc3, 0xa9]).toString("base64");
+		await h.call("write_stdin", { job_id: sid, chars_b64: b64, yield_time_ms: 250 });
+		await h.call("kill_session", { job_id: sid });
+		await new Promise((r) => setTimeout(r, 50));
+		const buf = readFileSync(out);
+		assert.deepEqual([...buf], [0x1b, 0x03, 0x41, 0x0a, 0xc3, 0xa9]);
+		await h.emit("session_shutdown");
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("passing both chars and chars_b64 rejects the call", async () => {
+		const h = makeHarness();
+		await h.emit("session_start");
+		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "cat > /dev/null", yield_time_ms: 200 });
+		const sid = r1.details.job_id as string;
+		await assert.rejects(
+			() => h.call("write_stdin", { job_id: sid, chars: "hi", chars_b64: "aGk=" }),
+			/either `chars` or `chars_b64`/,
+		);
+		await h.call("kill_session", { job_id: sid });
 		await h.emit("session_shutdown");
 	});
 
-	it("malformed raw_base64 rejects the call", async () => {
+	it("malformed base64 rejects the call", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
-		const r1 = await h.call("exec_command", { title: "Test command", cmd: "cat > /dev/null", yield_time_ms: 200 });
-		const sid = r1.details.session_id as number;
+		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "cat > /dev/null", yield_time_ms: 200 });
+		const sid = r1.details.job_id as string;
 		await assert.rejects(
-			() => h.call("write_stdin", { session_id: sid, raw_base64: "not@valid!" }),
+			() => h.call("write_stdin", { job_id: sid, chars_b64: "not@valid!" }),
 			/not valid base64/,
 		);
-		await h.kill(sid);
+		await h.call("kill_session", { job_id: sid });
 		await h.emit("session_shutdown");
 	});
 });

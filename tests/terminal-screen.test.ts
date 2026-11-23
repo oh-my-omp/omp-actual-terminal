@@ -176,6 +176,17 @@ describe("TerminalScreen observable terminal state", () => {
 		rendered(await screen.observe(), [...lines.slice(-2), "next"].join("\n"));
 	});
 
+	it("keeps history within the cell cap at the new width after a resize", async (t) => {
+		const rows = 3;
+		const wide = 240;
+		const cap = Math.max(rows, Math.floor(TERMINAL_HISTORY_CELLS / wide));
+		const screen = terminal(t, 80, rows);
+		screen.resize(wide, rows);
+		const lines = Array.from({ length: cap + rows + 2 }, (_, index) => `line-${index}`);
+		screen.write(encoder.encode(lines.join("\r\n")));
+		rendered(await screen.observe(), lines.slice(2).join("\n"), cap, true);
+	});
+
 	for (const kind of ["normal", "alternate"] as const) {
 		it(`renders a cursor-only move on the ${kind} screen`, async (t) => {
 			const screen = terminal(t);

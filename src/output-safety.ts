@@ -60,7 +60,7 @@ function stripControls(input: string): string {
 				if (isCsiParam(code)) i++;
 				else if (isCsiIntermediate(code)) { state = "csi-intermediate"; i++; }
 				else if (isCsiFinal(code)) { state = "text"; i++; }
-				else state = "text";
+				else state = "text"; // Malformed suffix is reprocessed, not swallowed.
 				break;
 			case "csi-intermediate":
 				if (isCsiIntermediate(code)) i++;

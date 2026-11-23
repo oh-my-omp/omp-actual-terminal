@@ -1,12 +1,10 @@
 import { strict as assert } from "node:assert";
 import { afterEach, describe, it } from "node:test";
-import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import type { AgentRef, AgentStatus, RegistryEvent } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSessionHandle } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
-import { type AgentGeneration, type AgentHost, type AgentIdentity, parkedRuntimes, parseAgentHost } from "../fork-features/agent-park.ts";
-import { initializeTerminalUrls } from "../fork-features/terminal-url.ts";
+import { type AgentGeneration, type AgentHost, type AgentIdentity, parkedRuntimes, parseAgentHost } from "../src/agent-park.ts";
 import { activate } from "../src/index.ts";
-import { STUB_SHELL_PATH, stubShellHost } from "./stub-shell.ts";
+import { STUB_SESSION, stubShellHost, stubTerminalHost } from "./stub-shell.ts";
 
 const MINUTE = 60_000;
 const AGENT = "0-Worker";
@@ -16,13 +14,13 @@ function agentRef(status: AgentStatus, generation = 1): AgentRef {
 	return { id: AGENT, generation, displayName: AGENT, kind: "sub", status, session: null, sessionFile: null, createdAt: 0, lastActivity: 0 };
 }
 
-interface ListedSession { session_id: number; pid?: number; running: boolean }
-interface ToolResult { details: { session_id?: number; killed?: boolean; sessions?: ListedSession[] } }
+interface ListedSession { job_id: string; pid?: number; running: boolean }
+interface ToolResult { details: { job_id?: string; killed?: boolean; sessions?: ListedSession[] } }
 interface ToolDef {
 	name: string;
 	execute: (toolCallId: string, params: object, signal: undefined, onUpdate: undefined, ctx: object) => Promise<ToolResult>;
 }
-interface Sent { message: { details: { notices: Array<{ session_id: number; kind: string }> } } }
+interface Sent { message: { details: { notices: Array<{ job_id: string; kind: string }> } } }
 type Handler = (event: object, ctx: object) => unknown;
 
 class FakeOmp implements AgentHost {
@@ -72,7 +70,7 @@ interface Harness {
 	emit(event: string): Promise<void>;
 	call(name: string, params: object): Promise<ToolResult>;
 	advance(ms: number): void;
-	listed(id: number): Promise<ListedSession | undefined>;
+	listed(id: string): Promise<ListedSession | undefined>;
 }
 
 const live = new Set<Harness>();
@@ -83,7 +81,7 @@ function makeHarness(): Harness {
 	const sent: Sent[] = [];
 	let now = Date.now();
 	let sweep: (() => void) | undefined;
-	const stubCtx = { cwd: process.cwd(), ui: { notify() {}, setStatus() {}, setWidget() {} }, hasUI: false, agent: { id: AGENT } };
+	const stubCtx = { cwd: process.cwd(), ui: { notify() {}, setStatus() {}, setWidget() {} }, hasUI: false, ...STUB_SESSION, agent: { id: AGENT } };
 	const pi = {
 		registerTool: (def: ToolDef) => { tools[def.name] = def; },
 		on: (event: string, handler: Handler) => { (handlers[event] ??= []).push(handler); },
@@ -91,20 +89,15 @@ function makeHarness(): Harness {
 		getFlag: () => false, getActiveTools: () => ["bash"], setActiveTools() {},
 		sendMessage: (message: Sent["message"]) => { sent.push({ message }); },
 	};
-	activate(pi as unknown as Parameters<typeof activate>[0], {
-		lifecycleClock: {
-			nowFn: () => now,
-			setIntervalFn: (cb) => { sweep = cb; return 1; },
-			clearIntervalFn: () => { sweep = undefined; },
-		},
-		agentHost: omp,
-		shellHost: stubShellHost,
-	});
+	activate(pi as unknown as Parameters<typeof activate>[0], undefined, stubTerminalHost(), undefined, {
+		nowFn: () => now,
+		setIntervalFn: (cb) => { sweep = cb; return 1; },
+		clearIntervalFn: () => { sweep = undefined; },
+	}, undefined, undefined, omp, stubShellHost);
 	let nextCallId = 1;
 	const harness: Harness = {
 		sent,
 		async emit(event) {
-			if (event === "session_start") await initializeTerminalUrls();
 			for (const h of handlers[event] ?? []) await h({}, stubCtx);
 		},
 		async call(name, params) {
@@ -118,17 +111,7 @@ function makeHarness(): Harness {
 			sweep?.();
 		},
 		async listed(id) {
-			await initializeTerminalUrls();
-			const res = await InternalUrlRouter.instance().resolve("term://");
-			const text = typeof res.content === "string" ? res.content : res.content.toString("utf8");
-			const line = text.split("\n").find((l) => l.includes(`session_id=${id} `));
-			if (!line) return undefined;
-			const pidMatch = /\bpid=(\d+)/.exec(line);
-			return {
-				session_id: id,
-				pid: pidMatch ? Number(pidMatch[1]) : undefined,
-				running: line.includes("[running]"),
-			};
+			return (await harness.call("list_sessions", {})).details.sessions?.find((s) => s.job_id === id);
 		},
 	};
 	live.add(harness);
@@ -158,9 +141,9 @@ function alive(pid: number): boolean {
 	try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-async function startBackground(h: Harness, cmd: string, extra: object = {}): Promise<{ sid: number; pid: number }> {
-	const started = await h.call("exec_command", { cmd, title: "job", shell: "/bin/sh", yield_time_ms: 250, ...extra });
-	const sid = started.details.session_id;
+async function startBackground(h: Harness, cmd: string, extra: object = {}): Promise<{ sid: string; pid: number }> {
+	const started = await h.call("bash", { pty: true, command: cmd, title: "job", shell: "/bin/sh", yield_time_ms: 250, ...extra });
+	const sid = started.details.job_id;
 	assert.ok(sid !== undefined, JSON.stringify(started.details));
 	const pid = (await h.listed(sid))?.pid;
 	assert.ok(pid !== undefined);
@@ -190,9 +173,8 @@ describe("a subagent's terminals across omp's park", { skip: process.platform ==
 		assert.ok(alive(pid), "the park killed nothing");
 		const revived = await revive();
 		assert.equal((await revived.listed(sid))?.running, true);
-		const killed = await InternalUrlRouter.instance().write(`term://${sid}/kill`, "");
-		assert.equal(killed?.isError, undefined);
-		assert.match(killed!.content[0]!.type === "text" ? killed!.content[0]!.text : "", /killed: true/);
+		const killed = await revived.call("kill_session", { job_id: sid });
+		assert.equal(killed.details.killed, true);
 		assert.equal(alive(pid), false);
 		assert.equal(first.sent.length + revived.sent.length, 0);
 	});
@@ -220,7 +202,7 @@ describe("a subagent's terminals across omp's park", { skip: process.platform ==
 		omp.reviver = async () => { revived = await revive(); };
 		assert.ok(await waitFor(() => (revived?.sent.length ?? 0) > 0), "the problem reached the revived agent");
 		assert.equal(omp.revives, 1);
-		assert.deepEqual(revived!.sent[0].message.details.notices.map((n) => [n.session_id, n.kind]), [[sid, "abnormal_return"]]);
+		assert.deepEqual(revived!.sent[0].message.details.notices.map((n) => [n.job_id, n.kind]), [[sid, "abnormal_return"]]);
 		assert.equal(first.sent.length, 0, "nothing went to the parked activation");
 	});
 
@@ -246,7 +228,7 @@ describe("a subagent's terminals across omp's park", { skip: process.platform ==
 		assert.equal(first.sent.length, 0);
 		const problem = await startBackground(first, "sleep 0.3; exit 3");
 		assert.ok(await waitFor(() => first.sent.length > 0), "the abnormal return woke the agent");
-		assert.deepEqual(first.sent[0].message.details.notices.map((n) => [n.session_id, n.kind]), [[problem.sid, "abnormal_return"]]);
+		assert.deepEqual(first.sent[0].message.details.notices.map((n) => [n.job_id, n.kind]), [[problem.sid, "abnormal_return"]]);
 	});
 });
 

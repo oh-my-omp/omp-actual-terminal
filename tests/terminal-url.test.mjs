@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
-import { registerTerminal, terminalRegistry } from "../fork-features/terminal-resource.ts";
-import { initializeTerminalUrls, parseInternalUrlRouterHost, setTerminalUrlRuntime } from "../fork-features/terminal-url.ts";
+import { registerTerminal, terminalRegistry } from "../src/terminal-resource.ts";
+import { initializeTerminalUrls, parseInternalUrlRouterHost, setTerminalUrlRuntime } from "../src/terminal-url.ts";
 import { TerminalScreen } from "../src/terminal-screen.ts";
 
 describe("term:// registration", () => {
@@ -23,7 +23,7 @@ describe("term:// registration", () => {
 	});
 
 	test("an in-process reload replaces the handler a version before the shared copy registered", async () => {
-		const old = { [Symbol.for("omp-unified-exec.term-handler")]: true, scheme: "term", spec: {} };
+		const old = { [Symbol.for("omp-actual-terminal.term-handler")]: true, scheme: "term", spec: {} };
 		InternalUrlRouter.instance().register(old);
 		await initializeTerminalUrls();
 		const now = InternalUrlRouter.instance().getHandler("term");
@@ -45,33 +45,33 @@ describe("term:// registration", () => {
 		expect(InternalUrlRouter.instance().getHandler("term")).toBe(foreign);
 	});
 
-	test("exposes promptDoc, promptReference, spec.write, numeric/key read, and write dispatch", async () => {
+	test("exposes promptDoc, promptReference, spec.write, job_id/key read, and write dispatch", async () => {
 		await initializeTerminalUrls();
 		const router = InternalUrlRouter.instance();
 		const handler = router.getHandler("term");
 		expect(handler).toBeDefined();
 		expect(handler.promptDoc?.({})).toBe(
-			"`term://` / `term://<id>` / `term://<id>/screen.png` — List or inspect interactive PTY sessions (like `proc://` for PTYs); write `term://<id>` (stdin), `term://<id>/kill`, `term://<id>/on_exit` (`wake`|`none`), or `term://<id>/monitor` (`cancel`).",
+			"`term://` / `term://<job_id>` / `term://<job_id>/screen.png` — List or inspect interactive PTY terminals (like `proc://` for PTYs); write `term://<job_id>` (stdin), `term://<job_id>/kill`, `term://<job_id>/on_exit` (`wake`|`none`), or `term://<job_id>/monitor` (`cancel`).",
 		);
-		expect(handler.promptReference?.()).toContain("write term://<id_or_key>");
-		expect(handler.promptReference?.()).toContain("write term://<id_or_key>/kill");
+		expect(handler.promptReference?.()).toContain("write term://<job_id_or_key>");
+		expect(handler.promptReference?.()).toContain("write term://<job_id_or_key>/kill");
 		expect(handler.spec.write?.via).toBe("handler");
 		expect(handler.spec.write?.payload).toBe("verbatim");
 		expect(handler.spec.write?.scope).toBe("workspace");
-		expect(handler.spec.write?.tier(new URL("term://1/kill"), "", undefined)).toBe("exec");
-		expect(handler.spec.write?.cancels?.(new URL("term://1"))).toBe(false);
-		expect(handler.spec.write?.cancels?.(new URL("term://1/kill"))).toBe(true);
-		expect(handler.spec.write?.cancels?.(new URL("term://1/monitor"))).toBe(true);
-		expect(handler.spec.write?.cancels?.(new URL("term://1/on_exit"))).toBe(false);
+		expect(handler.spec.write?.tier(new URL("term://bg_1/kill"), "", undefined)).toBe("exec");
+		expect(handler.spec.write?.cancels?.(new URL("term://bg_1"))).toBe(false);
+		expect(handler.spec.write?.cancels?.(new URL("term://bg_1/kill"))).toBe(true);
+		expect(handler.spec.write?.cancels?.(new URL("term://bg_1/monitor"))).toBe(true);
+		expect(handler.spec.write?.cancels?.(new URL("term://bg_1/on_exit"))).toBe(false);
 
 		const screen = new TerminalScreen(40, 5, () => {});
-		const key = registerTerminal(77, screen);
-		screen.write(new TextEncoder().encode("hello-term-77\r\n"));
+		const key = registerTerminal("bg_77", screen);
+		screen.write(new TextEncoder().encode("hello-term-bg_77\r\n"));
 		try {
 			const byKey = await router.resolve(`term://${key}`);
-			expect(byKey.content).toContain("hello-term-77");
-			const byId = await router.resolve("term://77");
-			expect(byId.content).toContain("hello-term-77");
+			expect(byKey.content).toContain("hello-term-bg_77");
+			const byId = await router.resolve("term://bg_77");
+			expect(byId.content).toContain("hello-term-bg_77");
 		} finally {
 			terminalRegistry.resources.delete(key);
 			await screen.release();
@@ -79,46 +79,46 @@ describe("term:// registration", () => {
 
 		const calls = [];
 		setTerminalUrlRuntime({
-			listSessions: () => "Active terminals (1 running, 0 exited):\n  session_id=77 \"shell\" [running] url=term://77",
+			listSessions: () => "Active terminals (1 running, 0 exited):\n  job_id=bg_77 \"shell\" [running] url=term://bg_77",
 			resolveSessionKey: () => undefined,
 			writeStdin: async (target, content) => {
 				calls.push(["stdin", target, content]);
-				return { text: `[still running]\nsession_id: ${target}`, isError: false };
+				return { text: `[still running]\njob_id: ${target}`, isError: false };
 			},
 			killSession: async (target, signal) => {
 				calls.push(["kill", target, signal]);
-				return { text: `[killed]\nsession_id: ${target}`, killed: true };
+				return { text: `[killed]\njob_id: ${target}`, killed: true };
 			},
 			setOnExit: (target, policy) => {
 				calls.push(["on_exit", target, policy]);
-				return `on_exit session_id=${target} policy=${policy}`;
+				return `on_exit job_id=${target} policy=${policy}`;
 			},
 			cancelMonitor: (target) => {
 				calls.push(["monitor", target]);
-				return JSON.stringify({ session_id: 77, status: "cancelled" });
+				return JSON.stringify({ job_id: "bg_77", status: "cancelled" });
 			},
 		});
 
 		const listing = await router.resolve("term://");
-		expect(listing.content).toContain("session_id=77");
-		await expect(router.resolve("term://77/kill")).rejects.toThrow(/write-only/);
-		await expect(router.resolve("term://77/on_exit")).rejects.toThrow(/write-only/);
-		await expect(router.resolve("term://77/monitor")).rejects.toThrow(/write-only/);
+		expect(listing.content).toContain("job_id=bg_77");
+		await expect(router.resolve("term://bg_77/kill")).rejects.toThrow(/write-only/);
+		await expect(router.resolve("term://bg_77/on_exit")).rejects.toThrow(/write-only/);
+		await expect(router.resolve("term://bg_77/monitor")).rejects.toThrow(/write-only/);
 
-		const stdinWrite = await router.write("term://77", "echo hello");
+		const stdinWrite = await router.write("term://bg_77", "echo hello");
 		expect(stdinWrite?.isError).toBeUndefined();
-		await router.write("term://77/kill", "SIGINT");
-		await router.write("term://77/kill?signal=SIGKILL", "");
-		await router.write("term://77/on_exit", "wake");
-		await router.write("term://77/monitor", "cancel");
-		await expect(router.write("term://77/on_exit", "bad")).rejects.toThrow(/requires content "wake" or "none"/);
-		await expect(router.write("term://77/monitor", "start")).rejects.toThrow(/requires content "cancel"/);
+		await router.write("term://bg_77/kill", "SIGINT");
+		await router.write("term://bg_77/kill?signal=SIGKILL", "");
+		await router.write("term://bg_77/on_exit", "wake");
+		await router.write("term://bg_77/monitor", "cancel");
+		await expect(router.write("term://bg_77/on_exit", "bad")).rejects.toThrow(/requires content "wake" or "none"/);
+		await expect(router.write("term://bg_77/monitor", "start")).rejects.toThrow(/requires content "cancel"/);
 		expect(calls).toEqual([
-			["stdin", "77", "echo hello"],
-			["kill", "77", "SIGINT"],
-			["kill", "77", "SIGKILL"],
-			["on_exit", "77", "wake"],
-			["monitor", "77"],
+			["stdin", "bg_77", "echo hello"],
+			["kill", "bg_77", "SIGINT"],
+			["kill", "bg_77", "SIGKILL"],
+			["on_exit", "bg_77", "wake"],
+			["monitor", "bg_77"],
 		]);
 	});
 });

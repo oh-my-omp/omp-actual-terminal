@@ -7,8 +7,7 @@ export interface SessionStoreOptions {
 }
 
 export class SessionStore {
-	private readonly sessions = new Map<number, ExecSession>();
-	private nextId = 1;
+	private readonly sessions = new Map<string, ExecSession>();
 	readonly maxSessions: number;
 	readonly lruProtectedCount: number;
 	private readonly onEvict: SessionStoreOptions["onEvict"];
@@ -20,11 +19,7 @@ export class SessionStore {
 		this.onEvict = opts.onEvict;
 	}
 
-	allocateId(): number {
-		return this.nextId++;
-	}
-
-	get(id: number): ExecSession | undefined {
+	get(id: string): ExecSession | undefined {
 		return this.sessions.get(id);
 	}
 
@@ -36,6 +31,11 @@ export class SessionStore {
 		return this.sessions.size;
 	}
 
+	/**
+	 * A removed session's
+	 * terminal emulator is being released by then, so listeners re-read
+	 * `values()` instead of keeping removed sessions.
+	 */
 	subscribe(listener: () => void): () => void {
 		this.membershipListeners.add(listener);
 		return () => this.membershipListeners.delete(listener);
@@ -55,7 +55,7 @@ export class SessionStore {
 		return { pruned, count: this.sessions.size };
 	}
 
-	remove(id: number): ExecSession | undefined {
+	remove(id: string): ExecSession | undefined {
 		const entry = this.sessions.get(id);
 		if (!entry) return undefined;
 		this.sessions.delete(id);
@@ -65,18 +65,22 @@ export class SessionStore {
 	}
 
 	terminateAll(): ExecSession[] {
-		const drained = Array.from(this.sessions.values());
+		const all = Array.from(this.sessions.values());
+		const live: ExecSession[] = [];
 		this.sessions.clear();
-		for (const s of drained) {
-			try {
-				s.terminate();
-			} catch {
+		for (const s of all) {
+			if (!s.hasExited) {
+				live.push(s);
+				try {
+					s.terminate();
+				} catch {
+				}
 			}
 			void s.releaseForShutdown();
 			this.onEvict?.(s, "shutdown");
 		}
-		if (drained.length > 0) this.notifyMembership();
-		return drained;
+		if (all.length > 0) this.notifyMembership();
+		return live;
 	}
 
 	private pruneLru(): ExecSession | null {
@@ -84,7 +88,7 @@ export class SessionStore {
 		if (entries.length === 0) return null;
 
 		const byRecencyAsc = [...entries].sort((a, b) => a.lastUsed - b.lastUsed);
-		const protectedIds = new Set<number>(
+		const protectedIds = new Set<string>(
 			this.lruProtectedCount > 0 ? byRecencyAsc.slice(-this.lruProtectedCount).map((e) => e.id) : [],
 		);
 
