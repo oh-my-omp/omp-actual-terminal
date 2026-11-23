@@ -4,6 +4,8 @@ All notable changes to this project. **Newest entries go on top.**
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-23
+
 ### Breaking Changes
 
 - Removed the `/omp-actual-terminal-sessions` command and the Tern terminals segment and Terminals view: a person opens a terminal's Console, renamed from the terminal page, from omp's jobs page instead, where Leave replaces Back and End replaces Kill

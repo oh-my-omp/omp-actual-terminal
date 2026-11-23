@@ -1,6 +1,6 @@
 {
 	"name": "omp-actual-terminal",
-	"version": "0.16.0",
+	"version": "0.17.0",
 	"description": "Long-lived PTY terminals for omp: send input with write_stdin, read terminal state via term://, and await events or completion with monitor. Full raw output logged to disk.",
 	"keywords": [
 		"omp",
