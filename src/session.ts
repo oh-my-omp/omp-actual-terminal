@@ -98,11 +98,11 @@ export class ExecSession {
 				// still running: record the failure and stop mirroring writes, but
 				// do NOT mark the session exited — that would make it unkillable
 				// (kill() no-ops once hasExited) and orphan the process.
-				self.recordFailure(`log stream error: ${err?.message ?? err}`);
+				self.recordFailure(`log stream error: ${err.message}`);
 				self.log = undefined;
 			});
-		} catch (err: any) {
-			self.markFailure(`failed to open log file ${self.logPath}: ${err?.message ?? err}`);
+		} catch (err: unknown) {
+			self.markFailure(`failed to open log file ${self.logPath}: ${err instanceof Error ? err.message : String(err)}`);
 			self.exitedAc.abort();
 			self.outputClosed.close();
 			return self;
@@ -118,8 +118,8 @@ export class ExecSession {
 				cols,
 				rows,
 			});
-		} catch (err: any) {
-			self.markFailure(err?.message ?? String(err));
+		} catch (err: unknown) {
+			self.markFailure(err instanceof Error ? err.message : String(err));
 			void self.log?.end();
 			self.log = undefined;
 			self.exitedAc.abort();

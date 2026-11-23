@@ -33,61 +33,42 @@ export interface SpawnedChild {
 	signalGroup(signal: NodeJS.Signals | 0): boolean;
 }
 
-type BunTerminal = {
-	readonly closed: boolean;
-	write(data: Uint8Array): number;
-	close(): void;
-};
+type BunPtyProcess = Pick<Bun.Subprocess, "pid" | "terminal">;
 
-type BunSubprocess = {
-	readonly pid: number;
-	readonly terminal?: BunTerminal;
-	kill(signal?: NodeJS.Signals): void;
-};
-
-type BunSpawnOptions = {
-	cwd: string;
-	env: NodeJS.ProcessEnv;
-	terminal: {
-		name: string;
-		cols: number;
-		rows: number;
-		data(terminal: BunTerminal, data: Uint8Array): void;
-		exit(
-			terminal: BunTerminal,
-			exitCode: number | null,
-			signalCode: number | string | null,
-			error?: Error,
-		): void;
-	};
+type BunPtySpawnOptions = Pick<Bun.SpawnOptions.SpawnOptions<"ignore", "pipe", "inherit">, "cwd" | "env"> & {
+	terminal: Required<Pick<Bun.TerminalOptions, "name" | "cols" | "rows" | "data" | "exit">>;
 	onExit(
-		subprocess: BunSubprocess,
+		subprocess: BunPtyProcess,
 		exitCode: number | null,
-		signalCode: number | string | null,
-		error?: Error,
+		signalCode: NodeJS.Signals | number | null,
+		error?: Bun.ErrorLike,
 	): void;
 };
 
-type BunRuntime = {
-	readonly version?: string;
-	spawn(command: string[], options: BunSpawnOptions): BunSubprocess;
+export type BunPtyRuntime = {
+	spawn(command: string[], options: BunPtySpawnOptions): BunPtyProcess;
 };
+
+type BunHost = Pick<typeof Bun, "spawn" | "Terminal">;
+
+function providesBunPty(candidate: object): candidate is BunHost {
+	return typeof Reflect.get(candidate, "spawn") === "function" && typeof Reflect.get(candidate, "Terminal") === "function";
+}
 
 export function requireBunRuntime(
 	candidate: unknown = Reflect.get(globalThis, "Bun"),
-): BunRuntime {
+): BunPtyRuntime {
 	const requirement = "omp-unified-exec requires a Bun host with Bun.Terminal";
 	if ((typeof candidate !== "object" || candidate === null) && typeof candidate !== "function") {
 		throw new Error(`${requirement}; the current runtime is not Bun. Load this plugin in omp.`);
 	}
-	const fields = candidate as Record<string, unknown>;
-	const version = typeof fields.version === "string" ? fields.version : "unknown";
-	if (typeof fields.spawn !== "function" || typeof fields.Terminal !== "function") {
+	if (!providesBunPty(candidate)) {
+		const version = Reflect.get(candidate, "version");
 		throw new Error(
-			`${requirement}; Bun ${version} does not provide Bun.spawn with Bun.Terminal support. Upgrade the omp/Bun host.`,
+			`${requirement}; Bun ${typeof version === "string" ? version : "unknown"} does not provide Bun.spawn with Bun.Terminal support. Upgrade the omp/Bun host.`,
 		);
 	}
-	return candidate as BunRuntime;
+	return candidate;
 }
 
 const SIGNAL_NAMES: Record<number, NodeJS.Signals> = {};
@@ -99,12 +80,6 @@ export function signalNameFromNumber(num: number): NodeJS.Signals | null {
 	return SIGNAL_NAMES[num] ?? null;
 }
 
-/**
- * Killing only the
- * direct child (the shell) leaves grandchildren alive holding the console
- * open, which delays the terminal's exit indefinitely and orphans the
- * subtree.
- */
 /**
  * Never spawn the bare name: Windows'
  * CreateProcess checks the parent's cwd before PATH, so a taskkill.exe
@@ -123,18 +98,31 @@ function killWindowsTree(pid: number): void {
 		});
 		tk.on("error", () => {});
 	} catch {
+		return;
+	}
+}
+
+function sendSignal(pid: number, signal: NodeJS.Signals | 0): boolean {
+	try {
+		process.kill(pid, signal);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function notifyEach<A extends unknown[]>(handlers: Iterable<(...args: A) => void>, ...args: A): void {
+	for (const handler of handlers) {
+		try {
+			handler(...args);
+		} catch {
+			continue;
+		}
 	}
 }
 
 function killPosixProcessGroup(pid: number, signal: NodeJS.Signals): void {
-	try {
-		process.kill(-pid, signal);
-	} catch {
-		try {
-			process.kill(pid, signal);
-		} catch {
-		}
-	}
+	if (!sendSignal(-pid, signal)) sendSignal(pid, signal);
 }
 
 function assertSpawnable(opts: SpawnOptions): void {
@@ -166,7 +154,7 @@ function bunSignalName(signalCode: number | string | null): NodeJS.Signals | nul
 	return null;
 }
 
-export function spawnBunPty(runtime: BunRuntime, opts: SpawnOptions): SpawnedChild {
+export function spawnBunPty(runtime: BunPtyRuntime, opts: SpawnOptions): SpawnedChild {
 	let [file, ...args] = opts.command;
 	if (!file) throw new Error("spawnChild: empty command");
 	if (IS_WINDOWS) file = resolveBinary(file);
@@ -178,7 +166,7 @@ export function spawnBunPty(runtime: BunRuntime, opts: SpawnOptions): SpawnedChi
 	let terminalClosed = false;
 	let finalized = false;
 	let processExit: ProcessExit | undefined;
-	let terminal: BunTerminal | undefined;
+	let terminal: Bun.Terminal | undefined;
 	let bufferingInitialData = true;
 	let pendingData: Uint8Array[] = [];
 
@@ -190,23 +178,13 @@ export function spawnBunPty(runtime: BunRuntime, opts: SpawnOptions): SpawnedChi
 			pendingData.push(chunk.slice());
 			return;
 		}
-		for (const handler of dataHandlers) {
-			try {
-				handler(chunk);
-			} catch {
-			}
-		}
+		notifyEach(dataHandlers, chunk);
 	};
 
 	const finalize = () => {
 		if (finalized || !terminalClosed || !processExit) return;
 		finalized = true;
-		for (const handler of exitHandlers) {
-			try {
-				handler(processExit.exitCode, processExit.signal, processExit.failureMessage);
-			} catch {
-			}
-		}
+		notifyEach(exitHandlers, processExit.exitCode, processExit.signal, processExit.failureMessage);
 		exitHandlers.clear();
 		dataHandlers.clear();
 	};
@@ -238,13 +216,7 @@ export function spawnBunPty(runtime: BunRuntime, opts: SpawnOptions): SpawnedChi
 				...(error ? { failureMessage: `process error: ${error.message}` } : {}),
 			};
 			if (terminal?.closed) terminalClosed = true;
-			const exit = processExit;
-			for (const handler of processExitHandlers) {
-				try {
-					handler(exit);
-				} catch {
-				}
-			}
+			notifyEach(processExitHandlers, processExit);
 			processExitHandlers.clear();
 			finalize();
 		},
@@ -272,12 +244,7 @@ export function spawnBunPty(runtime: BunRuntime, opts: SpawnOptions): SpawnedChi
 		},
 		onData(handler) {
 			bufferingInitialData = false;
-			for (const chunk of pendingData) {
-				try {
-					handler(chunk);
-				} catch {
-				}
-			}
+			for (const chunk of pendingData) notifyEach([handler], chunk);
 			pendingData = [];
 			if (finalized) return () => {};
 			dataHandlers.add(handler);
@@ -287,10 +254,7 @@ export function spawnBunPty(runtime: BunRuntime, opts: SpawnOptions): SpawnedChi
 			if (finalized) {
 				const exit = processExit;
 				if (!exit) return;
-				try {
-					handler(exit.exitCode, exit.signal, exit.failureMessage);
-				} catch {
-				}
+				notifyEach([handler], exit.exitCode, exit.signal, exit.failureMessage);
 				return;
 			}
 			exitHandlers.add(handler);
@@ -320,19 +284,11 @@ export function spawnBunPty(runtime: BunRuntime, opts: SpawnOptions): SpawnedChi
 				killPosixProcessGroup(child.pid, signal);
 				return;
 			}
-			try {
-				process.kill(-child.pid, signal);
-			} catch {
-			}
+			sendSignal(-child.pid, signal);
 		},
 		signalGroup(signal) {
 			if (IS_WINDOWS) return false;
-			try {
-				process.kill(-child.pid, signal);
-				return true;
-			} catch {
-				return false;
-			}
+			return sendSignal(-child.pid, signal);
 		},
 	};
 }

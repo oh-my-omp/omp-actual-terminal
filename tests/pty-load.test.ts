@@ -1,36 +1,6 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { requireBunRuntime, spawnBunPty } from "../src/pty.ts";
-
-type FakeTerminal = {
-	closed: boolean;
-	write(): number;
-	close(): void;
-};
-
-type FakeSubprocess = {
-	pid: number;
-	terminal: FakeTerminal;
-	kill(): void;
-};
-
-type FakeBunSpawnOptions = {
-	terminal: {
-		data(terminal: FakeTerminal, data: Uint8Array): void;
-		exit(
-			terminal: FakeTerminal,
-			exitCode: number | null,
-			signalCode: number | string | null,
-			error?: Error,
-		): void;
-	};
-	onExit(
-		subprocess: FakeSubprocess,
-		exitCode: number | null,
-		signalCode: number | string | null,
-		error?: Error,
-	): void;
-};
+import { type BunPtyRuntime, requireBunRuntime, spawnBunPty } from "../src/pty.ts";
 
 const spawnOptions = {
 	command: [process.execPath],
@@ -67,10 +37,11 @@ describe("Bun host admission", () => {
 
 describe("Bun PTY lifecycle", () => {
 	it("replays data and exit when Bun invokes callbacks before spawn returns", () => {
-		const terminal: FakeTerminal = { closed: true, write: () => 0, close() {} };
-		const subprocess: FakeSubprocess = { pid: 123, terminal, kill() {} };
-		const runtime = {
-			spawn(_command: string[], options: FakeBunSpawnOptions) {
+		const terminal = new Bun.Terminal({});
+		terminal.close();
+		const subprocess = { pid: 123, terminal };
+		const runtime: BunPtyRuntime = {
+			spawn(_command, options) {
 				options.terminal.data(terminal, new TextEncoder().encode("EARLY_DATA"));
 				options.terminal.exit(terminal, 0, null);
 				options.onExit(subprocess, 0, null);
@@ -88,19 +59,15 @@ describe("Bun PTY lifecycle", () => {
 	});
 
 	it("waits for terminal closure after an early Bun process exit", () => {
-		const terminal: FakeTerminal = {
-			closed: false,
-			write: () => 0,
-			close() { this.closed = true; },
-		};
-		const subprocess: FakeSubprocess = { pid: 123, terminal, kill() {} };
+		const terminal = new Bun.Terminal({});
+		const subprocess = { pid: 123, terminal };
 		let emitData: ((value: string) => void) | undefined;
 		let closeTerminal: (() => void) | undefined;
-		const runtime = {
-			spawn(_command: string[], options: FakeBunSpawnOptions) {
+		const runtime: BunPtyRuntime = {
+			spawn(_command, options) {
 				emitData = (value) => options.terminal.data(terminal, new TextEncoder().encode(value));
 				closeTerminal = () => {
-					terminal.closed = true;
+					terminal.close();
 					options.terminal.exit(terminal, 0, null);
 				};
 				options.onExit(subprocess, 0, null);
