@@ -54,6 +54,8 @@ npm test                            # typecheck + all tests
 Expect zero failures on Linux, macOS and Windows; CI runs the full suite on all
 three. Platform-specific cases and the explicit omp install gate may skip; PTY
 availability never does.
+`bunfig.toml` preloads `tests/locale.preload.ts`, which sets `OMOMP_LANG=en`,
+so the suite asserts English UI text whatever the caller's locale.
 The Node admission regression compiles the actual
 TypeScript entry before executing it in Node, whose strip-only loader cannot
 parse the HUD's parameter properties; it runs against stub packages for the
@@ -68,8 +70,11 @@ A sibling view, indexed by concern:
 
 | Concern | File(s) |
 |---|---|
-| Tool schemas and orchestration | `src/index.ts` (`exec_command`, `write_stdin`, `monitor`) |
-| Tool-owned topics (`read help://exec_command/<topic>`) and description pointers for the retained PTY tools | `fork-features/exec-command-docs.ts`, `fork-features/topics/*.md` (`pty-io.md`, `pty-lifecycle.md`); exposed via `docTopics()` + `registerToolTopics` in `src/index.ts`, included by `package.json` `files` |
+| Activation: host attachment, stop gate wiring, event handlers | `src/index.ts` |
+| Tool schemas and orchestration | `src/pty-tools.ts` (`exec_command`, `write_stdin`, `monitor`) |
+| `term://` listing and write/kill/on_exit/monitor control over the store | `src/terminal-url-runtime.ts` |
+| Running-sessions status line, widget and `/unified-exec-sessions` | `src/sessions-ui.ts`, `src/sessions-command.ts` |
+| Tool-owned topics (`read help://exec_command/<topic>`) and description pointers for the retained PTY tools | `fork-features/exec-command-docs.ts`, `fork-features/topics/*.md` (`pty-io.md`, `pty-lifecycle.md`); exposed via `docTopics()` + `registerExecCommandTopics` in `src/pty-tools.ts`, included by `package.json` `files` |
 | Session lifecycle (spawn, write, kill, log-stream) | `src/session.ts` |
 | Session registry, LRU eviction, shutdown | `src/session-store.ts` |
 | Per-call observation (`CollectResult`: screen, final screen or none) | `src/collect.ts`; produced by `ExecSession.collect` in `src/session.ts` |
@@ -79,25 +84,26 @@ A sibling view, indexed by concern:
 | Terminal notices: ADT, formatter, the dispatcher that holds notices during a run and merges them at its stop (`unified-exec-notice`) | `fork-features/terminal-notice.ts`; run events (`agent_start`, `agent_end`, `session_stop`) in `src/index.ts` |
 | Finished-work stop gate: `omp.settings` `stop` / `judgePrompt` / `noticeTemplate` defaults, judge / `@smol` / todo detectors, silent collection of returned terminals; a finished agent woken only by a terminal problem (`isTerminalProblem`, the `done` stop state) | `fork-features/stop-config.ts`, `fork-features/stop-gate.ts` (omp modules loaded by `loadStopHost`), `TerminalLifecycle.collectReturned`, `NoticeDispatcher.flush` in `fork-features/terminal-notice.ts`; withheld settlement in `src/completion.ts` (`submitWake`) and `fork-features/monitor-subscription.ts`; `tests/stop-gate.test.ts` |
 | Structured stop/config diagnostics and boundary-only English/Chinese rendering | `fork-features/stop-reasons.ts`; producers in `stop-config.ts`, `stop-gate.ts` and `terminal-notice.ts`, human notifications in `src/index.ts` |
-| Terminal lifecycle: return, reads, silent linger of a normal return with no process left, TTL, grace, reclaim, reclaimed-terminal record, minute sweep; the `notice.graceReclaim` plugin setting gating the grace reclaim notice | `fork-features/terminal-lifecycle.ts`; `fork-features/plugin-settings.ts` (omp's `getPluginSettings`, loaded by `loadPluginSettingsReader`); reclaim, leftover-group kill and setting parsing/warnings in `src/index.ts`; `onShellExit`/`onTerminalRead`/`signalProcessGroup` in `src/session.ts` |
-| A subagent's terminals across omp's idle park: agent registry/lifecycle reader, parked runtimes, revive-then-deliver | `fork-features/agent-park.ts`; `createRuntime`, `deliverNotice`, `endRuntime` and the `session_start`/`session_shutdown` handlers in `src/index.ts`; `finished` in `fork-features/terminal-notice.ts`; `tests/agent-park.test.ts` |
+| Terminal lifecycle: return, reads, silent linger of a normal return with no process left, TTL, grace, reclaim, reclaimed-terminal record, minute sweep; the `notice.graceReclaim` plugin setting gating the grace reclaim notice | `fork-features/terminal-lifecycle.ts`; `fork-features/plugin-settings.ts` (omp's `getPluginSettings`, loaded by `loadPluginSettingsReader`); reclaim and leftover-group kill in `src/runtime.ts`, setting parsing/warnings in `src/index.ts`; `onShellExit`/`onTerminalRead`/`signalProcessGroup` in `src/session.ts` |
+| A subagent's terminals across omp's idle park: agent registry/lifecycle reader, parked runtimes, revive-then-deliver | `fork-features/agent-park.ts`; `createRuntime`, `deliverNotice`, `endRuntime` in `src/runtime.ts` and the `session_start`/`session_shutdown` handlers in `src/index.ts`; `finished` in `fork-features/terminal-notice.ts`; `tests/agent-park.test.ts` |
 | Rendered terminal screen: emulator, history + screen observations, snapshots | `src/terminal-screen.ts` (owned by `ExecSession`) |
 | On-disk raw log file mirroring | `src/session.ts` (`logStream`) |
 | Terminal-inert result/partial text | `src/output-safety.ts` |
 | Bounded process/kill details + LLM-visible text | `src/tool-result.ts` (host-compatible `truncateTail`) |
 | Bun.Terminal backend, runtime admission, spawn preflight, shell-exit events, process-group signals, Windows tree-kill | `src/pty.ts` |
 | Shell selection & argv construction; omp's cmd.exe test loaded at factory time | `src/shell.ts`; `fork-features/shell-host.ts` |
-| `exec.initFile` plugin setting: parse, path resolution, the source-then-`eval` script for POSIX shells | `fork-features/exec-init.ts`; omp's POSIX-shell test in `src/shell.ts` (`isPosixShell`, shared with command approval); read per call in `runExecCommand` (`src/index.ts`); `tests/exec-init.test.ts` |
+| `exec.initFile` plugin setting: parse, path resolution, the source-then-`eval` script for POSIX shells | `fork-features/exec-init.ts`; omp's POSIX-shell test in `src/shell.ts` (`isPosixShell`, shared with command approval); read per call in `runExecCommand` (`src/pty-tools.ts`); `tests/exec-init.test.ts` |
 | omp-only host admission, top-level `loadMode`, bash delegation, argument/result display adapters, live `shellPath` registry lookup | `fork-features/omp-presentation.ts` |
 | Tern terminal HUD: pill segment, Terminals view, terminal page | `fork-features/tern-terminal-hud.ts` |
 | Removal of the Tern plugin versions up to 0.14.7 installed | `fork-features/tern-plugin-removal.ts` |
 | `term://` resources, read/write handlers (`term://`, `term://<id>`, `/kill`, `/on_exit`, `/monitor`) and screenshots | `fork-features/terminal-resource.ts`, `fork-features/terminal-url.ts`, `fork-features/terminal-image.ts` |
-| Monitors: conditions, judge monitors, batching, End/match/judgment/reminder notices | `fork-features/monitor-subscription.ts`; screen judgment through omp's judge chain in `fork-features/screen-judge.ts`, reached per judgment through `RuntimeHost.judge` in `src/index.ts`; subscriptions owned by `src/completion.ts` (`startMonitor`) |
+| Monitors: conditions, judge monitors, batching, End/match/judgment/reminder notices | `fork-features/monitor-subscription.ts`; screen judgment through omp's judge chain in `fork-features/screen-judge.ts`, reached per judgment through `RuntimeHost.judge` in `src/runtime.ts`; subscriptions owned by `src/completion.ts` (`startMonitor`) |
 | Input-wait alerts: prompt detection, quiet watcher, notice | `fork-features/input-wait.ts`; `ExecSession.watchInputWait` in `src/session.ts`; `alertInputWait` in `src/completion.ts` |
 | Session log naming, open-log tracking and seven-day gzip compression | `fork-features/log-archive.ts`; `ExecSession.spawn` in `src/session.ts`; scheduled by `withHostPresentation` |
 | Command approval and host session binding | `fork-features/command-approval.ts`, `fork-features/session-binding.ts` |
 | `monitor` result details type | `src/script-result.ts` |
-| Tool limits, early-exit grace, session-store limits | top of `src/index.ts` |
+| Tool limits, early-exit grace | top of `src/pty-tools.ts` |
+| Session-store limits, shutdown grace | top of `src/runtime.ts` |
 
 ## Dev loop
 
@@ -115,7 +121,7 @@ A sibling view, indexed by concern:
 - **If you're driving this extension's own tools from the omp session
   you're editing,** you're working against a snapshot: your edits take
   effect *after* `/reload` (or after full omp restart). Symptom: you
-  change `src/index.ts`, save, call `write_stdin` —
+  change `src/pty-tools.ts`, save, call `write_stdin` —
   still see the old behavior. Run `/reload` and retry.
 - **`omp -p` (print mode) loads extensions fresh per invocation.** No
   `/reload` needed, but each run is a new process.
@@ -199,8 +205,9 @@ to test generic tool behavior.
 ### Change a documented constant
 
 The constants in the README's `## Constants` section live in the module that
-owns them: yield limits, early-exit grace, session-store limits and
-`INPUT_WAIT_QUIET_MS` at the top of `src/index.ts`, `TERMINAL_HISTORY_CELLS`
+owns them: yield limits, early-exit grace and `INPUT_WAIT_QUIET_MS` at the
+top of `src/pty-tools.ts`, session-store limits at the top of
+`src/runtime.ts`, `TERMINAL_HISTORY_CELLS`
 in `src/terminal-screen.ts`, `DEFAULT_REMIND_AFTER_MS` and
 `DEFAULT_JUDGE_INTERVAL_MS` in `fork-features/monitor-subscription.ts`,
 `JUDGE_DEADLINE_MS` in `fork-features/screen-judge.ts`, `RECLAIM_TTL_MS`,

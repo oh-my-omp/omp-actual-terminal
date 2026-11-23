@@ -1029,7 +1029,12 @@ Every session runs in ConPTY through Bun's native `Bun.Terminal`.
 
 ```
 src/
-├── index.ts              # tool registration, event handlers
+├── index.ts              # activation: host attachment, stop gate, event handlers
+├── runtime.ts            # per-agent runtime: store, coordinator, lifecycle, notices, kill and shutdown
+├── pty-tools.ts          # exec_command / write_stdin / monitor schemas and execution
+├── terminal-url-runtime.ts # term:// listing, write, kill, on_exit and monitor control
+├── sessions-ui.ts        # running-sessions status line and widget
+├── sessions-command.ts   # /unified-exec-sessions picker
 ├── session.ts            # ExecSession: spawn, read, write, kill, log file, state
 ├── session-store.ts      # SessionStore + LRU eviction
 ├── collect.ts            # CollectResult: screen, final screen or none
