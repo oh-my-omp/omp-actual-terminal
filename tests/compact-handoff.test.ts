@@ -161,7 +161,6 @@ describe("omp-actual-terminal compact handoff", () => {
 		const emptyCompacting = await host.emitCompacting({ type: "session.compacting", sessionId: "s-empty", messages: [] }, emptyCtx);
 		expect(emptyCompacting?.context?.join("\n") ?? "").not.toContain("[omp-actual-terminal]");
 
-		// 2. Active sessions in store -> claim in <harness-provided> + post-compact <system-reminder> via createDeltaStream
 		store.insert(
 			fakeSession({
 				id: 1,
