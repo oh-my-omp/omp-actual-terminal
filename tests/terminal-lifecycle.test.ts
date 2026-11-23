@@ -72,11 +72,15 @@ function makeHarness(pluginSettings?: PluginSettingsReader): Harness {
 		getFlag: () => false, getActiveTools: () => ["bash"], setActiveTools() {},
 		sendMessage: (message: Sent["message"], options: Sent["options"]) => { sent.push({ message, options }); },
 	};
-	activate(pi as unknown as Parameters<typeof activate>[0], undefined, undefined, undefined, undefined, {
-		nowFn: () => now,
-		setIntervalFn: (cb) => { sweep = cb; return 1; },
-		clearIntervalFn: () => { sweep = undefined; },
-	}, undefined, pluginSettings, undefined, stubShellHost);
+	activate(pi as unknown as Parameters<typeof activate>[0], {
+		lifecycleClock: {
+			nowFn: () => now,
+			setIntervalFn: (cb) => { sweep = cb; return 1; },
+			clearIntervalFn: () => { sweep = undefined; },
+		},
+		pluginSettings,
+		shellHost: stubShellHost,
+	});
 	let nextCallId = 1;
 	const harness: Harness = {
 		sent,

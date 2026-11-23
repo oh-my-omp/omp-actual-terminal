@@ -406,6 +406,18 @@ export interface ActivatedExtension {
 	readonly kill: (id: number) => Promise<boolean>;
 }
 
+export interface ActivateDeps {
+	readonly appearance?: () => TerminalAppearance;
+	readonly shellPath?: () => string | undefined;
+	readonly approvalHost?: CommandApprovalHost;
+	readonly invalidateGithubCache?: (command: string) => void;
+	readonly lifecycleClock?: LifecycleClock;
+	readonly stopHost?: StopHost;
+	readonly pluginSettings?: PluginSettingsReader;
+	readonly agentHost?: AgentHost;
+	readonly shellHost?: ShellHost;
+}
+
 async function loadOmpAppearance(): Promise<() => TerminalAppearance> {
 	const themeModule: Partial<Pick<typeof ThemeModule, "isLightTheme" | "getCurrentThemeName">> =
 		await import("@oh-my-pi/pi-tui/theme");
@@ -454,18 +466,7 @@ async function loadGithubCacheInvalidation(): Promise<(command: string) => void>
 }
 
 export function withHostPresentation(
-	activate: (
-		pi: ExtensionAPI,
-		appearance?: () => TerminalAppearance,
-		shellPath?: () => string | undefined,
-		approvalHost?: CommandApprovalHost,
-		invalidateGithubCache?: (command: string) => void,
-		lifecycleClock?: LifecycleClock,
-		stopHost?: StopHost,
-		pluginSettings?: PluginSettingsReader,
-		agentHost?: AgentHost,
-		shellHost?: ShellHost,
-	) => ActivatedExtension,
+	activate: (pi: ExtensionAPI, deps: ActivateDeps) => ActivatedExtension,
 	prepareHost?: () => Promise<void>,
 ): (host: ExtensionAPI) => void | Promise<void> {
 	return (host) => {
@@ -484,7 +485,7 @@ export function withHostPresentation(
 			const removal: typeof TernPluginRemoval = await import(TERN_PLUGIN_REMOVAL_MODULE);
 			await removal.retireTernPlugin();
 			if (prepareHost) await prepareHost();
-			const activated = activate(pi, appearance, shellPath, approvalHost, invalidateGithubCache, {}, stopHost, pluginSettings, agentHost, shellHost);
+			const activated = activate(pi, { appearance, shellPath, approvalHost, invalidateGithubCache, stopHost, pluginSettings, agentHost, shellHost });
 			mountTerminalHud(pi, activated.store, hud, activated.kill);
 			scheduleLogArchive();
 		});

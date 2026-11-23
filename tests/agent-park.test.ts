@@ -91,11 +91,15 @@ function makeHarness(): Harness {
 		getFlag: () => false, getActiveTools: () => ["bash"], setActiveTools() {},
 		sendMessage: (message: Sent["message"]) => { sent.push({ message }); },
 	};
-	activate(pi as unknown as Parameters<typeof activate>[0], undefined, undefined, undefined, undefined, {
-		nowFn: () => now,
-		setIntervalFn: (cb) => { sweep = cb; return 1; },
-		clearIntervalFn: () => { sweep = undefined; },
-	}, undefined, undefined, omp, stubShellHost);
+	activate(pi as unknown as Parameters<typeof activate>[0], {
+		lifecycleClock: {
+			nowFn: () => now,
+			setIntervalFn: (cb) => { sweep = cb; return 1; },
+			clearIntervalFn: () => { sweep = undefined; },
+		},
+		agentHost: omp,
+		shellHost: stubShellHost,
+	});
 	let nextCallId = 1;
 	const harness: Harness = {
 		sent,

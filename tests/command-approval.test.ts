@@ -109,7 +109,7 @@ function harness(host: CommandApprovalHost) {
 		},
 		registerCommand() {}, registerShortcut() {}, registerFlag() {}, registerMessageRenderer() {}, getFlag() { return false; },
 	} as unknown as ExtensionAPI;
-	activate(api, undefined, STUB_SHELL_PATH, host, undefined, {}, undefined, undefined, undefined, stubShellHost);
+	activate(api, { shellPath: STUB_SHELL_PATH, approvalHost: host, shellHost: stubShellHost });
 	const tool = tools.get("exec_command")!;
 	assert.ok(tool.approval);
 	assert.ok(tool.formatApprovalDetails);

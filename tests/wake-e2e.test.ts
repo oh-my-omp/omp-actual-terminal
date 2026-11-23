@@ -65,7 +65,7 @@ function makeHarness() {
 	};
 
 	const api = pi as unknown as Parameters<typeof activate>[0];
-	activate(api, undefined, STUB_SHELL_PATH, undefined, undefined, {}, undefined, undefined, undefined, stubShellHost);
+	activate(api, { shellPath: STUB_SHELL_PATH, shellHost: stubShellHost });
 
 	let nextCallId = 1;
 	let shutDown = false;

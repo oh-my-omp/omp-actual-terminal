@@ -41,7 +41,7 @@ function makeHarness(cwd: string, settings: PluginSettingsReader): Harness {
 		registerCommand() {}, registerShortcut() {}, registerFlag() {}, registerMessageRenderer() {},
 		getFlag: () => false, getActiveTools: () => ["bash"], setActiveTools() {}, sendMessage() {},
 	};
-	activate(pi as unknown as Parameters<typeof activate>[0], undefined, undefined, undefined, undefined, {}, undefined, settings, undefined, stubShellHost);
+	activate(pi as unknown as Parameters<typeof activate>[0], { pluginSettings: settings, shellHost: stubShellHost });
 	const harness: Harness = {
 		async exec(params) {
 			const result = await tools.exec_command!.execute("call", { title: "init test", yield_time_ms: 10_000, ...params }, undefined, undefined, ctx);

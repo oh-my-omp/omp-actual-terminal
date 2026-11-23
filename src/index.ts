@@ -6,7 +6,7 @@ import { Box, Text } from "@oh-my-pi/pi-tui";
 import { Type, type TUnsafe } from "@oh-my-pi/omptype/typebox";
 
 import { type AgentHost, type AgentIdentity, type ParkedRuntime, parkedRuntimes } from "../fork-features/agent-park.ts";
-import { type ActivatedExtension, withHostPresentation } from "../fork-features/omp-presentation.ts";
+import { type ActivateDeps, type ActivatedExtension, withHostPresentation } from "../fork-features/omp-presentation.ts";
 import { approvalCommand, approveBoundCommand, type CommandApprovalHost } from "../fork-features/command-approval.ts";
 import {
 	execCommandTopicPointers,
@@ -989,18 +989,18 @@ async function endRuntime(ctx: ExtensionCtx): Promise<void> {
 	}
 }
 
-export function activate(
-	pi: ExtensionAPI,
-	appearance: () => TerminalAppearance = () => "dark",
-	shellPath?: () => string | undefined,
-	approvalHost?: CommandApprovalHost,
-	invalidateGithubCache?: (command: string) => void,
-	lifecycleClock: LifecycleClock = {},
-	stopHost?: StopHost,
-	pluginSettings?: PluginSettingsReader,
-	agentHost?: AgentHost,
-	shellHost: ShellHost = noShellHost,
-): ActivatedExtension {
+export function activate(pi: ExtensionAPI, deps: ActivateDeps = {}): ActivatedExtension {
+	const {
+		appearance = () => "dark",
+		shellPath,
+		approvalHost,
+		invalidateGithubCache,
+		lifecycleClock = {},
+		stopHost,
+		pluginSettings,
+		agentHost,
+		shellHost = noShellHost,
+	} = deps;
 	let binding: HostBindingState = { kind: "pending" };
 	let hostCwd: string | undefined;
 	let agentId: string | undefined;

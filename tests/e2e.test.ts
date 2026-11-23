@@ -76,7 +76,7 @@ function makeHarness(shellPath: () => string | undefined = STUB_SHELL_PATH) {
 	};
 
 	const api = pi as unknown as Parameters<typeof activate>[0];
-	activate(api, undefined, shellPath, undefined, undefined, {}, undefined, undefined, undefined, stubShellHost);
+	activate(api, { shellPath, shellHost: stubShellHost });
 
 	return {
 		async call(toolName: string, params: any, signal?: AbortSignal, onUpdate?: (partial: any) => void) {
