@@ -375,7 +375,7 @@ describe("Console with real terminals", () => {
 		assert.deepEqual(h.killCalls, []);
 	});
 
-	it("ends the terminal as a person through End, then shows it is no longer stored", async (t) => {
+	it("ends the terminal as a person through End and closes once the terminal leaves the store", async (t) => {
 		const h = await makeHarness(t);
 		const session = h.spawn();
 		const call = h.open(session.id);
@@ -385,12 +385,33 @@ describe("Console with real terminals", () => {
 		await waitFor(() => h.store.get(session.id) === undefined, (listener) => h.store.subscribe(listener), "End removes the ended terminal");
 		assert.deepEqual(h.killCalls, [session.id]);
 		assert.equal(session.hasExited, true);
-		assert.deepEqual(headSpans(call.root), terminalPageFrame(undefined, session.id).head);
-		assert.equal(properties(screen(call.root)).hidden, true, "a removed terminal draws no screen");
-		assert.deepEqual(buttons(call.root), [LEAVE_ACTION]);
+		assert.equal(await call.promise, undefined);
+		assert.equal(call.resolved, true, "a terminal that left the store closes its Console");
+	});
+
+	it("closes when its terminal leaves the store by any other path, and then opens again", async (t) => {
+		const h = await makeHarness(t);
+		const first = h.spawn();
+		const call = h.open(first.id);
+		h.store.remove(first.id);
+		await call.promise;
+		assert.equal(call.resolved, true);
+
+		const second = h.spawn();
+		h.open(second.id);
+	});
+
+	it("keeps one Console per session: a second terminal opens none while one is showing", async (t) => {
+		const h = await makeHarness(t);
+		const shown = h.spawn();
+		const call = h.open(shown.id);
+		const later = h.spawn();
+		assert.equal(openTerminalConsole(later.id), false);
+		assert.equal(h.calls.length, 1);
 
 		call.root.handlers.onAction?.(LEAVE_ACTION, actionEvent(LEAVE_ACTION));
-		assert.equal(await call.promise, undefined);
+		await call.promise;
+		h.open(later.id);
 	});
 
 	it("opens a terminal only in its own session's UI, and none for a session without one", async (t) => {

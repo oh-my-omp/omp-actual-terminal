@@ -150,8 +150,10 @@ When omp renders natively in Tern:
 - **The Console opens with its call.** As omp's own `bash` `pty: true` opens
   its Console when the call starts, a terminal started by a session with a UI
   opens its Console as soon as it is running; a subagent's terminal and one
-  under `omp -p` open none. Once left, nothing opens it again: omp 19.2.0's
-  jobs page takes no actions from extensions.
+  under `omp -p` open none. A session shows one Console at a time: a terminal
+  started while one is showing opens none. A Console closes itself once its
+  terminal is no longer listed. Once left, nothing opens it again: omp
+  19.2.0's jobs page takes no actions from extensions.
 - **Console.** The Console shows a terminal full-pane in the frame of omp's
   own Console, headed by its job id, title and state: its
   retained history and current screen in colour, following new output and

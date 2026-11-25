@@ -284,6 +284,10 @@ class TerminalPage {
 	}
 
 	private readonly changed = (): void => {
+		if (this.session() === undefined) {
+			this.leave();
+			return;
+		}
 		this.revision.update((revision) => revision + 1);
 	};
 
@@ -397,6 +401,7 @@ interface HudActivation {
 	readonly store: () => SessionStore;
 	readonly kill: KillSession;
 	ui: ExtensionContext["ui"] | undefined;
+	consoleOpen: boolean;
 }
 
 interface HudRegistry {
@@ -425,17 +430,24 @@ function ownerOf(id: string): HudActivation | undefined {
 export function openTerminalConsole(id: string): boolean {
 	const owner = ownerOf(id);
 	const ui = owner?.ui;
-	if (owner === undefined || ui === undefined) return false;
+	if (owner === undefined || ui === undefined || owner.consoleOpen) return false;
+	owner.consoleOpen = true;
+	const closed = (): void => {
+		owner.consoleOpen = false;
+	};
 	void ui.custom<void>(
 		(host, _theme, _keybindings, done) =>
-			createRoot((dispose) => new TerminalPage(owner.store(), id, host, owner.kill, () => done(), dispose).view()),
+			createRoot((dispose) => new TerminalPage(owner.store(), id, host, owner.kill, () => {
+				closed();
+				done();
+			}, dispose).view()),
 		{ overlay: true },
-	);
+	).catch(closed);
 	return true;
 }
 
 export function mountTerminalHud(pi: ExtensionAPI, store: () => SessionStore, kill: KillSession): void {
-	const activation: HudActivation = { store, kill, ui: undefined };
+	const activation: HudActivation = { store, kill, ui: undefined, consoleOpen: false };
 	registry.activations.add(new WeakRef(activation));
 	pi.on("session_start", async (_event, eventCtx) => {
 		activation.ui = eventCtx.hasUI ? eventCtx.ui : undefined;
