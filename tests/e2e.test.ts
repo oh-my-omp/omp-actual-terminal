@@ -710,9 +710,10 @@ describe("omp-actual-terminal e2e", () => {
 			inflight.then(() => { returned = true; }, () => { returned = true; });
 			while (!existsSync(ready) && !returned) await delay(5);
 			const pending = await h.call("list_sessions", {});
-			assert.ok(!returned && pending.details.sessions.length === 0, "the session left its grace window before the shell ignored SIGTERM");
+			const inGraceWindow = !returned && pending.details.sessions.length === 0;
 			await h.emit("session_shutdown");
 			const r = await inflight;
+			assert.ok(inGraceWindow, "the session left its grace window before the shell ignored SIGTERM");
 			assert.equal(r.details.job_id, undefined, JSON.stringify(r.details));
 			assert.equal(r.details.signal, "SIGKILL", JSON.stringify(r.details));
 			assert.equal(r.details.shell, "/bin/bash", JSON.stringify(r.details));
