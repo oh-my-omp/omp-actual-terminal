@@ -60,9 +60,6 @@ The Node admission regression compiles the actual
 TypeScript entry before executing it in Node, whose strip-only loader cannot
 parse the Console's parameter properties; it runs against stub packages for the
 names the bundle imports, because the host packages ship TypeScript source.
-The missing-renderer regression runs the built presentation module in a child
-`bun --no-install` whose staged `@oh-my-pi/pi-tui` re-exports the real package
-root and `./tools/streaming-output` but has no `./tools` subpath.
 
 ## Repo layout
 
@@ -96,8 +93,8 @@ indexed by concern:
 | Bun.Terminal backend, runtime admission, spawn preflight, shell-exit events, process-group signals, Windows tree-kill | `src/pty.ts` |
 | Shell selection & argv construction; omp's cmd.exe test loaded at factory time | `src/shell.ts`; `src/shell-host.ts` |
 | `exec.initFile` plugin setting: parse, path resolution, the source-then-`eval` script for POSIX shells | `src/exec-init.ts`; omp's POSIX-shell test in `src/shell.ts` (`isPosixShell`); read per call in `runTerminal` (`src/index.ts`); `tests/exec-init.test.ts` |
-| omp-only host admission, top-level `loadMode`, bash delegation, argument/result display adapters | `src/omp-presentation.ts` |
-| Console from omp's jobs page: Open on a terminal job, the full-pane Console, the terminal's size while it is open | `src/tern-terminal-hud.ts`; `resize` in `src/session.ts`, `src/terminal-screen.ts` and `src/pty.ts` (`SpawnedChild`) |
+| omp-only host admission, top-level `loadMode`, bash delegation, argument/result display adapters, the bash/write/kill cards | `src/omp-presentation.ts` |
+| The full-pane Console over one terminal (`openTerminalConsole`), the terminal's size while it is open | `src/tern-terminal-hud.ts`; `resize` in `src/session.ts`, `src/terminal-screen.ts` and `src/pty.ts` (`SpawnedChild`) |
 | Removal of the `omp-unified-exec` Tern plugin that versions up to 0.14.7 installed | `src/tern-plugin-removal.ts` |
 | `term://` resources, read handler and screenshots | `src/terminal-resource.ts`, `src/terminal-url.ts`, `src/terminal-image.ts` |
 | Monitors: conditions, judge monitors, batching, End/match/judgment/reminder notices | `src/monitor-subscription.ts`; screen judgment through omp's judge chain in `src/screen-judge.ts`, reached per judgment through `RuntimeHost.judge` in `src/index.ts`; subscriptions owned by `src/completion.ts` (`startMonitor`) |
@@ -141,8 +138,8 @@ Ask the model to start a long-running command through `bash` with
 `kill_session`. Bash/write/kill must use omp's bash cards, and a `bash` call
 without `pty` must look exactly as without the plugin; monitor/set-on-exit/list
 use omp's default cards.
-For Tern, open a terminal from omp's jobs page and drive its Console in a real
-window as [Tern Console](#tern-console) describes.
+For Tern, check a terminal's tray card and the jobs page's output pane in a
+real window as [Tern Console](#tern-console) describes.
 
 For a fresh non-interactive tool execution:
 
@@ -177,8 +174,8 @@ bun test ./tests/long-wait.test.ts ./tests/wake-e2e.test.ts ./tests/terminal-lif
 # Display adapters and direct host-admission checks
 bun test ./tests/omp-presentation.test.ts
 
-# Console from omp's real jobs page over real Bun PTY sessions
-bun test ./tests/tern-terminal-hud.test.ts ./tests/omp-presentation.test.ts
+# Console on a stub ExtensionUiHost over real Bun PTY sessions
+bun test ./tests/tern-terminal-hud.test.ts
 ```
 
 ## Writing new tests
@@ -231,7 +228,7 @@ in `src/terminal-screen.ts`, `DEFAULT_REMIND_AFTER_MS` and
 `JUDGE_DEADLINE_MS` in `src/screen-judge.ts`, `RECLAIM_TTL_MS`,
 `RECLAIM_GRACE_MS`, `RECLAIM_LINGER_MS` and `LIFECYCLE_SWEEP_MS` in
 `src/terminal-lifecycle.ts`, the output caps in the host's
-`DEFAULT_MAX_BYTES` / `DEFAULT_MAX_LINES` (`@oh-my-pi/pi-tui/tools/streaming-output`). When you touch one:
+`DEFAULT_MAX_BYTES` / `DEFAULT_MAX_LINES` (`@oh-my-pi/pi-coding-agent/tools/streaming-output`). When you touch one:
 
 1. Update the value in its owning module.
 2. Update `## Constants` (and any prose quoting the value) in `README.md` and
@@ -261,18 +258,15 @@ defense for legacy results and fallback content.
 
 ### Tune TUI rendering
 
-Tool result cards: `src/omp-presentation.ts` adapts terminal `bash` results,
-write and kill to omp's exported bash renderer, including Tern's describe
-hooks, and hands omp's own `bash` results to it unchanged. Other tools
-use omp's default cards. Keep model content and persisted details unchanged by
+Tool result cards: `src/omp-presentation.ts` draws `bash`, write and kill.
+Other tools use omp's default cards. Keep model content and persisted details unchanged by
 display adapters. Update `tests/omp-presentation.test.ts`, then exercise the
 actual omp ANSI TUI and Tern path. A missing or reshaped required omp module
 must fail factory loading before tools register, not fall back to another
 rendering.
 
-The Console and the jobs page's Open: `src/tern-terminal-hud.ts`, covered by
-`tests/tern-terminal-hud.test.ts` on omp's real `JobsSheet` and real PTY sessions;
-requalify in a real Tern window as [Tern Console](#tern-console) describes.
+The Console: `src/tern-terminal-hud.ts`, covered by
+`tests/tern-terminal-hud.test.ts`.
 
 ## Debugging aids
 
@@ -529,31 +523,12 @@ parked subagent's terminal.
 
 ### Presentation
 
-`toolRenderers.bash` from `@oh-my-pi/pi-tui/tools` must still expose
-`renderCall`/`renderResult`/`describeCall`/`describeResult`/`mergeCallAndResult`/`inline`,
-accept `{command, cwd}` args and `{exitCode, wallTimeMs, async}` details, and
-render omp's own `bash` results passed to it unchanged.
 Package installation validation must still await the extension factory and
 propagate its rejection.
 
 ### Tern Console
 
-`@oh-my-pi/pi-tui/overlays/jobs-panel` must still export `JobsSheet` whose
-prototype holds `describe`, `handleInput` and `handleNativeEvent`; its
-`describe` must still key the selected job's detail (role `omp.jobs.detail`)
-by `stableKey(job id)` and put a spacer before Cancel job in its status row
-(role `omp.jobs.status`), and its `close` action must still close the page
-through its source whatever key `tui.select.cancel` is bound to.
-`@oh-my-pi/pi-tui/native/overlay` must still export
-`actionButton`/`actionBar`, and `@oh-my-pi/pi-tui/tools/bash-interactive`
-`normalizeInputForPty(data, applicationCursorKeys)`. The Console insets the
-terminal's grid 8 columns from the sheet as omp's own Console does
-(`NATIVE_SHEET_INSET_COLS` in `tools/bash-interactive.ts`, not exported):
-compare it on every upgrade. A custom overlay's `nativeOverlay` role and head
-must still reach Tern's overlay frame with `action` events and `handleInput`
-keys reaching the component, and the action ids
-`omp-actual-terminal.terminal.open`, `kill` and `leave` must not be one of
-Tern's own actions (0.9.5 consumes `open`, `copy` and `zoom` itself). omp's
+omp's
 tray (`@oh-my-pi/pi-coding-agent/modes/tray`) must still draw a job card's
 output from the job's `progressText` and open the jobs page on the card's job
 from its Open, and the jobs page's output pane must still read `progressText`
@@ -575,30 +550,22 @@ dark appearance (`palette "Dark appearance"`; `theme dark NAME` only picks the
 dark theme), both with no Tern plugin and with omp-todo-ng's extension and
 Tern plugin. A terminal's tray card, its closer look and the jobs page's output
 pane must show its current screen and follow a change within a second; the
-card's Open must show the jobs page with the terminal selected. omp's jobs page
-must offer Open (`o` and a button before Cancel
-job) on a selected terminal job, a subagent's included, and on no other job.
-Open must close the page and show the full-pane Console with the terminal's
-history, typed keys reaching a running `cat`, and the terminal's grid
-following the Console (`stty size`) and returning to its own `cols`/`rows`
-after Esc. Esc must leave the process alive and the composer usable; End must
-end the terminal as a person does; a model `write_stdin` while the Console is
-open must show in it. Other jobs must keep the page's list, detail, Cancel
-job and Close unchanged. A Tern config holding the old `omp-unified-exec`
+card's Open must show the jobs page with the terminal selected, and every job
+must keep the page's list, detail, Cancel job and Close unchanged. A Tern
+config holding the old `omp-unified-exec`
 plugin must list no `omp-unified-exec` after loading.
 
 ## Recording README demos
 
 A README demo is a real omp turn in a headless Tern session, filmed by Tern's
 own `record` scenario command and stored as `docs/assets/OUT.mp4` and
-`OUT.gif`. Record it again when the Console, the jobs page's Open or omp's
-tool cards change visibly.
+`OUT.gif`. Record it again when the tool cards or the tray change visibly.
 
 1. Start an isolated headless Tern with the owner's settings:
    `TERN_CONFIG_DIR=$D/config TERN_DAEMON_SOCKET=$D/daemon.sock tern serve
    --control $D/control.sock --out $D/out`, `$D` under `/tmp`, with
    `settings.json` copied into `$D/config`. omp's native rendering and the
-   Console need no Tern plugin, so `serve` shows them.
+   tool cards need no Tern plugin, so `serve` shows them.
 2. Drive it with `tern ctl --control $D/control.sock …`: `size 1120 760`, then
    `run "cd DIR; TMPDIR=/tmp omp --no-extensions -e $PWD/src/index.ts
    --no-session --no-title --model MODEL"` so session logs show `/tmp` rather
@@ -613,11 +580,7 @@ tool cards change visibly.
 3. Type prompts one character per `type` with `wait 28` between them (a
    prompt cannot contain `"`, which ends the scenario string), and switch to
    `record speed 3` while a model turn runs. A turn has ended when the last
-   `… this turn` text in `tern ctl tree` changes. Open omp's jobs page with
-   `/jobs`, select the terminal's job and press `o` (or `click` the Open
-   button, located with `tern ctl dump '[data-role="omp.jobs.status"]'`): in
-   the Console typed keys reach the terminal, Escape leaves it running, and
-   End ends it.
+   `… this turn` text in `tern ctl tree` changes.
 4. `record stop`, then `mkdir -p docs/assets` and encode
    `$D/out/serve/NAME.mp4` into `docs/assets/OUT.mp4` and `OUT.gif`:
 

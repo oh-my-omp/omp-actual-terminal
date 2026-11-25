@@ -4,6 +4,14 @@ All notable changes to this project. **Newest entries go on top.**
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed Open from omp's jobs page: omp 19.2.0's jobs page takes no actions from extensions, so no omp surface opens a terminal's Console
+
+### Fixed
+
+- Loaded on omp 19.2.0: the `bash`, `write_stdin` and `kill_session` cards are drawn from omp's UI nodes, the Console is an omp custom overlay, and host imports come from their 19.2.0 modules
+
 ## [0.17.2] - 2026-11-24
 
 ### Changed

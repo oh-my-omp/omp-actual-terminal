@@ -3,14 +3,13 @@
 English | [简体中文](README.zh-CN.md)
 
 Long-lived terminal sessions for [oh-my-pi](https://github.com/can1357/oh-my-pi)
-(omp), with a Console in Tern. The plugin takes over omp's `bash` with
+(omp). The plugin takes over omp's `bash` with
 `pty: true`: long commands, interactive programs (REPLs, TUIs, `ssh`, `sudo`),
 concurrent computation and dev-time daemons run in a PTY session of the
 session's own shell, which the model drives with input, reads and monitors
 instead of a single blocking call. Every other `bash` call stays omp's own.
 Sessions keep running between turns, with no deadline unless the call sets
-one, in main agents, subagents and `omp -p` alike, and a human can open any of
-them from omp's jobs page in Tern, watch it and type into it.
+one, in main agents, subagents and `omp -p` alike.
 
 ## Install
 
@@ -127,11 +126,10 @@ results remain in English.
   the sshd_config question during `apt upgrade`, `[Y/n]`, a password, a pager)
   wakes the agent.
 - **omp-native presentation.** `bash`, `write_stdin` and `kill_session`
-  render through omp's own bash card (command line, output, exit chip, error
-  tone), in the ANSI TUI and in Tern alike.
-- **A Console in Tern.** Open any of the model's terminals from omp's jobs
-  page, scroll back through it, type into it and leave it running, or end it,
-  without a tool call.
+  render as bash cards built from omp's own UI nodes (command line, output,
+  a state line with the exit code, job id and wall time, error tone), in the
+  ANSI TUI and in Tern alike; in Tern a `bash` call without `pty` keeps omp's
+  own card.
 
 ## Tern Console
 
@@ -144,11 +142,11 @@ When omp renders natively in Tern:
   the tray and the jobs page show its last screen followed by how it
   returned. The tray card's Open goes to the jobs page with that terminal
   selected.
-- **Open from the jobs page.** omp's jobs page lists every terminal as a job.
-  With a terminal selected, a subagent's included, its status row offers Open
-  (key `o`) before Cancel job; every other job keeps only omp's own actions.
-- **Console.** Open closes the jobs page and shows the terminal full-pane in
-  the frame of omp's own Console, headed by its job id, title and state: its
+- **No way to open the Console on omp 19.2.0.** omp 19.2.0's jobs page builds
+  its actions inside omp and takes none from extensions, so it offers no Open
+  for a terminal, and no other omp surface opens the Console described below.
+- **Console.** The Console shows a terminal full-pane in the frame of omp's
+  own Console, headed by its job id, title and state: its
   retained history and current screen in colour, following new output and
   scrollable back. Typed keys go to the terminal as omp's Console sends them,
   so the model sees their effect, and what the model writes with
@@ -159,18 +157,8 @@ When omp renders natively in Tern:
   which the model then reads as well; leaving gives the terminal back the
   `cols`/`rows` its call started it with.
 
-omp's ANSI TUI has no jobs page, so it offers no Console. Tool results stay
-plain text; explicit `read term://…/screen.png` requests return images.
-
-**How Open joins omp's jobs page.** omp has no extension point for job
-actions, so the extension wraps omp's `JobsSheet.prototype` (`describe`,
-`handleInput`, `handleNativeEvent`) once per process. It puts the Open button
-into a copy of the selected terminal's status row and leaves omp's own nodes
-unchanged; any other job's page is the one omp built. If a selected
-terminal's status row loses the spacer before its actions, describing fails
-with a "requalify" error instead of silently dropping Open. The page cannot
-tell a job that is not a terminal from a detail omp no longer keys by its job
-id, so such an omp change leaves Open absent; omp upgrades requalify that key.
+In omp's ANSI TUI tool results stay plain text; explicit
+`read term://…/screen.png` requests return images.
 
 **No Tern plugin.** The Console uses omp's own overlay role
 (`omp.overlay.console`), so Tern's built-in styles draw it. That role is a
@@ -710,7 +698,7 @@ background processes may still hold the terminal — or the terminal closes.
 - **Reclaim** kills whatever is left of the terminal's process group —
   background jobs holding the terminal on Linux, and jobs that outlived the
   closed terminal on macOS (SIGTERM, SIGKILL after 2 s) — and removes the
-  terminal from `list_sessions`, and its job no longer offers Open. The `term://` address and
+  terminal from `list_sessions`. The `term://` address and
   `log_path` stay readable. A terminal whose processes cannot be ended stays
   and is retried at the next check (on Windows a tree whose root has exited
   cannot be reached).
@@ -928,8 +916,8 @@ LIFECYCLE_SWEEP_MS           = 60_000 (lifecycle check interval)
 - **Early exit:** commands that finish within 150 ms never enter the session
   store; the result has `exit_code` and no `job_id`, and the job registered
   before the process started has already completed or failed.
-- **Returned terminals** stay in the store and `list_sessions`, and their jobs
-  keep offering Open, until their [lifecycle](#terminal-lifecycle) reclaims them; no tool call
+- **Returned terminals** stay in the store and `list_sessions` until their
+  [lifecycle](#terminal-lifecycle) reclaims them; no tool call
   removes them on observing the exit.
 - **Spawn failures** (missing shell or `cwd`) are checked before the PTY
   starts and surface as `failure_message` (`spawn <file> ENOENT: …`). A
@@ -1091,7 +1079,7 @@ src/
 ├── shell-host.ts         # omp's cmd.exe test, loaded at factory time
 ├── agent-park.ts         # omp's agent registry/lifecycle reader; parked subagents' terminal runtimes
 ├── session-binding.ts    # activation-local AgentSession identity for bash settings, stop detectors and the terminals' job owner
-├── tern-terminal-hud.ts  # Open on omp's jobs page for a terminal job; the full-pane Console
+├── tern-terminal-hud.ts  # the full-pane Console over one terminal
 ├── terminal-resource.ts  # process-global terminal keys, live/frozen projections
 ├── terminal-url.ts       # omp `term://` read handler; reports reads to the terminal's owner
 ├── terminal-image.ts     # terminal screenshots (SVG → PNG)

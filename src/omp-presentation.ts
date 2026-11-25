@@ -1,13 +1,15 @@
 import type {
 	ExtensionAPI,
+	ExtensionRender,
+	ExtensionTheme,
 	ToolDefinition,
 	ToolRenderResultOptions,
 	TruncationResult,
 } from "@oh-my-pi/pi-coding-agent";
 import type * as GhCache from "@oh-my-pi/pi-coding-agent/tools/gh-cache-invalidation";
+import { jsx, nativeRendering } from "@oh-my-pi/pi-tui";
+import type { JSX, JSXNode, UiKind } from "@oh-my-pi/pi-tui";
 import type * as ThemeRuntime from "@oh-my-pi/pi-tui/theme/runtime";
-import type * as PiTuiTools from "@oh-my-pi/pi-tui/tools";
-import type { Component } from "@oh-my-pi/pi-tui";
 
 import { sanitizeOutputText } from "./output-safety.ts";
 import { tr } from "./omomp-shared/i18n.ts";
@@ -51,46 +53,30 @@ function streamedArgs<K extends string>(args: unknown): StreamedArgs<K> {
 	return typeof args === "object" ? (args ?? undefined) : undefined;
 }
 
-/**
- * The bash entry of `toolRenderers` with the members the delegate below
- * requires. `describeCall`/`describeResult`/`mergeCallAndResult`/`inline` are
- * optional on the host `ToolRenderer`; {@link parseShellRenderer} proves them
- * present and narrows the entry to this shape.
- */
-type BashRenderer = Required<
-	Pick<PiTuiTools.ToolRenderer, "renderCall" | "renderResult" | "describeCall" | "describeResult" | "mergeCallAndResult" | "inline">
->;
+type ToolRenderResult = Parameters<NonNullable<ToolDefinition["renderResult"]>>[0];
 
-/**
- * Renderer hooks spliced onto a presented tool definition, typed by the host's
- * `ToolDefinition` hook signatures. `mergeCallAndResult` and `inline` are
- * forwarded for `applyToolProxy` (they are `ToolRenderer` members, absent from
- * `ToolDefinition`).
- */
-type OmpToolHooks = Required<Pick<ToolDefinition, "renderCall" | "renderResult" | "describeCall" | "describeResult">> &
-	Required<Pick<PiTuiTools.ToolRenderer, "mergeCallAndResult" | "inline">>;
+type ShellHeadline = "command" | "description";
 
-function parseShellRenderer(value: Partial<Pick<typeof PiTuiTools, "toolRenderers">>): BashRenderer {
-	const bash = value.toolRenderers?.bash;
-	if (!bash) {
-		throw new Error(
-			"omp-actual-terminal: @oh-my-pi/pi-tui/tools toolRenderers.bash no longer provides renderCall/renderResult/describeCall/describeResult/mergeCallAndResult/inline; requalify src/omp-presentation.ts for this omp version",
-		);
-	}
-	const { renderCall, renderResult, describeCall, describeResult, mergeCallAndResult, inline } = bash;
-	if (
-		typeof renderCall !== "function" ||
-		typeof renderResult !== "function" ||
-		typeof describeCall !== "function" ||
-		typeof describeResult !== "function" ||
-		typeof mergeCallAndResult !== "boolean" ||
-		typeof inline !== "boolean"
-	) {
-		throw new Error(
-			"omp-actual-terminal: @oh-my-pi/pi-tui/tools toolRenderers.bash no longer provides renderCall/renderResult/describeCall/describeResult/mergeCallAndResult/inline; requalify src/omp-presentation.ts for this omp version",
-		);
-	}
-	return { renderCall, renderResult, describeCall, describeResult, mergeCallAndResult, inline };
+interface ShellToolHooks {
+	readonly renderCall: (
+		args: unknown,
+		options: ToolRenderResultOptions,
+		theme?: ExtensionTheme,
+	) => ExtensionRender | undefined;
+	readonly renderResult: (
+		result: ToolRenderResult,
+		options: ToolRenderResultOptions,
+		theme?: ExtensionTheme,
+		args?: unknown,
+	) => ExtensionRender | undefined;
+	readonly mergeCallAndResult: true;
+}
+
+function element<K extends UiKind>(
+	kind: K,
+	attributes: JSX.IntrinsicElements[K] & Readonly<Record<string, unknown>>,
+): JSXNode {
+	return jsx(kind, attributes);
 }
 
 export type ResultView =
@@ -128,28 +114,21 @@ export type ResultView =
 	  }
 	| { readonly kind: "message"; readonly text: string; readonly isError: boolean };
 
-type PersistedDetails = {
-	readonly [K in
-		| "operation"
-		| "status"
-		| "output"
-		| "job_id"
-		| "exit_code"
-		| "signal"
-		| "failure_message"
-		| "wall_time_seconds"
-		| "log_path"
-		| "truncation"
-		| "escalated"
-		| "found"]?: unknown;
-};
+type UnknownRecord = Readonly<Record<string, unknown>>;
 
-function messageView(result: PiTuiTools.ToolRenderResult, isError: boolean): ResultView {
-	const text = result.content
-		.map((block) => (block.type === "text" && typeof block.text === "string" ? block.text : ""))
+function recordOf(value: unknown): UnknownRecord | undefined {
+	return typeof value === "object" && value !== null ? (value as UnknownRecord) : undefined;
+}
+
+function contentText(result: ToolRenderResult): string {
+	return result.content
+		.map((block) => (block.type === "text" ? block.text : ""))
 		.filter((text) => text.length > 0)
 		.join("\n");
-	return { kind: "message", text: sanitizeOutputText(text), isError };
+}
+
+function messageView(result: ToolRenderResult, isError: boolean): ResultView {
+	return { kind: "message", text: sanitizeOutputText(contentText(result)), isError };
 }
 
 function optionalString(value: unknown): string | undefined {
@@ -178,11 +157,10 @@ function isTruncationResult(value: unknown): value is TruncationResult {
 	);
 }
 
-export function parseResultView(result: PiTuiTools.ToolRenderResult, isPartial: boolean): ResultView {
-	const details: PersistedDetails | undefined =
-		typeof result.details === "object" && result.details !== null ? result.details : undefined;
+export function parseResultView(result: ToolRenderResult, isPartial: boolean): ResultView {
+	const details = recordOf(result.details);
 	if (details?.operation === "kill_session" && details.found === false) return messageView(result, true);
-	if (typeof details?.output !== "string") return messageView(result, result.isError === true);
+	if (details === undefined || typeof details.output !== "string") return messageView(result, result.isError === true);
 	const output = sanitizeOutputText(details.output);
 	if (isPartial) return { kind: "streaming", output };
 
@@ -326,68 +304,126 @@ export function killShellArgs(args: StreamedArgs<"job_id" | "signal">): ShellArg
 	return { command: tr(`# kill ${target} (${signal})`, `# 结束 ${target}（${signal}）`) };
 }
 
-/**
- * `ToolDefinition` render hooks return a `Component`, but the host
- * `ToolRenderer` signature permits `undefined`. The presented tools cannot
- * paint nothing silently; fail loudly instead of discarding the result.
- */
-function requireComponent(component: Component | undefined): Component {
-	if (component === undefined) {
-		throw new Error(
-			"omp-actual-terminal: @oh-my-pi/pi-tui/tools toolRenderers.bash rendered no component; requalify src/omp-presentation.ts for this omp version",
-		);
-	}
-	return component;
+const COLLAPSED_OUTPUT_LINES = 10;
+
+function shellArgsOf(args: unknown): ShellArgs {
+	const value = streamedArgs<"command" | "cwd">(args);
+	return { command: optionalString(value?.command), cwd: optionalString(value?.cwd) };
 }
 
-function delegateToShell<K extends string>(
-	bash: BashRenderer,
-	adaptArgs: (args: StreamedArgs<K>) => ShellArgs,
-): OmpToolHooks {
-	const adaptResult = (result: PiTuiTools.ToolRenderResult, options: ToolRenderResultOptions): ShellResult =>
-		toShellResult(parseResultView(result, options.isPartial));
+function collapsedOutput(text: string, expanded: boolean): string {
+	const body = text.replace(/\n+$/, "");
+	if (expanded) return body;
+	const lines = body.split("\n");
+	return lines.length <= COLLAPSED_OUTPUT_LINES ? body : lines.slice(-COLLAPSED_OUTPUT_LINES).join("\n");
+}
+
+function formatWallTime(ms: number): string {
+	if (ms < 1000) return `${Math.round(ms)}ms`;
+	if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+	const minutes = Math.floor(ms / 60_000);
+	const seconds = Math.floor((ms % 60_000) / 1000);
+	return seconds > 0 ? `${minutes}m${seconds}s` : `${minutes}m`;
+}
+
+interface CardState {
+	readonly word: string;
+	readonly token: string;
+}
+
+function cardState(result: ShellResult | undefined, options: ToolRenderResultOptions): CardState {
+	const job = result?.details.async;
+	if (job !== undefined) return { word: `background · job ${job.jobId}`, token: "warning" };
+	if (result === undefined || options.isPartial) return { word: "running", token: "warning" };
+	const exitCode = result.details.exitCode;
+	if (exitCode !== undefined) {
+		return { word: `exit ${exitCode}`, token: exitCode === 0 && !result.isError ? "success" : "error" };
+	}
+	return result.isError ? { word: "failed", token: "error" } : { word: "killed", token: "muted" };
+}
+
+function headlineNode(command: string | undefined, headline: ShellHeadline): JSXNode {
+	const text = command ?? "…";
+	switch (headline) {
+		case "command":
+			return element("code", { lang: "bash", text: `$ ${text}` });
+		case "description":
+			return element("text", { spans: [{ t: text, s: "muted" }] });
+	}
+}
+
+function footerNode(result: ShellResult | undefined, options: ToolRenderResultOptions): JSXNode {
+	const state = cardState(result, options);
+	const spans: Array<{ readonly t: string; readonly s?: string }> = [{ t: state.word, s: state.token }];
+	const wallTimeMs = result?.details.wallTimeMs;
+	if (wallTimeMs !== undefined) spans.push({ t: " · ", s: "muted" }, { t: formatWallTime(wallTimeMs), s: "muted" });
+	return element("text", { spans });
+}
+
+export function shellCard(
+	args: ShellArgs,
+	result: ShellResult | undefined,
+	options: ToolRenderResultOptions,
+	headline: ShellHeadline,
+): ExtensionRender {
+	const children: JSXNode[] = [headlineNode(args.command, headline)];
+	const output = result === undefined ? "" : collapsedOutput(contentText(result), options.expanded);
+	if (output.length > 0) children.push(element("ansi", { text: output }));
+	children.push(footerNode(result, options));
+	return element("col", { gap: "xs", children });
+}
+
+export function shellToolHooks(headline: ShellHeadline, adaptArgs: (args: unknown) => ShellArgs): ShellToolHooks {
 	return {
-		renderCall: (args, options, theme) =>
-			requireComponent(bash.renderCall(adaptArgs(streamedArgs(args)), options, theme)),
-		renderResult: (result, options, theme, args) =>
-			requireComponent(bash.renderResult(adaptResult(result, options), options, theme, adaptArgs(streamedArgs(args)))),
-		describeCall: (args, options) => bash.describeCall(adaptArgs(streamedArgs(args)), options),
-		describeResult: (result, options, args) => {
-			const shell = adaptResult(result, options);
-			const view = bash.describeResult(shell, options, adaptArgs(streamedArgs(args)));
-			return shell.isError && view !== undefined ? { ...view, tone: view.tone ?? "error" } : view;
-		},
-		mergeCallAndResult: bash.mergeCallAndResult,
-		inline: bash.inline,
+		mergeCallAndResult: true,
+		renderCall: (args, options) => shellCard(adaptArgs(args), undefined, options, headline),
+		renderResult: (result, options, _theme, args) =>
+			shellCard(adaptArgs(args), toShellResult(parseResultView(result, options.isPartial)), options, headline),
 	};
 }
 
-/** Whether a bash result came from a plugin terminal rather than from omp's own bash. */
-function isTerminalResult(result: PiTuiTools.ToolRenderResult): boolean {
-	const details: PersistedDetails | undefined =
-		typeof result.details === "object" && result.details !== null ? result.details : undefined;
-	return details?.operation === "bash";
+function isTerminalResult(result: ToolRenderResult): boolean {
+	return recordOf(result.details)?.operation === "bash";
 }
 
-/**
- * omp drops its own renderer for a re-registered bash, so the plugin hands every bash call back
- * to it: the arguments are omp's own, results of omp's bash pass through, and only terminal
- * results are adapted.
- */
-function presentBash(bash: BashRenderer): OmpToolHooks {
-	const adapt = (result: PiTuiTools.ToolRenderResult, options: ToolRenderResultOptions): PiTuiTools.ToolRenderResult | ShellResult =>
-		isTerminalResult(result) ? toShellResult(parseResultView(result, options.isPartial)) : result;
+function isTerminalCall(args: unknown): boolean {
+	return streamedArgs<"pty">(args)?.pty === true;
+}
+
+function ompShellResult(result: ToolRenderResult): ShellResult {
+	const details = recordOf(result.details);
+	const job = recordOf(details?.async);
+	const jobId = job?.state === "running" && typeof job.jobId === "string" ? job.jobId : undefined;
+	const exitCode = optionalNumber(details?.exitCode);
+	const wallTimeMs = optionalNumber(details?.wallTimeMs);
+	return shellResult(
+		sanitizeOutputText(contentText(result)),
+		jobId === undefined
+			? { exitCode, wallTimeMs }
+			: { exitCode, wallTimeMs, async: { state: "running", jobId, type: "bash" } },
+		result.isError === true,
+	);
+}
+
+export function bashToolHooks(): ShellToolHooks {
 	return {
-		renderCall: (args, options, theme) => requireComponent(bash.renderCall(args, options, theme)),
-		renderResult: (result, options, theme, args) => requireComponent(bash.renderResult(adapt(result, options), options, theme, args)),
-		describeCall: (args, options) => bash.describeCall(args, options),
-		describeResult: (result, options, args) => {
-			const shown = adapt(result, options);
-			const view = bash.describeResult(shown, options, args);
-			return shown.isError === true && view !== undefined ? { ...view, tone: view.tone ?? "error" } : view;
+		mergeCallAndResult: true,
+		renderCall: (args, options) => {
+			if (!isTerminalCall(args) && nativeRendering()) return undefined;
+			return shellCard(shellArgsOf(args), undefined, options, "command");
 		},
-		mergeCallAndResult: bash.mergeCallAndResult,
-		inline: bash.inline,
+		renderResult: (result, options, _theme, args) => {
+			if (isTerminalResult(result)) {
+				return shellCard(
+					shellArgsOf(args),
+					toShellResult(parseResultView(result, options.isPartial)),
+					options,
+					"command",
+				);
+			}
+			if (nativeRendering()) return undefined;
+			return shellCard(shellArgsOf(args), ompShellResult(result), options, "command");
+		},
 	};
 }
 
@@ -398,15 +434,11 @@ function isShellPresented(name: string): name is ShellPresentedTool {
 	return (SHELL_PRESENTED_TOOLS as readonly string[]).includes(name);
 }
 
-/**
- * The bash renderer is required; a missing or reshaped one fails plugin loading.
- */
 export async function presentOnOmp(pi: ExtensionAPI): Promise<ExtensionAPI> {
-	const bash = parseShellRenderer(await import("@oh-my-pi/pi-tui/tools"));
-	const hooks: Record<ShellPresentedTool, OmpToolHooks> = {
-		bash: presentBash(bash),
-		write_stdin: delegateToShell(bash, writeStdinShellArgs),
-		kill_session: delegateToShell(bash, killShellArgs),
+	const hooks: Record<ShellPresentedTool, ShellToolHooks> = {
+		bash: bashToolHooks(),
+		write_stdin: shellToolHooks("description", (args) => writeStdinShellArgs(streamedArgs(args))),
+		kill_session: shellToolHooks("description", (args) => killShellArgs(streamedArgs(args))),
 	};
 	const registerTool: ExtensionAPI["registerTool"] = (definition) => {
 		const overrides = isShellPresented(definition.name)
