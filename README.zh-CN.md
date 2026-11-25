@@ -3,7 +3,7 @@
 [English](README.md) | 简体中文
 
 为 [oh-my-pi](https://github.com/can1357/oh-my-pi)（omp）提供长时间运行的终端
-会话。插件接管 omp 的 `bash` 中带 `pty: true` 的调用：长命令、交互程序（REPL、TUI、`ssh`、`sudo`）、并发计算和开发期 daemon 在本会话自己 shell 的 PTY 会话里运行，由模型通过写入、读取和 monitor 来驱动，而不是一次阻塞到底的调用。其余 `bash` 调用仍是 omp 自己的。会话在多轮对话之间持续运行，调用不设 `timeout` 就没有截止时间；主 agent、子 agent 和 `omp -p` 里都一样。
+会话。插件接管 omp 的 `bash` 中带 `pty: true` 的调用：长命令、交互程序（REPL、TUI、`ssh`、`sudo`）、并发计算和开发期 daemon 在本会话自己 shell 的 PTY 会话里运行，由模型通过写入、读取和 monitor 来驱动，而不是一次阻塞到底的调用。其余 `bash` 调用仍是 omp 自己的。会话在多轮对话之间持续运行，调用不设 `timeout` 就没有截止时间；主 agent、子 agent 和 `omp -p` 里都一样。与 omp 自己的 `pty: true` 一样，带 UI 的会话启动的终端会打开它的 Console，人在其中查看它、向它输入。
 
 ## 安装
 
@@ -47,6 +47,7 @@ Console 都遵循 `OMOMP_LANG`（不区分大小写的 `en` 或 `zh`）。未设
 - **等待匹配输出。** `monitor` 不消费输出地观察已有会话，在匹配批次、judge 模型判定满足所述意图的新屏幕或结束时唤醒模型；默认最多成功返回十次。monitor 20 分钟没有返回时，会提醒 agent 一次去检查会话。
 - **等待输入提醒。** 无论有没有 monitor，会话屏幕停在 agent 还没看过的提示上（`apt upgrade` 询问 sshd_config 这类 debconf/whiptail 对话框、`[Y/n]`、密码、分页器）时，都会唤醒 agent。
 - **omp 原生呈现。** `bash`、`write_stdin` 和 `kill_session` 渲染为用 omp 自己的 UI 节点搭成的 bash 卡片（命令行、输出、带退出码、job id 和耗时的状态行、错误配色），在 ANSI TUI 和 Tern 里都是如此；在 Tern 里，不带 `pty` 的 `bash` 调用保留 omp 自己的卡片。
+- **给人用的 Console。** 终端在其调用启动它时打开 Console，与 omp 自己的 `pty: true` Console 的打开方式相同：不用调用工具就能回滚查看、向它输入、离开后让它继续运行，或结束它。
 
 <a id="tern-console"></a>
 
@@ -55,11 +56,11 @@ Console 都遵循 `OMOMP_LANG`（不区分大小写的 `en` 或 `zh`）。未设
 当 omp 在 Tern 里原生渲染时：
 
 - **tray 与 jobs 页面上的屏幕。** 每个终端的 job 都带着它的当前屏幕，屏幕变化后半秒内更新：tray 卡片显示最后几行，卡片的展开预览显示更多行，jobs 页面的输出区显示整屏。终端返回后，tray 和 jobs 页面显示它的最后一屏，后接它的返回方式。tray 卡片的 Open 进入 jobs 页面并选中这个终端。
-- **omp 19.2.0 上无法打开 Console。** omp 19.2.0 的 jobs 页面在 omp 内部构建自己的动作，不接受扩展提供的动作，因此不为终端提供「打开」，omp 也没有其他界面能打开下面描述的 Console。
+- **Console 随调用打开。** 与 omp 自己的 `bash` `pty: true` 在调用开始时打开 Console 一样，带 UI 的会话启动的终端一运行就打开它的 Console；子 agent 的终端和 `omp -p` 下的终端不打开。离开之后没有入口能再次打开它：omp 19.2.0 的 jobs 页面不接受扩展提供的动作。
 - **Console。** Console 把终端显示为全屏页，框架与 omp 自己的 Console 相同，题头是 job id、标题和状态：显示保留的历史和当前屏幕，带颜色，跟随新输出，并可向上回滚。键入的按键按 omp 的 Console 的方式发给终端，模型能看到效果；模型用 `write_stdin` 写入的内容也立即显示在这里。Esc /「离开」关闭 Console，终端继续运行；「结束」按人工结束处理这个终端，它的 job 显示为已取消。
 - **尺寸。** Console 打开期间，终端采用 Console 的网格，模型此时读到的也是这个网格；离开后，终端恢复为其调用启动它时的 `cols`/`rows`。
 
-在 omp 的 ANSI TUI 里，工具结果仍是纯文本；显式 `read term://…/screen.png` 请求返回图像。
+在 omp 的 ANSI TUI 里，Console 显示为屏幕底部的 sheet，题头、按键、「离开」和「结束」都相同。工具结果仍是纯文本；显式 `read term://…/screen.png` 请求返回图像。
 
 **不需要 Tern 插件。** Console 使用 omp 自己的 overlay role（`omp.overlay.console`），所以由 Tern 的自带样式绘制。这个 role 是 omp 与 Tern 的展示层契约，升级时需重新验证。本扩展会移除早期版本安装的 `omp-unified-exec` Tern 插件，因为它的样式表仍会移动 omp 共享的 widget 容器：在 omp 等待的扩展 factory 中，先执行 Tern 的 `plugin list`，再执行 `plugin remove`（Tern 回答它是链接时改用 `plugin unlink`），然后确认 Tern 不再列出它。没有 `tern` 时什么也不做；Tern 可用但失败时，加载失败并给出它的诊断信息。
 

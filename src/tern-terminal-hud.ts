@@ -424,7 +424,7 @@ function ownerOf(id: string): HudActivation | undefined {
 
 export function openTerminalConsole(id: string): boolean {
 	const owner = ownerOf(id);
-	const ui = liveActivations().find((activation) => activation.ui !== undefined)?.ui;
+	const ui = owner?.ui;
 	if (owner === undefined || ui === undefined) return false;
 	void ui.custom<void>(
 		(host, _theme, _keybindings, done) =>

@@ -47,6 +47,7 @@ import type { MonitorScriptResult } from "./script-result.ts";
 import { ExecSession } from "./session.ts";
 import { SessionStore } from "./session-store.ts";
 import { type JobHost, TerminalJob } from "./terminal-job.ts";
+import { openTerminalConsole } from "./tern-terminal-hud.ts";
 import { buildShellCommand, chooseShell, IS_WINDOWS, resolveBinary, resolveWindowsShell, type TerminalShell } from "./shell.ts";
 import type { TerminalAppearance } from "./terminal-screen.ts";
 import {
@@ -505,6 +506,7 @@ async function runTerminal(
 		// doesn't let the session be GC'd / lose its place.
 		const { pruned, count } = ctx.store.insert(session);
 		watchSessionExit(ctx, session);
+		openTerminalConsole(session.id);
 		if (pruned) {
 			unwatchSessionExit(ctx, pruned.id);
 			ctx.coordinator.handleEviction(pruned);

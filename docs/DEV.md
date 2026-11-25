@@ -138,8 +138,10 @@ Ask the model to start a long-running command through `bash` with
 `kill_session`. Bash/write/kill must draw bash cards whose state line matches
 the call's exit, and in Tern a `bash` call without `pty` must look exactly as
 without the plugin; monitor/set-on-exit/list use omp's default cards.
-For Tern, check a terminal's tray card and the jobs page's output pane in a
-real window as [Tern Console](#tern-console) describes.
+A terminal the main agent starts must open its Console, take typed keys and
+keep running after Esc. For Tern, also check a terminal's tray card and the
+jobs page's output pane in a real window as [Tern Console](#tern-console)
+describes.
 
 For a fresh non-interactive tool execution:
 
@@ -556,7 +558,7 @@ plugin must list no `omp-unified-exec` after loading.
 
 A README demo is a real omp turn in a headless Tern session, filmed by Tern's
 own `record` scenario command and stored as `docs/assets/OUT.mp4` and
-`OUT.gif`. Record it again when the tool cards or the tray change visibly.
+`OUT.gif`. Record it again when the Console, the tool cards or the tray change visibly.
 
 1. Start an isolated headless Tern with the owner's settings:
    `TERN_CONFIG_DIR=$D/config TERN_DAEMON_SOCKET=$D/daemon.sock tern serve

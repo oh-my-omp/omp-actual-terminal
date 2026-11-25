@@ -393,17 +393,18 @@ describe("Console with real terminals", () => {
 		assert.equal(await call.promise, undefined);
 	});
 
-	it("opens a subagent's terminal in the session that has a UI and ends it through its own activation", async (t) => {
-		const main = await makeHarness(t);
+	it("opens a terminal only in its own session's UI, and none for a session without one", async (t) => {
+		const first = await makeHarness(t);
+		const second = await makeHarness(t);
 		const subagent = await makeHarness(t, false);
-		const session = subagent.spawn();
 
-		const call = main.open(session.id);
-		assert.equal(subagent.calls.length, 0, "a headless activation has no UI to open in");
-		call.root.handlers.onAction?.(KILL_ACTION, actionEvent(KILL_ACTION));
-		await waitFor(() => subagent.store.get(session.id) === undefined, (listener) => subagent.store.subscribe(listener), "End removes the ended terminal");
-		assert.deepEqual(subagent.killCalls, [session.id]);
-		assert.deepEqual(main.killCalls, []);
+		const own = second.spawn();
+		second.open(own.id);
+		assert.equal(first.calls.length, 0, "another session's UI shows nothing");
+
+		const headless = subagent.spawn();
+		assert.equal(openTerminalConsole(headless.id), false);
+		assert.deepEqual([first.calls.length, second.calls.length, subagent.calls.length], [0, 1, 0], "a session without a UI opens no Console");
 	});
 
 	it("opens nothing for an id no activation stores", async (t) => {

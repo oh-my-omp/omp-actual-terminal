@@ -6,7 +6,7 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Breaking Changes
 
-- Removed Open from omp's jobs page: omp 19.2.0's jobs page takes no actions from extensions, so no omp surface opens a terminal's Console
+- Replaced Open on omp's jobs page, which omp 19.2.0 no longer lets extensions add, with the Console opening when a session with a UI starts the terminal, as omp's own `pty: true` Console does; a subagent's terminal and one under `omp -p` open none
 
 ### Fixed
 

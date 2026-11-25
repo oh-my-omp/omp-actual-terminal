@@ -9,7 +9,9 @@ concurrent computation and dev-time daemons run in a PTY session of the
 session's own shell, which the model drives with input, reads and monitors
 instead of a single blocking call. Every other `bash` call stays omp's own.
 Sessions keep running between turns, with no deadline unless the call sets
-one, in main agents, subagents and `omp -p` alike.
+one, in main agents, subagents and `omp -p` alike. As with omp's own
+`pty: true`, a terminal a session with a UI starts opens its Console, where a
+human watches it and types into it.
 
 ## Install
 
@@ -130,6 +132,9 @@ results remain in English.
   a state line with the exit code, job id and wall time, error tone), in the
   ANSI TUI and in Tern alike; in Tern a `bash` call without `pty` keeps omp's
   own card.
+- **A Console for a human.** A terminal opens its Console when its call starts
+  it, as omp's own `pty: true` Console opens: scroll back through it, type
+  into it and leave it running, or end it, without a tool call.
 
 ## Tern Console
 
@@ -142,9 +147,11 @@ When omp renders natively in Tern:
   the tray and the jobs page show its last screen followed by how it
   returned. The tray card's Open goes to the jobs page with that terminal
   selected.
-- **No way to open the Console on omp 19.2.0.** omp 19.2.0's jobs page builds
-  its actions inside omp and takes none from extensions, so it offers no Open
-  for a terminal, and no other omp surface opens the Console described below.
+- **The Console opens with its call.** As omp's own `bash` `pty: true` opens
+  its Console when the call starts, a terminal started by a session with a UI
+  opens its Console as soon as it is running; a subagent's terminal and one
+  under `omp -p` open none. Once left, nothing opens it again: omp 19.2.0's
+  jobs page takes no actions from extensions.
 - **Console.** The Console shows a terminal full-pane in the frame of omp's
   own Console, headed by its job id, title and state: its
   retained history and current screen in colour, following new output and
@@ -157,7 +164,8 @@ When omp renders natively in Tern:
   which the model then reads as well; leaving gives the terminal back the
   `cols`/`rows` its call started it with.
 
-In omp's ANSI TUI tool results stay plain text; explicit
+In omp's ANSI TUI the Console opens as a sheet at the foot of the screen, with
+the same head, keys, Leave and End. Tool results stay plain text; explicit
 `read term://…/screen.png` requests return images.
 
 **No Tern plugin.** The Console uses omp's own overlay role
