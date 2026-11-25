@@ -5,7 +5,6 @@ import { rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { type AgentToolResult, type AgentToolUpdateCallback, type CustomTool, type ExtensionAPI, type ExtensionContext, type ImageAttachmentEntry, type SessionStopEvent, type SessionSwitchEvent, type Settings, type Skill, type ToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import type { ResolveContext } from "@oh-my-pi/pi-coding-agent/internal-urls/types";
-import { Box, Text } from "@oh-my-pi/pi-tui";
 import { Type } from "@oh-my-pi/omptype/typebox";
 
 import { type AgentHost, type AgentIdentity, type ParkedRuntime, parkedRuntimes } from "./agent-park.ts";
@@ -1364,11 +1363,7 @@ export function activate(
 	registerActualTerminalCompactHandoff(pi, () => ctx.store);
 	const urlRuntime = createTerminalUrlRuntime(currentRuntime);
 	setTerminalUrlRuntime(urlRuntime);
-	pi.registerMessageRenderer("omp-actual-terminal-notice", (message) => {
-		const box = new Box(1, 1);
-		box.addChild(new Text(buildNoticeDisplayMessage(message.details), 0, 0));
-		return box;
-	});
+	pi.registerMessageRenderer("omp-actual-terminal-notice", (message) => buildNoticeDisplayMessage(message.details));
 
 	pi.on("tool_execution_end", async (event) => {
 		ctx.lifecycle.commitToolReads(event.toolCallId, event.isError === true);

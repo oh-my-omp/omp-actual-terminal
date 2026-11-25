@@ -12,7 +12,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
 import type { ExtensionAPI, ToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import { loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
-import { DEFAULT_MAX_LINES } from "@oh-my-pi/pi-tui/tools/streaming-output";
+import { DEFAULT_MAX_LINES } from "@oh-my-pi/pi-coding-agent/tools/streaming-output";
 import { Type } from "@oh-my-pi/omptype/typebox";
 
 import {

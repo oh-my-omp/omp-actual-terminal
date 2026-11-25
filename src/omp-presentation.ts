@@ -5,7 +5,7 @@ import type {
 	TruncationResult,
 } from "@oh-my-pi/pi-coding-agent";
 import type * as GhCache from "@oh-my-pi/pi-coding-agent/tools/gh-cache-invalidation";
-import type * as ThemeModule from "@oh-my-pi/pi-tui/theme";
+import type * as ThemeRuntime from "@oh-my-pi/pi-tui/theme/runtime";
 import type * as PiTuiTools from "@oh-my-pi/pi-tui/tools";
 import type { Component } from "@oh-my-pi/pi-tui";
 
@@ -22,7 +22,7 @@ import { loadPluginSettingsReader, type PluginSettingsReader } from "./plugin-se
 import { loadStopHost, type StopHost } from "./stop-gate.ts";
 import type { LifecycleClock } from "./terminal-lifecycle.ts";
 import { scheduleLogArchive } from "./log-archive.ts";
-import { loadTernHudHost, mountTerminalHud } from "./tern-terminal-hud.ts";
+import { mountTerminalHud } from "./tern-terminal-hud.ts";
 import { initializeTerminalUrls } from "./terminal-url.ts";
 import type * as TernPluginRemoval from "./tern-plugin-removal.ts";
 
@@ -430,13 +430,11 @@ export interface ActivatedExtension {
 }
 
 async function loadOmpAppearance(): Promise<() => TerminalAppearance> {
-	const themeModule: Partial<Pick<typeof ThemeModule, "isLightTheme" | "getCurrentThemeName">> =
-		await import("@oh-my-pi/pi-tui/theme");
-	const { isLightTheme, getCurrentThemeName } = themeModule;
-	if (typeof isLightTheme !== "function" || typeof getCurrentThemeName !== "function") {
-		throw new Error("omp-actual-terminal: @oh-my-pi/pi-tui/theme lacks isLightTheme/getCurrentThemeName");
+	const { currentTheme }: Partial<Pick<typeof ThemeRuntime, "currentTheme">> = await import("@oh-my-pi/pi-tui/theme/runtime");
+	if (typeof currentTheme !== "function") {
+		throw new Error("omp-actual-terminal: @oh-my-pi/pi-tui/theme/runtime lacks currentTheme");
 	}
-	return () => (isLightTheme(getCurrentThemeName()) ? "light" : "dark");
+	return () => (currentTheme().dark ? "dark" : "light");
 }
 
 async function loadGithubCacheInvalidation(): Promise<(command: string) => void> {
@@ -468,9 +466,9 @@ export function withHostPresentation(
 		}
 		requireBunRuntime();
 		return Promise.all([
-			presentOnOmp(host), loadTernHudHost(), loadOmpAppearance(), loadTerminalHost(),
+			presentOnOmp(host), loadOmpAppearance(), loadTerminalHost(),
 			loadGithubCacheInvalidation(), loadStopHost(), loadPluginSettingsReader(), loadAgentHost(), loadShellHost(),
-		]).then(async ([pi, hud, appearance, terminalHost, invalidateGithubCache, stopHost, pluginSettings, agentHost, shellHost]) => {
+		]).then(async ([pi, appearance, terminalHost, invalidateGithubCache, stopHost, pluginSettings, agentHost, shellHost]) => {
 			// The specifier
 			// is non-literal so bundlers leave it deferred: inlining it would hoist
 			// those imports into the bundle and fail module loading before the
@@ -479,7 +477,7 @@ export function withHostPresentation(
 			await removal.retireTernPlugin();
 			await initializeTerminalUrls();
 			const activated = activate(pi, appearance, terminalHost, invalidateGithubCache, {}, stopHost, pluginSettings, agentHost, shellHost);
-			mountTerminalHud(pi, activated.store, hud, activated.kill);
+			mountTerminalHud(pi, activated.store, activated.kill);
 			scheduleLogArchive();
 		});
 	};
