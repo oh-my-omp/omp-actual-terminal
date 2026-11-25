@@ -394,14 +394,15 @@ function ompShellResult(result: ToolRenderResult): ShellResult {
 	const details = recordOf(result.details);
 	const job = recordOf(details?.async);
 	const jobId = job?.state === "running" && typeof job.jobId === "string" ? job.jobId : undefined;
-	const exitCode = optionalNumber(details?.exitCode);
+	const isError = result.isError === true;
+	const exitCode = optionalNumber(details?.exitCode) ?? (isError ? undefined : 0);
 	const wallTimeMs = optionalNumber(details?.wallTimeMs);
 	return shellResult(
 		sanitizeOutputText(contentText(result)),
 		jobId === undefined
 			? { exitCode, wallTimeMs }
 			: { exitCode, wallTimeMs, async: { state: "running", jobId, type: "bash" } },
-		result.isError === true,
+		isError,
 	);
 }
 

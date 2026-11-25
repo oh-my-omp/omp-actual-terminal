@@ -436,7 +436,7 @@ describe("omp shell card hooks", () => {
 		t.after(() => setNativeRenderingForTest(false));
 		const hooks = bashToolHooks();
 		const result: AgentToolResult = {
-			details: { exitCode: 0, wallTimeMs: 12 },
+			details: { wallTimeMs: 12 },
 			content: [{ type: "text", text: "hello from omp\n" }],
 		};
 		setNativeRenderingForTest(true);

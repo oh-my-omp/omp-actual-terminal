@@ -135,9 +135,9 @@ omp --no-extensions -e "$PWD/src/index.ts" --no-session
 
 Ask the model to start a long-running command through `bash` with
 `pty: true`, drive input with `write_stdin`, and terminate it with
-`kill_session`. Bash/write/kill must use omp's bash cards, and a `bash` call
-without `pty` must look exactly as without the plugin; monitor/set-on-exit/list
-use omp's default cards.
+`kill_session`. Bash/write/kill must draw bash cards whose state line matches
+the call's exit, and in Tern a `bash` call without `pty` must look exactly as
+without the plugin; monitor/set-on-exit/list use omp's default cards.
 For Tern, check a terminal's tray card and the jobs page's output pane in a
 real window as [Tern Console](#tern-console) describes.
 
