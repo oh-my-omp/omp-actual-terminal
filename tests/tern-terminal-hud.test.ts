@@ -4,6 +4,8 @@ import type { ExtensionAPI, ExtensionContext, ExtensionRender, ExtensionUiHost }
 import { isUiNode, type KeyEvent, setNativeRenderingForTest, signal, type UiNode } from "@oh-my-pi/pi-tui";
 
 import {
+	consoleGrid,
+	consoleKeyBytes,
 	KILL_ACTION,
 	LEAVE_ACTION,
 	mountTerminalHud,
@@ -408,5 +410,64 @@ describe("Console with real terminals", () => {
 		const h = await makeHarness(t);
 		assert.equal(openTerminalConsole("bg_missing"), false);
 		assert.equal(h.calls.length, 0);
+	});
+});
+
+const PTY_CONSOLE = new URL("../node_modules/@oh-my-pi/pi-coding-agent/src/ui/overlays/panels/pty-console.tsx", import.meta.url).href;
+
+async function ompConsole(): Promise<{ readonly keyBytes: Function; readonly model: object; readonly gridFor: Function }> {
+	const module: unknown = await import(PTY_CONSOLE);
+	assert.ok(typeof module === "object" && module !== null, "omp's pty-console module loads");
+	assert.ok("ptyKeyBytes" in module && typeof module.ptyKeyBytes === "function", "omp still exports ptyKeyBytes");
+	assert.ok("PtyConsoleModel" in module && typeof module.PtyConsoleModel === "function", "omp still exports PtyConsoleModel");
+	const model = module.PtyConsoleModel;
+	assert.ok("gridFor" in model && typeof model.gridFor === "function", "PtyConsoleModel still has gridFor");
+	return { keyBytes: module.ptyKeyBytes, model, gridFor: model.gridFor };
+}
+
+describe("Console bytes and grid against omp's own Console", () => {
+	const keys: KeyEvent[] = [
+		keyEvent("up"),
+		keyEvent("left"),
+		keyEvent("home"),
+		keyEvent("end"),
+		keyEvent("pageup"),
+		keyEvent("delete"),
+		keyEvent("shift+tab"),
+		keyEvent("enter"),
+		keyEvent("tab"),
+		keyEvent("space", " "),
+		keyEvent("backspace"),
+		keyEvent("escape"),
+		keyEvent("ctrl+c"),
+		keyEvent("alt+x", "x"),
+		keyEvent("é", "é"),
+		{ id: "f5", kind: "press", raw: "\x1b[15~" },
+		{ id: "ctrl+shift+a", kind: "press", raw: "\x1b[97;6u" },
+		{ id: "a", text: "a", kind: "release", raw: "a" },
+	];
+
+	it("sends every key as omp's ptyKeyBytes does, in both cursor modes", async () => {
+		const omp = await ompConsole();
+		for (const applicationCursorKeys of [false, true]) {
+			for (const key of keys) {
+				assert.equal(
+					consoleKeyBytes(key, applicationCursorKeys),
+					Reflect.apply(omp.keyBytes, undefined, [key, applicationCursorKeys]),
+					`${key.id} application=${applicationCursorKeys}`,
+				);
+			}
+		}
+	});
+
+	it("sizes the grid as PtyConsoleModel.gridFor does in Tern and in the ANSI TUI", async (t) => {
+		const omp = await ompConsole();
+		t.after(() => setNativeRenderingForTest(false));
+		for (const native of [false, true]) {
+			setNativeRenderingForTest(native);
+			for (const [columns, rows] of [[10, 3], [80, 24], [100, 50], [233, 61]] as const) {
+				assert.deepEqual(consoleGrid(columns, rows), Reflect.apply(omp.gridFor, omp.model, [columns, rows]), `${columns}x${rows} native=${native}`);
+			}
+		}
 	});
 });

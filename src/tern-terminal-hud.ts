@@ -236,7 +236,7 @@ const NAMED_KEYS: Readonly<Record<string, string>> = {
 
 const KITTY_SEQUENCE = /^\x1b\[[\d;:]*[u~A-Z]$/;
 
-function consoleKeyBytes(key: KeyEvent, applicationCursorKeys: boolean): string {
+export function consoleKeyBytes(key: KeyEvent, applicationCursorKeys: boolean): string {
 	if (key.kind === "release") return "";
 	const cursor = CURSOR_KEYS[key.id];
 	if (cursor !== undefined) return applicationCursorKeys ? `\x1bO${cursor}` : `\x1b[${cursor}`;
@@ -254,7 +254,7 @@ const SHEET_COLS = 8;
 const FRAME_COLS = 2;
 const FRAME_ROWS = 4;
 
-function consoleGrid(columns: number, rows: number): { readonly cols: number; readonly rows: number } {
+export function consoleGrid(columns: number, rows: number): { readonly cols: number; readonly rows: number } {
 	return {
 		cols: Math.max(20, columns - (nativeRendering() ? SHEET_COLS : FRAME_COLS)),
 		rows: Math.max(1, Math.max(5, Math.floor(rows * 0.8)) - FRAME_ROWS),

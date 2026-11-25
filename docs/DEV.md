@@ -391,14 +391,13 @@ Approval, approval details and description come from a `BashTool` built per
 call from the session's settings with `hasUI: false`, so its description
 carries no pty paragraph of omp's own. omp's tool proxy must still read
 `description`, `parameters` and `formatApprovalDetails` from the definition on
-every access, and a re-registered `bash` must still lose omp's built-in
-renderer, which `src/omp-presentation.ts` therefore supplies.
+every access.
 
 On omp upgrades compare `BashTool`'s schema (`tools/bash.ts`) with
 `src/bash-tool.ts`. Then, in real omp: `/dump` in a main agent, a subagent and
 `omp -p` must show the same `bash` fields, `pty` and the terminal fields
-included; a `bash` call without `pty` must keep omp's own approval, execution,
-result and card, named services included; a terminal call with an allowed
+included; a `bash` call without `pty` must keep omp's own approval, execution
+and result, and in Tern its card, named services included; a terminal call with an allowed
 leading `NAME=value` (`bash.allowedEnvVars`) must pass approval while
 `--approval-mode always-ask` still prompts, a denied call must spawn nothing,
 and the confirmation must show omp's own details. Requalify the session
@@ -534,9 +533,7 @@ output from the job's `progressText` and open the jobs page on the card's job
 from its Open, and the jobs page's output pane must still read `progressText`
 while the job runs and `resultText`/`errorText` once it settles
 (`inspectAsyncJob` in `session/async-job-views`). Tern must still draw
-`omp.overlay.console` as a full-pane overlay whose `ansi`
-fills the height its action bar leaves under `grow` and a fractional `max.h`
-and scrolls inside itself. Tern's `plugin list --json` (`plugins[].id`),
+`omp.overlay.console` as a full-pane overlay. Tern's `plugin list --json` (`plugins[].id`),
 `remove ID --json`, its exact `is linked; use unlink` answer and
 `unlink ID --json` must retain their contract for the removal of the old
 `omp-unified-exec` Tern plugin, with a 75-second timeout covering Tern's
