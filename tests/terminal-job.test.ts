@@ -3,6 +3,7 @@ import { afterEach, describe, it } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { activate } from "../src/index.ts";
+import { IS_WINDOWS, resolveWindowsShell } from "../src/shell.ts";
 import { TerminalJob } from "../src/terminal-job.ts";
 import { STUB_SESSION, stubJobManager, stubShellHost, stubTerminalHost } from "./stub-shell.ts";
 
@@ -22,6 +23,8 @@ interface Harness {
 	call(name: string, params: object): Promise<Details>;
 	shutdown(): Promise<void>;
 }
+
+const SHELL = IS_WINDOWS ? resolveWindowsShell("bash") : "/bin/sh";
 
 const live = new Set<Harness>();
 
@@ -62,7 +65,7 @@ async function statusOf(jobs: AsyncJobManager, id: string, want: string): Promis
 }
 
 async function start(h: Harness, command: string): Promise<string> {
-	const started = await h.call("bash", { pty: true, title: "job test", command, shell: "/bin/sh", yield_time_ms: 250 });
+	const started = await h.call("bash", { pty: true, title: "job test", command, shell: SHELL, yield_time_ms: 250 });
 	assert.match(started.job_id ?? "", /^bg_\d+$/, JSON.stringify(started));
 	return started.job_id!;
 }
@@ -164,7 +167,7 @@ describe("terminals as omp jobs", () => {
 	it("returns omp's limit error verbatim and starts nothing at capacity", async () => {
 		const h = await makeHarness(stubJobManager(1));
 		await start(h, "sleep 30");
-		const refused = await h.call("bash", { pty: true, title: "over", command: "echo never-started", shell: "/bin/sh", yield_time_ms: 250 });
+		const refused = await h.call("bash", { pty: true, title: "over", command: "echo never-started", shell: SHELL, yield_time_ms: 250 });
 		assert.equal(refused.job_id, undefined);
 		assert.match(refused.failure_message ?? "", /^Background job limit reached \(1\)\./);
 		assert.equal((await h.call("list_sessions", {})).sessions?.length, 1);
