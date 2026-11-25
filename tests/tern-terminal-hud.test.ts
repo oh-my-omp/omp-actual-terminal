@@ -243,8 +243,14 @@ async function makeHarness(t: TestContext, hasUI = true) {
 	};
 }
 
-/** `sh` reading lines and answering each with the terminal's own size as the kernel reports it. */
-const SIZER = ["/bin/sh", "-c", "stty -echo; echo ready; while read line; do echo \"got $line size $(stty size)\"; done"];
+const SIZER = [process.execPath, "-e", [
+	"process.stdin.setRawMode(true)",
+	"const size = () => `${process.stdout.rows} ${process.stdout.columns}`",
+	"process.stdout.on('resize', () => process.stdout.write(`resized ${size()}\\n`))",
+	"let pending = ''",
+	"process.stdin.on('data', (data) => { const lines = (pending + data).split('\\r'); pending = lines.pop(); for (const line of lines) process.stdout.write(`got ${line} size ${size()}\\n`) })",
+	"process.stdout.write('ready\\n')",
+].join("; ")];
 
 const KEYS = [process.execPath, "-e", [
 	"process.stdin.setRawMode(true)",
@@ -326,6 +332,7 @@ describe("Console with real terminals", () => {
 		const session = h.spawn(SIZER);
 		await screenShows(session, "ready");
 		const root = h.open(session.id).root;
+		await screenShows(session, "resized 36 98");
 
 		typeKeys(root, "first\r");
 		await screenShows(session, "got first size 36 98");
@@ -338,6 +345,7 @@ describe("Console with real terminals", () => {
 		h.resize(120, 60);
 		await waitFor(() => session.styledScreen()?.view.cols === 118, (listener) => session.onScreenChange(listener),
 			() => `the grid follows the screen size; grid is ${session.styledScreen()?.view.cols}`);
+		await screenShows(session, "resized 44 118");
 		typeKeys(root, "after\r");
 		await screenShows(session, "got after size 44 118");
 	});
@@ -349,12 +357,14 @@ describe("Console with real terminals", () => {
 		const call = h.open(session.id);
 		const writes = t.mock.method(session, "write");
 		await waitFor(() => session.styledScreen()?.view.cols === 98, (listener) => session.onScreenChange(listener), "the Console grids the terminal");
+		await screenShows(session, "resized 36 98");
 
 		assert.equal(call.root.handlers.onKey?.(keyEvent("escape")), true);
 		await call.promise;
 		assert.equal(call.resolved, true, "leaving resolves the custom view");
 		assert.equal(writes.mock.callCount(), 0, "Esc is navigation, not terminal input");
 		assert.equal(session.hasExited, false, "Esc leaves the terminal running");
+		await screenShows(session, "resized 24 80");
 
 		session.write(encoder.encode("after\r"));
 		await screenShows(session, "got after size 24 80");
