@@ -709,7 +709,8 @@ describe("omp-actual-terminal e2e", () => {
 			const inflight = h.call("bash", { pty: true, title: "Test command", command: `trap '' TERM HUP; : > '${ready}'; sleep ${marker}`, shell: "/bin/bash", yield_time_ms: 500 });
 			inflight.then(() => { returned = true; }, () => { returned = true; });
 			while (!existsSync(ready) && !returned) await delay(5);
-			assert.equal(returned, false, "the call left its grace window before the shell ignored SIGTERM");
+			const pending = await h.call("list_sessions", {});
+			assert.ok(!returned && pending.details.sessions.length === 0, "the session left its grace window before the shell ignored SIGTERM");
 			await h.emit("session_shutdown");
 			const r = await inflight;
 			assert.equal(r.details.job_id, undefined, JSON.stringify(r.details));
