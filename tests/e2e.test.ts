@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { describe, it } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-tui/tools/streaming-output";
+import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-coding-agent/tools/streaming-output";
 import { activate, EmptyPollRemovedError } from "../src/index.ts";
 import { readTerminal } from "../src/terminal-resource.ts";
 import { IS_WINDOWS } from "../src/shell.ts";

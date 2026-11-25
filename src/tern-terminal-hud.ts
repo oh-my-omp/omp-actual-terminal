@@ -1,8 +1,18 @@
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { matchesKey, stableKey, type Component, type DescribeContext, type NativeNode, type NativeUiEvent } from "@oh-my-pi/pi-tui";
-import type * as Overlay from "@oh-my-pi/pi-tui/native/overlay";
-import type * as JobsPanel from "@oh-my-pi/pi-tui/overlays/jobs-panel";
-import type * as BashInteractive from "@oh-my-pi/pi-tui/tools/bash-interactive";
+import type { ExtensionAPI, ExtensionContext, ExtensionUiHost } from "@oh-my-pi/pi-coding-agent";
+import {
+	createRoot,
+	effect,
+	isUiNode,
+	type JSX,
+	type JSXNode,
+	jsx,
+	type KeyEvent,
+	nativeRendering,
+	type PasteEvent,
+	signal,
+	type Signal,
+	type UiNode,
+} from "@oh-my-pi/pi-tui";
 
 import { sanitizeOutputText } from "./output-safety.ts";
 import { tr } from "./omomp-shared/i18n.ts";
@@ -10,53 +20,8 @@ import type { ExecSession } from "./session.ts";
 import type { SessionStore } from "./session-store.ts";
 import type { StyledScreen } from "./terminal-screen.ts";
 
-function requalify(change: string): Error {
-	return new Error(`omp-actual-terminal: ${change}; requalify src/tern-terminal-hud.ts for this omp version`);
-}
-
-/** The jobs page's methods the Open action wraps. */
-export type JobsSheetPrototype = Pick<JobsPanel.JobsSheet, "describe" | "handleInput" | "handleNativeEvent">;
-
-function isJobsSheetPrototype(value: unknown): value is JobsSheetPrototype {
-	return typeof value === "object" && value !== null &&
-		"describe" in value && typeof value.describe === "function" &&
-		"handleInput" in value && typeof value.handleInput === "function" &&
-		"handleNativeEvent" in value && typeof value.handleNativeEvent === "function";
-}
-
-export interface TernHudHost {
-	readonly sheet: JobsSheetPrototype;
-	readonly actionButton: typeof Overlay.actionButton;
-	readonly actionBar: typeof Overlay.actionBar;
-	readonly normalizeInput: typeof BashInteractive.normalizeInputForPty;
-}
-
-export function parseTernHudHost(
-	panel: Partial<Pick<typeof JobsPanel, "JobsSheet">>,
-	overlay: Partial<Pick<typeof Overlay, "actionButton" | "actionBar">>,
-	interactive: Partial<Pick<typeof BashInteractive, "normalizeInputForPty">>,
-): TernHudHost {
-	const prototype: unknown = typeof panel.JobsSheet === "function" ? panel.JobsSheet.prototype : undefined;
-	if (!isJobsSheetPrototype(prototype)) {
-		throw requalify("@oh-my-pi/pi-tui/overlays/jobs-panel no longer provides JobsSheet with describe/handleInput/handleNativeEvent");
-	}
-	const { actionButton, actionBar } = overlay;
-	if (typeof actionButton !== "function" || typeof actionBar !== "function") {
-		throw requalify("@oh-my-pi/pi-tui/native/overlay no longer provides actionButton/actionBar");
-	}
-	const { normalizeInputForPty } = interactive;
-	if (typeof normalizeInputForPty !== "function") {
-		throw requalify("@oh-my-pi/pi-tui/tools/bash-interactive no longer provides normalizeInputForPty");
-	}
-	return { sheet: prototype, actionButton, actionBar, normalizeInput: normalizeInputForPty };
-}
-
-export const OPEN_TERMINAL_ACTION = "omp-actual-terminal.terminal.open";
-export const OPEN_KEY = "o";
 export const KILL_ACTION = "kill";
 export const LEAVE_ACTION = "leave";
-/** omp's own Console (`@oh-my-pi/pi-tui/tools/bash-interactive`) insets its grid from the sheet's width by the same columns. */
-const CONSOLE_INSET_COLS = 8;
 
 export type TerminalState =
 	| { readonly kind: "running" }
@@ -107,108 +72,96 @@ function stateTone(state: TerminalState): string {
 	return exitSucceeded(state) ? "success" : "error";
 }
 
-const DETAIL_ROLE = "omp.jobs.detail";
-const STATUS_ROLE = "omp.jobs.status";
+const PAGE_ROLE = "omp.overlay.console";
 
-function isNode(child: unknown): child is NativeNode {
-	return typeof child === "object" && child !== null && "k" in child;
+interface HeadSpan {
+	readonly t: string;
+	readonly s?: string;
 }
 
-/**
- * The jobs page's status row of the selected job with the Open button after its spacer, so it sits
- * before Cancel job. Undefined when the row lost the spacer the host puts before its actions.
- */
-function withOpenButton(status: NativeNode, button: NativeNode): NativeNode | undefined {
-	const children = status.c ?? [];
-	const spacer = children.findIndex((child) => isNode(child) && child.k === "spacer");
-	if (spacer < 0) return undefined;
-	return { ...status, c: [...children.slice(0, spacer + 1), button, ...children.slice(spacer + 1)] };
-}
-
-/**
- * `described` with the Open button on the selected job's status row when that job is a terminal,
- * and which terminal that is. The jobs page keys the selected job's detail by the host's
- * `stableKey(job id)`, so the terminal is found by that key, not by reading the row's text.
- */
-export function decorateJobsPage(
-	described: NativeNode,
-	terminalFor: (detailKey: string) => string | undefined,
-	button: () => NativeNode,
-): { readonly node: NativeNode; readonly terminal: string | undefined } {
-	let terminal: string | undefined;
-	const visit = (current: NativeNode): NativeNode => {
-		if (current.p?.role === DETAIL_ROLE) {
-			terminal = current.key === undefined ? undefined : terminalFor(current.key);
-			if (terminal === undefined) return current;
-			const children = current.c ?? [];
-			const index = children.findIndex((child) => isNode(child) && child.p?.role === STATUS_ROLE);
-			const status = children[index];
-			const decorated = isNode(status) ? withOpenButton(status, button()) : undefined;
-			if (decorated === undefined) throw requalify("the jobs page's selected job no longer has a status row with a spacer before its actions");
-			return { ...current, c: children.map((child, at) => (at === index ? decorated : child)) };
-		}
-		const children = current.c;
-		if (children === undefined) return current;
-		let changed = false;
-		const next = children.map((child) => {
-			if (!isNode(child)) return child;
-			const visited = visit(child);
-			if (visited !== child) changed = true;
-			return visited;
-		});
-		return changed ? { ...current, c: next } : current;
-	};
-	return { node: visit(described), terminal };
-}
-
-export function terminalPageFrame(entry: TerminalSummary | undefined, id: string): Readonly<Record<string, unknown>> {
-	return {
-		role: "omp.overlay.console",
-		size: "full",
-		head: [
-			{ t: tr("Console · ", "控制台 · "), s: "muted" },
-			{ t: `${id} ` },
-			...(entry ? [{ t: entry.title }, { t: "  " }, { t: stateText(entry.state), s: stateTone(entry.state) }] : [{ t: tr("removed", "已移除"), s: "muted" }]),
-		],
-	};
-}
-
-export function describeTerminalPage(entry: TerminalEntry | undefined, host: Pick<TernHudHost, "actionButton" | "actionBar">): NativeNode {
-	const leave = host.actionButton(tr("Leave", "离开"), LEAVE_ACTION, { keys: "escape" });
-	if (!entry) {
-		return {
-			k: "col",
-			p: { gap: "sm" },
-			c: [
-				{ k: "text", key: "gone", p: { spans: [{ t: tr("This terminal is no longer stored.", "此终端已不再存储。"), s: "dim" }] } },
-				host.actionBar([null, leave]),
-			],
-		};
+function frameHead(entry: TerminalSummary | undefined, id: string): readonly HeadSpan[] {
+	if (entry === undefined) {
+		return [{ t: tr("Console · ", "控制台 · "), s: "muted" }, { t: `${id} ` }, { t: tr("removed", "已移除"), s: "muted" }];
 	}
-	const running = entry.state.kind === "running";
-	return {
-		k: "col",
-		p: { gap: "sm", min: { h: 1 } },
-		c: [
-			{
-				k: "ansi",
-				key: `page-s${entry.id}`,
-				p: {
-					text: entry.screen.text,
-					cols: entry.screen.view.cols,
-					follow: true,
-					grow: 1,
-					max: { h: 1 },
-				},
-			},
-			host.actionBar([
-				{ k: "text", key: "note", p: { spans: [{ t: running ? tr("Keys go to the terminal", "按键将发送到终端") : tr("Terminal finished", "终端已结束"), s: "dim" }] } },
-				null,
-				...(running ? [host.actionButton(tr("End", "结束"), KILL_ACTION, { tone: "error" })] : []),
+	return [
+		{ t: tr("Console · ", "控制台 · "), s: "muted" },
+		{ t: `${id} ` },
+		{ t: entry.title },
+		{ t: "  " },
+		{ t: stateText(entry.state), s: stateTone(entry.state) },
+	];
+}
+
+export function terminalPageFrame(
+	entry: TerminalSummary | undefined,
+	id: string,
+): {
+	readonly role: typeof PAGE_ROLE;
+	readonly anchor: "bottom";
+	readonly size: "full";
+	readonly head: readonly HeadSpan[];
+} {
+	return { role: PAGE_ROLE, anchor: "bottom", size: "full", head: frameHead(entry, id) };
+}
+
+function el<K extends keyof JSX.IntrinsicElements>(kind: K, props: JSX.IntrinsicElements[K]): UiNode {
+	const node: JSXNode = jsx(kind, { ...props });
+	if (!isUiNode(node)) throw new TypeError(`omp-actual-terminal: jsx(${String(kind)}) did not build a node`);
+	return node;
+}
+
+function consoleFooter(entry: () => TerminalEntry | undefined): JSXNode {
+	return el("row", {
+		key: "footer",
+		role: "omp.actions",
+		align: "center",
+		gap: "sm",
+		children: () => {
+			const current = entry();
+			const leave = el("button", {
+				key: "leave",
+				text: tr("Leave", "离开"),
+				keys: ["escape"],
+				actions: { click: LEAVE_ACTION },
+			});
+			if (current === undefined) return [el("spacer", { key: "spacer", grow: 1 }), leave];
+			const running = current.state.kind === "running";
+			return [
+				el("text", {
+					key: "note",
+					spans: [{ t: running ? tr("Keys go to the terminal", "按键将发送到终端") : tr("Terminal finished", "终端已结束"), s: "dim" }],
+				}),
+				el("spacer", { key: "spacer", grow: 1 }),
+				running ? el("button", { key: "end", text: tr("End", "结束"), variant: "danger", actions: { click: KILL_ACTION } }) : null,
 				leave,
-			]),
+			];
+		},
+	});
+}
+
+export function describeTerminalPage(entry: () => TerminalEntry | undefined): JSXNode {
+	return el("col", {
+		key: "body",
+		gap: "sm",
+		min: { h: 1 },
+		children: [
+			el("text", {
+				key: "gone",
+				hidden: () => entry() !== undefined,
+				spans: [{ t: tr("This terminal is no longer stored.", "此终端已不再存储。"), s: "dim" }],
+			}),
+			el("ansi", {
+				key: "screen",
+				hidden: () => entry() === undefined,
+				follow: true,
+				grow: 1,
+				min: { h: 1 },
+				text: () => entry()?.screen.text ?? "",
+				cols: () => entry()?.screen.view.cols ?? 1,
+			}),
+			consoleFooter(entry),
 		],
-	};
+	});
 }
 
 function summaryOf(session: ExecSession | undefined): TerminalSummary | undefined {
@@ -259,80 +212,178 @@ class SessionWatch {
 
 const encoder = new TextEncoder();
 
+const CURSOR_KEYS: Readonly<Record<string, string>> = {
+	up: "A",
+	down: "B",
+	right: "C",
+	left: "D",
+	home: "H",
+	end: "F",
+};
+
+const NAMED_KEYS: Readonly<Record<string, string>> = {
+	pageup: "\x1b[5~",
+	pagedown: "\x1b[6~",
+	insert: "\x1b[2~",
+	delete: "\x1b[3~",
+	"shift+tab": "\x1b[Z",
+	enter: "\r",
+	tab: "\t",
+	space: " ",
+	backspace: "\x7f",
+	escape: "\x1b",
+};
+
+const KITTY_SEQUENCE = /^\x1b\[[\d;:]*[u~A-Z]$/;
+
+export function consoleKeyBytes(key: KeyEvent, applicationCursorKeys: boolean): string {
+	if (key.kind === "release") return "";
+	const cursor = CURSOR_KEYS[key.id];
+	if (cursor !== undefined) return applicationCursorKeys ? `\x1bO${cursor}` : `\x1b[${cursor}`;
+	const named = NAMED_KEYS[key.id];
+	if (named !== undefined) return named;
+	const ctrl = /^ctrl\+([a-z])$/.exec(key.id)?.[1];
+	if (ctrl !== undefined) return String.fromCharCode(ctrl.charCodeAt(0) - 96);
+	const alt = /^alt\+(.)$/.exec(key.id);
+	if (alt !== null) return `\x1b${key.text ?? alt[1]}`;
+	if (key.text) return key.text;
+	return KITTY_SEQUENCE.test(key.raw) ? "" : key.raw;
+}
+
+const SHEET_COLS = 8;
+const FRAME_COLS = 2;
+const FRAME_ROWS = 4;
+
+export function consoleGrid(columns: number, rows: number): { readonly cols: number; readonly rows: number } {
+	return {
+		cols: Math.max(20, columns - (nativeRendering() ? SHEET_COLS : FRAME_COLS)),
+		rows: Math.max(1, Math.max(5, Math.floor(rows * 0.8)) - FRAME_ROWS),
+	};
+}
+
 /**
  * A person's view of one terminal: its screen with history, keys typed straight into it, Esc to
  * leave it running, End to end it as a person would. While it is open the terminal takes the
  * Console's size; leaving gives it back the size its call started it with.
  */
-class TerminalPage implements Component {
-	private described: NativeNode | undefined;
+class TerminalPage {
+	private readonly revision: Signal<number> = signal(0);
+	private readonly watch: SessionWatch;
 	private applied: { readonly session: ExecSession; readonly cols: number; readonly rows: number } | undefined;
 	private left = false;
-	private readonly watch: SessionWatch;
 
 	constructor(
 		private readonly store: SessionStore,
 		private readonly id: string,
-		private readonly host: TernHudHost,
-		private readonly terminalRows: () => number,
-		private readonly requestRender: () => void,
-		private readonly back: () => void,
+		private readonly ui: ExtensionUiHost,
 		private readonly kill: KillSession,
+		private readonly done: () => void,
+		private readonly disposeRoot: () => void,
 	) {
 		this.watch = new SessionWatch(store, id, this.changed);
 	}
 
-	private changed = (): void => {
-		this.described = undefined;
-		this.requestRender();
+	private readonly changed = (): void => {
+		if (this.session() === undefined) {
+			this.leave();
+			return;
+		}
+		this.revision.update((revision) => revision + 1);
 	};
 
 	private session(): ExecSession | undefined {
 		return this.store.get(this.id);
 	}
 
-	get nativeOverlay(): Readonly<Record<string, unknown>> {
-		return terminalPageFrame(summaryOf(this.session()), this.id);
+	private summary(): TerminalSummary | undefined {
+		this.revision();
+		return summaryOf(this.session());
 	}
 
-	describe(cx: DescribeContext): NativeNode {
-		const session = this.session();
-		if (session && !session.hasExited) {
-			this.follow(session, Math.max(20, cx.cols - CONSOLE_INSET_COLS), Math.max(1, Math.max(5, Math.floor(this.terminalRows() * 0.8)) - 4));
-		}
-		this.described ??= describeTerminalPage(entryOf(session), this.host);
-		return this.described;
+	private entry(): TerminalEntry | undefined {
+		this.revision();
+		return entryOf(this.session());
+	}
+
+	view(): JSXNode {
+		this.trackSize();
+		const head = (): readonly HeadSpan[] => frameHead(this.summary(), this.id);
+		const handlers = {
+			onKey: (key: KeyEvent): boolean => this.key(key),
+			onPaste: (paste: PasteEvent): boolean => this.paste(paste),
+			onAction: (act: string): void => this.action(act),
+		};
+		const body = describeTerminalPage(() => this.entry());
+		return nativeRendering()
+			? el("overlay", {
+					role: PAGE_ROLE,
+					anchor: "bottom",
+					size: "full",
+					head,
+					...handlers,
+					children: body,
+				})
+			: el("col", {
+					...handlers,
+					children: [
+						el("text", { key: "head", wrap: "none", truncate: "end", spans: head }),
+						body,
+					],
+				});
+	}
+
+	private trackSize(): void {
+		effect(() => {
+			const size = this.ui.size();
+			this.follow(consoleGrid(size.columns, size.rows));
+		});
 	}
 
 	/** The terminal takes the Console's grid; the model reads the same, resized screen meanwhile. */
-	private follow(session: ExecSession, cols: number, rows: number): void {
+	private follow(grid: { readonly cols: number; readonly rows: number }): void {
+		const session = this.session();
+		if (session === undefined || session.hasExited) return;
 		const applied = this.applied;
-		if (applied?.session === session && applied.cols === cols && applied.rows === rows) return;
-		if (session.resize(cols, rows)) this.applied = { session, cols, rows };
+		if (applied?.session === session && applied.cols === grid.cols && applied.rows === grid.rows) return;
+		if (session.resize(grid.cols, grid.rows)) this.applied = { session, cols: grid.cols, rows: grid.rows };
 	}
 
-	handleNativeEvent(event: NativeUiEvent): void {
-		if (event.type !== "action") return;
-		if (event.act === LEAVE_ACTION) this.leave();
-		else if (event.act === KILL_ACTION && this.session() && !this.session()!.hasExited) void this.kill(this.id).then(this.changed);
+	private key(key: KeyEvent): boolean {
+		if (key.kind !== "release" && key.id === "escape") {
+			this.leave();
+			return true;
+		}
+		const session = this.session();
+		if (session !== undefined && !session.hasExited) {
+			const bytes = consoleKeyBytes(key, session.applicationCursorKeys());
+			if (bytes.length > 0) session.write(encoder.encode(bytes));
+		}
+		return true;
 	}
 
-	handleInput(data: string): void {
-		if (matchesKey(data, "escape")) {
+	private paste(paste: PasteEvent): boolean {
+		const session = this.session();
+		if (session !== undefined && !session.hasExited) session.write(encoder.encode(paste.text));
+		return true;
+	}
+
+	private action(act: string): void {
+		if (act === LEAVE_ACTION) {
 			this.leave();
 			return;
 		}
+		if (act !== KILL_ACTION) return;
 		const session = this.session();
-		if (!session || session.hasExited) return;
-		const input = this.host.normalizeInput(data, session.applicationCursorKeys());
-		if (input) session.write(encoder.encode(input));
+		if (session === undefined || session.hasExited) return;
+		void this.kill(this.id).then(this.changed);
 	}
 
 	private leave(): void {
 		if (this.left) return;
 		this.left = true;
 		this.release();
-		this.back();
+		this.disposeRoot();
+		this.done();
 	}
 
 	/** Gives the terminal back its own size and stops watching it. */
@@ -343,18 +394,6 @@ class TerminalPage implements Component {
 		this.applied = undefined;
 		applied.session.resize(applied.session.size.cols, applied.session.size.rows);
 	}
-
-	render(): string[] {
-		return [];
-	}
-
-	invalidate(): void {
-		this.described = undefined;
-	}
-
-	dispose(): void {
-		this.release();
-	}
 }
 
 /** One plugin activation: its terminals, how a person ends one, and its UI when it has one. */
@@ -362,27 +401,17 @@ interface HudActivation {
 	readonly store: () => SessionStore;
 	readonly kill: KillSession;
 	ui: ExtensionContext["ui"] | undefined;
+	consoleOpen: boolean;
 }
 
 interface HudRegistry {
 	/** Weak: a session that ends drops its activation with it (the handlers it registered hold it). */
 	readonly activations: Set<WeakRef<HudActivation>>;
-	readonly wrapped: WeakSet<object>;
-	/** The terminal each open jobs page has selected, for its key handler. */
-	readonly selected: WeakMap<object, string>;
-	readonly decorated: WeakMap<NativeNode, { readonly terminal: string; readonly node: NativeNode }>;
-	host: TernHudHost | undefined;
 }
 
 const registrySymbol = Symbol.for("omp-actual-terminal.tern-hud");
 const processGlobal = globalThis as typeof globalThis & { [registrySymbol]?: HudRegistry };
-const registry: HudRegistry = processGlobal[registrySymbol] ??= {
-	activations: new Set(),
-	wrapped: new WeakSet(),
-	selected: new WeakMap(),
-	decorated: new WeakMap(),
-	host: undefined,
-};
+const registry: HudRegistry = processGlobal[registrySymbol] ??= { activations: new Set() };
 
 function liveActivations(): HudActivation[] {
 	const live: HudActivation[] = [];
@@ -394,112 +423,31 @@ function liveActivations(): HudActivation[] {
 	return live;
 }
 
-const detailKeys = new Map<string, string>();
-
-function detailKeyOf(id: string): string {
-	let key = detailKeys.get(id);
-	if (key === undefined) {
-		key = stableKey(id);
-		detailKeys.set(id, key);
-	}
-	return key;
-}
-
-function terminalForDetail(detailKey: string): string | undefined {
-	for (const activation of liveActivations()) {
-		for (const session of activation.store().values()) {
-			if (detailKeyOf(session.id) === detailKey) return session.id;
-		}
-	}
-	return undefined;
-}
-
 function ownerOf(id: string): HudActivation | undefined {
 	return liveActivations().find((activation) => activation.store().get(id) !== undefined);
 }
 
-function decorate(sheet: object, described: NativeNode): NativeNode {
-	const host = registry.host;
-	if (host === undefined) return described;
-	const cached = registry.decorated.get(described);
-	if (cached !== undefined && ownerOf(cached.terminal) !== undefined) {
-		registry.selected.set(sheet, cached.terminal);
-		return cached.node;
-	}
-	const { node, terminal } = decorateJobsPage(described, terminalForDetail, () =>
-		host.actionButton(tr("Open", "打开"), OPEN_TERMINAL_ACTION, { keys: OPEN_KEY }));
-	if (terminal === undefined) {
-		registry.selected.delete(sheet);
-		return described;
-	}
-	registry.selected.set(sheet, terminal);
-	registry.decorated.set(described, { terminal, node });
-	return node;
-}
-
-/**
- * Wraps the jobs page once per process: its selected terminal gets Open (`o` or the button), which
- * closes the page and opens that terminal's Console. Every other job keeps the page's own keys and
- * actions.
- */
-export function wrapJobsSheet(prototype: JobsSheetPrototype): void {
-	if (registry.wrapped.has(prototype)) return;
-	registry.wrapped.add(prototype);
-	const { describe, handleInput, handleNativeEvent } = prototype;
-	const open = (sheet: JobsSheetPrototype): boolean => {
-		const id = registry.selected.get(sheet);
-		if (id === undefined) return false;
-		const opened = openTerminalPage(id);
-		// The page's own Close action, whatever key closes it; the Console takes the focus the page had.
-		if (opened) handleNativeEvent.call(sheet, { type: "action", key: "", act: "close", mods: [] });
-		return opened;
-	};
-	prototype.describe = function (this: JobsSheetPrototype, cx: DescribeContext): NativeNode {
-		return decorate(this, describe.call(this, cx));
-	};
-	prototype.handleInput = function (this: JobsSheetPrototype, data: string): void {
-		if (matchesKey(data, OPEN_KEY) && open(this)) return;
-		handleInput.call(this, data);
-	};
-	prototype.handleNativeEvent = function (this: JobsSheetPrototype, event: NativeUiEvent): void {
-		if (event.type === "action" && event.act === OPEN_TERMINAL_ACTION) {
-			open(this);
-			return;
-		}
-		handleNativeEvent.call(this, event);
-	};
-}
-
-function openTerminalPage(id: string): boolean {
-	const host = registry.host;
+export function openTerminalConsole(id: string): boolean {
 	const owner = ownerOf(id);
-	const ui = liveActivations().find((activation) => activation.ui !== undefined)?.ui;
-	if (host === undefined || owner === undefined || ui === undefined) return false;
+	const ui = owner?.ui;
+	if (owner === undefined || ui === undefined || owner.consoleOpen) return false;
+	owner.consoleOpen = true;
+	const closed = (): void => {
+		owner.consoleOpen = false;
+	};
 	void ui.custom<void>(
-		(tui, _theme, _keybindings, done) =>
-			new TerminalPage(owner.store(), id, host, () => tui.terminal.rows, () => tui.requestRender(), () => done(), owner.kill),
+		(host, _theme, _keybindings, done) =>
+			createRoot((dispose) => new TerminalPage(owner.store(), id, host, owner.kill, () => {
+				closed();
+				done();
+			}, dispose).view()),
 		{ overlay: true },
-	);
+	).catch(closed);
 	return true;
 }
 
-export async function loadTernHudHost(): Promise<TernHudHost> {
-	const [panel, overlay, interactive] = await Promise.all([
-		import("@oh-my-pi/pi-tui/overlays/jobs-panel"),
-		import("@oh-my-pi/pi-tui/native/overlay"),
-		import("@oh-my-pi/pi-tui/tools/bash-interactive"),
-	]);
-	return parseTernHudHost(panel, overlay, interactive);
-}
-
-/**
- * Offers each of this activation's terminals on omp's jobs page and opens its Console from there.
- * The UI comes from the activation that has one: a subagent's terminals open in its main session.
- */
-export function mountTerminalHud(pi: ExtensionAPI, store: () => SessionStore, host: TernHudHost, kill: KillSession): void {
-	registry.host = host;
-	wrapJobsSheet(host.sheet);
-	const activation: HudActivation = { store, kill, ui: undefined };
+export function mountTerminalHud(pi: ExtensionAPI, store: () => SessionStore, kill: KillSession): void {
+	const activation: HudActivation = { store, kill, ui: undefined, consoleOpen: false };
 	registry.activations.add(new WeakRef(activation));
 	pi.on("session_start", async (_event, eventCtx) => {
 		activation.ui = eventCtx.hasUI ? eventCtx.ui : undefined;

@@ -4,6 +4,14 @@ All notable changes to this project. **Newest entries go on top.**
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Replaced Open on omp's jobs page, which omp 19.2.0 no longer lets extensions add, with the Console opening when a session with a UI starts the terminal, as omp's own `pty: true` Console does; a subagent's terminal and one under `omp -p` open none
+
+### Fixed
+
+- Loaded on omp 19.2.0: the `bash`, `write_stdin` and `kill_session` cards are drawn from omp's UI nodes, the Console is an omp custom overlay, and host imports come from their 19.2.0 modules
+
 ## [0.17.2] - 2026-11-24
 
 ### Changed

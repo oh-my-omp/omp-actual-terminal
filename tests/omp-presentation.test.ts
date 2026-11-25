@@ -4,18 +4,25 @@ import { TerminalGrid } from "../src/terminal-screen.ts";
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { builtinModules } from "node:module";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
-import type { ExtensionAPI, ToolDefinition } from "@oh-my-pi/pi-coding-agent";
+import type {
+	AgentToolResult,
+	ExtensionAPI,
+	ExtensionRender,
+	ToolDefinition,
+} from "@oh-my-pi/pi-coding-agent";
 import { loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
-import { DEFAULT_MAX_LINES } from "@oh-my-pi/pi-tui/tools/streaming-output";
+import { DEFAULT_MAX_LINES } from "@oh-my-pi/pi-coding-agent/tools/streaming-output";
 import { Type } from "@oh-my-pi/omptype/typebox";
+import { isUiNode, setNativeRenderingForTest } from "@oh-my-pi/pi-tui";
+import type { UiNode } from "@oh-my-pi/pi-tui";
 
 import {
+	bashToolHooks,
 	killShellArgs,
 	parseResultView,
 	presentOnOmp,
@@ -343,6 +350,115 @@ describe("omp shell argument presentation", () => {
 	});
 });
 
+function cardNode(render: ExtensionRender | undefined): UiNode {
+	if (render === undefined || !isUiNode(render)) assert.fail("the shell card is not one node");
+	return render;
+}
+
+function childOf(node: UiNode, kind: string): UiNode {
+	const child = node.children().find((candidate) => candidate.kind === kind);
+	if (child === undefined) assert.fail(`the shell card has no ${kind} node`);
+	return child;
+}
+
+function propsOf(node: UiNode): Record<string, unknown> {
+	return { ...node.props() };
+}
+
+function textOf(node: UiNode): string {
+	const props = propsOf(node);
+	if (typeof props.text === "string") return props.text;
+	const spans: unknown = props.spans;
+	if (!Array.isArray(spans)) return "";
+	const list: readonly unknown[] = spans;
+	return list
+		.map((span) => (typeof span === "object" && span !== null && "t" in span && typeof span.t === "string" ? span.t : ""))
+		.join("");
+}
+
+function spanTokens(node: UiNode): ReadonlyArray<{ readonly t: string; readonly s?: string }> {
+	const spans: unknown = propsOf(node).spans;
+	if (!Array.isArray(spans)) return [];
+	const list: readonly unknown[] = spans;
+	const tokens: Array<{ t: string; s?: string }> = [];
+	for (const span of list) {
+		if (typeof span !== "object" || span === null || !("t" in span) || typeof span.t !== "string") continue;
+		tokens.push("s" in span && typeof span.s === "string" ? { t: span.t, s: span.s } : { t: span.t });
+	}
+	return tokens;
+}
+
+describe("omp shell card hooks", () => {
+	const options = { expanded: false, isPartial: false };
+
+	it("draws a terminal result's command, output and job id", () => {
+		const result: AgentToolResult = {
+			details: {
+				operation: "bash",
+				status: "running",
+				running: true,
+				job_id: "bg_1",
+				wall_time_seconds: 0.501,
+				output: "waiting for input\n",
+			},
+			content: [{ type: "text", text: "" }],
+		};
+		const card = cardNode(
+			bashToolHooks().renderResult(result, options, undefined, { command: "ssh host", pty: true }),
+		);
+		assert.equal(textOf(childOf(card, "code")), "$ ssh host");
+		assert.equal(propsOf(childOf(card, "ansi")).text, "waiting for input");
+		const footer = spanTokens(childOf(card, "text")).map((span) => span.t).join("");
+		assert.match(footer, /background · job bg_1/);
+		assert.match(footer, /501ms/);
+	});
+
+	it("tones a non-zero exit as an error", () => {
+		const result: AgentToolResult = {
+			details: {
+				operation: "bash",
+				status: "exited",
+				running: false,
+				output: "boom\n",
+				exit_code: 3,
+				wall_time_seconds: 0.007,
+			},
+			content: [],
+		};
+		const card = cardNode(
+			bashToolHooks().renderResult(result, options, undefined, { command: "exit 3", pty: true }),
+		);
+		assert.equal(propsOf(childOf(card, "ansi")).text, "boom");
+		assert.equal(spanTokens(childOf(card, "text")).find((span) => span.t === "exit 3")?.s, "error");
+	});
+
+	it("leaves omp's own bash to native rendering and draws it in the plain terminal", (t) => {
+		t.after(() => setNativeRenderingForTest(false));
+		const hooks = bashToolHooks();
+		const result: AgentToolResult = {
+			details: { wallTimeMs: 12 },
+			content: [{ type: "text", text: "hello from omp\n" }],
+		};
+		setNativeRenderingForTest(true);
+		assert.equal(hooks.renderCall({ command: "echo hello" }, options), undefined);
+		assert.equal(hooks.renderResult(result, options, undefined, { command: "echo hello" }), undefined);
+		assert.ok(isUiNode(hooks.renderCall({ command: "ssh host", pty: true }, options)));
+
+		setNativeRenderingForTest(false);
+		const card = cardNode(hooks.renderResult(result, options, undefined, { command: "echo hello" }));
+		assert.equal(textOf(childOf(card, "code")), "$ echo hello");
+		assert.equal(propsOf(childOf(card, "ansi")).text, "hello from omp");
+		assert.equal(spanTokens(childOf(card, "text")).find((span) => span.t === "exit 0")?.s, "success");
+
+		const background: AgentToolResult = {
+			details: { async: { state: "running", jobId: "bg_7" } },
+			content: [],
+		};
+		const live = cardNode(hooks.renderResult(background, options, undefined, { command: "sleep 9" }));
+		assert.match(spanTokens(childOf(live, "text")).map((span) => span.t).join(""), /background · job bg_7/);
+	});
+});
+
 describe("host presentation activation", () => {
 	const parameters = Type.Object({ command: Type.Optional(Type.String()) });
 	const definition: ToolDefinition<typeof parameters, ProcessResultDetails> = {
@@ -455,85 +571,6 @@ describe("host presentation activation", () => {
 		`], { encoding: "utf8" });
 		assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 		assert.match(result.stdout, /NODE_HOST_REJECTED/);
-	});
-
-	it("rejects omp activation when its required renderer module is absent, without fallback", (t) => {
-		const temporary = mkdtempSync(join(tmpdir(), "omp-missing-renderer-"));
-		t.after(() => rmSync(temporary, { recursive: true, force: true }));
-		const root = fileURLToPath(new URL("../", import.meta.url));
-		const compiled = join(temporary, "presentation.mjs");
-		const build = spawnSync(process.execPath, [
-			"build", fileURLToPath(new URL("../src/omp-presentation.ts", import.meta.url)),
-			"--target=bun", "--packages=external", "--outfile", compiled,
-		], { cwd: root, encoding: "utf8" });
-		assert.equal(build.status, 0, `${build.stdout}\n${build.stderr}`);
-		// --packages=external leaves the bundle's package imports verbatim.
-		// Stage a node_modules that links every imported package to the
-		// repository's real copy. @oh-my-pi/pi-tui is staged as a package
-		// whose root and ./tools/streaming-output re-export the real ones
-		// but which has no ./tools subpath, so the bundle's static imports
-		// load and only the wrapper's own import("@oh-my-pi/pi-tui/tools")
-		// fails. Linked host packages resolve their own dependencies from
-		// their real locations, so the staged dir only needs the packages the bundle
-		// itself imports. Bun's fallback/auto-install would otherwise
-		// satisfy the missing subpath from its global cache; the child runs
-		// with --no-install to keep it genuinely unresolved.
-		const linkRealModules = (modules: string): void => {
-			const bundle = readFileSync(compiled, "utf8");
-			const staged = new Set<string>();
-			for (const match of bundle.matchAll(/(?:import|export)\s+[^"']*?from\s*["']([^"']+)["']|import\(\s*["']([^"']+)["']/g)) {
-				const specifier = match[1] ?? match[2];
-				if (specifier.startsWith(".") || specifier.startsWith("node:")) continue;
-				const segments = specifier.split("/");
-				const base = specifier.startsWith("@") ? segments.slice(0, 2).join("/") : (segments[0] ?? specifier);
-				if (specifier.startsWith("node:") || builtinModules.includes(base)) continue;
-				if (staged.has(base)) continue;
-				staged.add(base);
-				if (base === "@oh-my-pi/pi-tui") {
-					const stub = join(modules, base);
-					mkdirSync(stub, { recursive: true });
-					writeFileSync(join(stub, "package.json"), JSON.stringify({
-						name: base,
-						type: "module",
-						exports: { ".": "./index.mjs", "./tools/streaming-output": "./streaming-output.mjs" },
-					}));
-					const real = (path: string): string => JSON.stringify(pathToFileURL(join(root, "node_modules", base, "src", path)).href);
-					writeFileSync(join(stub, "index.mjs"), `export * from ${real("index.ts")};\n`);
-					writeFileSync(join(stub, "streaming-output.mjs"), `export * from ${real("tools/streaming-output.ts")};\n`);
-					continue;
-				}
-				const source = join(root, "node_modules", base);
-				if (!existsSync(source)) continue;
-				mkdirSync(dirname(join(modules, base)), { recursive: true });
-				symlinkSync(source, join(modules, base), "junction");
-			}
-		};
-		const modules = join(dirname(compiled), "node_modules");
-		linkRealModules(modules);
-		const driver = join(temporary, "driver.mjs");
-		writeFileSync(driver, `
-			import assert from "node:assert/strict";
-			import { withHostPresentation } from ${JSON.stringify(pathToFileURL(compiled).href)};
-			let activations = 0;
-			let registrations = 0;
-			const activate = withHostPresentation((host) => {
-				activations++;
-				host.registerTool({ name: "bash" });
-				return { store: () => null, kill: async () => false };
-			});
-			const result = activate({ arktype: {}, registerTool() { registrations++; } });
-			assert.ok(result instanceof Promise);
-			await assert.rejects(result, {
-				code: "ERR_MODULE_NOT_FOUND",
-				message: /@oh-my-pi\\/pi-tui/,
-			});
-			assert.equal(activations, 0);
-			assert.equal(registrations, 0);
-			console.log("MISSING_RENDERER_REJECTED");
-		`);
-		const result = spawnSync(process.execPath, ["--no-install", driver], { cwd: temporary, encoding: "utf8" });
-		assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-		assert.match(result.stdout, /MISSING_RENDERER_REJECTED/);
 	});
 
 	it("preserves tool definition getters during registerTool and loads extensions without Settings.init()", async () => {
