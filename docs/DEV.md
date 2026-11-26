@@ -94,8 +94,9 @@ indexed by concern:
 | Shell selection & argv construction; omp's cmd.exe test loaded at factory time | `src/shell.ts`; `src/shell-host.ts` |
 | `exec.initFile` plugin setting: parse, path resolution, the source-then-`eval` script for POSIX shells | `src/exec-init.ts`; omp's POSIX-shell test in `src/shell.ts` (`isPosixShell`); read per call in `runTerminal` (`src/index.ts`); `tests/exec-init.test.ts` |
 | omp-only host admission, top-level `loadMode`, bash delegation, argument/result display adapters, the bash/write/kill cards | `src/omp-presentation.ts` |
-| The full-pane Console over one terminal (`openTerminalConsole`), the terminal's size while it is open | `src/tern-terminal-hud.ts`; `resize` in `src/session.ts`, `src/terminal-screen.ts` and `src/pty.ts` (`SpawnedChild`) |
+| The full-pane Console over one terminal (`openTerminalConsole(id, ui)`), the `/terminals` command that lists a session's terminals and opens one, one Console per UI, the terminal's size while it is open | `src/tern-terminal-hud.ts`; `resize` in `src/session.ts`, `src/terminal-screen.ts` and `src/pty.ts` (`SpawnedChild`) |
 | Removal of the `omp-unified-exec` Tern plugin that versions up to 0.14.7 installed | `src/tern-plugin-removal.ts` |
+| The package's own Tern plugin — its manifest, the palette entry `omp: Open terminal Console` (action `plugin.omp-actual-terminal.console`) that asks the focused omp pane to run `/terminals` — and its factory-time install/update | `tern-plugin/plugin.toml`, `tern-plugin/window.luau`; `src/tern-plugin-install.ts`; `tests/tern-plugin-install.test.ts` |
 | `term://` resources, read handler and screenshots | `src/terminal-resource.ts`, `src/terminal-url.ts`, `src/terminal-image.ts` |
 | Monitors: conditions, judge monitors, batching, End/match/judgment/reminder notices | `src/monitor-subscription.ts`; screen judgment through omp's judge chain in `src/screen-judge.ts`, reached per judgment through `RuntimeHost.judge` in `src/index.ts`; subscriptions owned by `src/completion.ts` (`startMonitor`) |
 | Input-wait alerts: prompt detection, quiet watcher, notice | `src/input-wait.ts`; `ExecSession.watchInputWait` in `src/session.ts`; `alertInputWait` in `src/completion.ts` |
@@ -138,10 +139,14 @@ Ask the model to start a long-running command through `bash` with
 `kill_session`. Bash/write/kill must draw bash cards whose state line matches
 the call's exit, and in Tern a `bash` call without `pty` must look exactly as
 without the plugin; monitor/set-on-exit/list use omp's default cards.
-A terminal the main agent starts must open its Console, take typed keys and
-keep running after Esc. For Tern, also check a terminal's tray card and the
-jobs page's output pane in a real window as [Tern Console](#tern-console)
-describes.
+A terminal must start without a Console; `/terminals` must list it — job id,
+title and state, a subagent's terminal too — and open its Console, which takes
+typed keys and keeps the terminal running after Esc; `/terminals <job_id>`
+must open one directly, and the command's notices (no interactive UI, an
+unknown id, no terminals, a Console already showing) must appear where they
+apply. For Tern, also check the `omp: Open terminal Console` palette entry, a
+terminal's tray card and the jobs page's output pane in a real window as
+[Tern Console](#tern-console) describes.
 
 For a fresh non-interactive tool execution:
 
@@ -176,8 +181,11 @@ bun test ./tests/long-wait.test.ts ./tests/wake-e2e.test.ts ./tests/terminal-lif
 # Display adapters and direct host-admission checks
 bun test ./tests/omp-presentation.test.ts
 
-# Console on a stub ExtensionUiHost over real Bun PTY sessions
+# Console and `/terminals` on a stub ExtensionUiHost over real Bun PTY sessions
 bun test ./tests/tern-terminal-hud.test.ts
+
+# The package's Tern plugin installer against a stub tern CLI
+bun test ./tests/tern-plugin-install.test.ts
 ```
 
 ## Writing new tests
@@ -267,7 +275,7 @@ actual omp ANSI TUI and Tern path. A missing or reshaped required omp module
 must fail factory loading before tools register, not fall back to another
 rendering.
 
-The Console: `src/tern-terminal-hud.ts`, covered by
+The Console and `/terminals`: `src/tern-terminal-hud.ts`, covered by
 `tests/tern-terminal-hud.test.ts`.
 
 ## Debugging aids
@@ -535,23 +543,34 @@ output from the job's `progressText` and open the jobs page on the card's job
 from its Open, and the jobs page's output pane must still read `progressText`
 while the job runs and `resultText`/`errorText` once it settles
 (`inspectAsyncJob` in `session/async-job-views`). Tern must still draw
-`omp.overlay.console` as a full-pane overlay. Tern's `plugin list --json` (`plugins[].id`),
+`omp.overlay.console` as a full-pane overlay. Tern's `plugin install --force`
+must still install the package's `tern-plugin/` into Tern's plugin directory
+with its manifest's `id`, `version` and `window`, and `plugin list --json`
+must report the installed copy so the factory can compare its content; a copy
+linked with `tern plugin link` must stay untouched.
+Tern's `plugin list --json` (`plugins[].id`),
 `remove ID --json`, its exact `is linked; use unlink` answer and
 `unlink ID --json` must retain their contract for the removal of the old
 `omp-unified-exec` Tern plugin, with a 75-second timeout covering Tern's
 60-second reload wait.
 
-Check it in a real Tern window (`tern --control`, plugins load only in
-windows, not in `tern serve`) with the owner's settings, isolated
-`TERN_CONFIG_DIR` and `TERN_DAEMON_SOCKET`, a running turn, a background agent
-and a background bash job, at 1100×850 and 700px width, with a light and a
-dark appearance (`palette "Dark appearance"`; `theme dark NAME` only picks the
-dark theme), both with no Tern plugin and with omp-todo-ng's extension and
-Tern plugin. A terminal's tray card, its closer look and the jobs page's output
-pane must show its current screen and follow a change within a second; the
+Check it in a real Tern window (`tern --control`; Luau plugins and their
+palette entries load only in windows, not in `tern serve`), with the owner's
+settings, isolated `TERN_CONFIG_DIR` and `TERN_DAEMON_SOCKET`, a running turn,
+a background agent and a background bash job, at 1100×850 and 700px width,
+with a light and a dark appearance (`palette "Dark appearance"`; `theme dark
+NAME` only picks the dark theme), both with no Tern plugin and with
+omp-todo-ng's extension and Tern plugin. A terminal's tray card, its closer
+look and the jobs page's output pane must show its current screen and follow a
+change within a second; the
 card's Open must show the jobs page with the terminal selected, and every job
-must keep the page's list, detail, Cancel job and Close unchanged. A Tern
-config holding the old `omp-unified-exec`
+must keep the page's list, detail, Cancel job and Close unchanged. The palette
+must offer `omp: Open terminal Console`; running it with an omp agent pane
+focused must list that session's terminals and open the picked one's Console,
+and with no omp pane focused it must only show the `No omp pane is focused`
+toast. `/terminals` typed into omp in Tern must do the same, and a Console
+already showing must make both entries notify instead of opening a second
+one. A Tern config holding the old `omp-unified-exec`
 plugin must list no `omp-unified-exec` after loading.
 
 ## Recording README demos
@@ -600,8 +619,9 @@ shows a demo's GIF and links its MP4.
 Nothing is published to npm. The `release` branch is the published channel,
 moved daily at 02:00 GMT+9 by the `omomp-release` workflow, while `main` is
 development. A run promotes `## [Unreleased]` of `CHANGELOG.md` to a version
-section, bumps `package.json`, and moves `main`, the tag and the `release`
-branch together; a run with no top-level item under `## [Unreleased]` pushes
+section, bumps `package.json` and `tern-plugin/plugin.toml` to the same
+version (it fails when the two disagree), and moves `main`, the tag and the
+`release` branch together; a run with no top-level item under `## [Unreleased]` pushes
 nothing. Users install the Git source with:
 
 ```bash
@@ -609,8 +629,9 @@ omp plugin install https://github.com/oh-my-omp/omp-actual-terminal#release --fo
 ```
 
 `files` in `package.json` includes `src` (with `src/topics/*.md`),
-`README.md`, `LICENSE` and `CHANGELOG.md` (the `omomp.changelog`
-declaration). Keep required runtime files inside that package set.
+`tern-plugin/` (the Tern plugin the factory installs), `README.md`, `LICENSE`
+and `CHANGELOG.md` (the `omomp.changelog` declaration). Keep required runtime
+files inside that package set.
 
 ## Commit conventions
 

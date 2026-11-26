@@ -10,6 +10,7 @@ import {
 	LEAVE_ACTION,
 	mountTerminalHud,
 	openTerminalConsole,
+	TERMINALS_COMMAND,
 	terminalPageFrame,
 	type TerminalEntry,
 	type TerminalState,
@@ -128,6 +129,19 @@ interface CustomOptions {
 
 interface CustomUi {
 	custom<T>(factory: CustomFactory<T>, options?: CustomOptions): Promise<T>;
+	select(title: string, options: string[]): Promise<string | undefined>;
+	notify(message: string, type?: "info" | "warning" | "error"): void;
+}
+
+interface CommandStub {
+	readonly description?: string;
+	getArgumentCompletions?(prefix: string): { readonly value: string; readonly description?: string }[] | null;
+	handler(args: string, context: ExtensionContext): Promise<void>;
+}
+
+interface Notice {
+	readonly message: string;
+	readonly type: string | undefined;
 }
 
 interface CustomCall {
@@ -137,16 +151,17 @@ interface CustomCall {
 	readonly resolved: boolean;
 }
 
-type Handler = (event: unknown, context: ExtensionContext) => Promise<void> | void;
-
 let nextActivation = 0;
 
 async function makeHarness(t: TestContext, hasUI = true) {
 	const store = new SessionStore({ maxSessions: 20, lruProtectedCount: 0 });
-	const handlers = new Map<string, Handler[]>();
 	const calls: CustomCall[] = [];
 	const killCalls: string[] = [];
 	const sessions: ExecSession[] = [];
+	const notices: Notice[] = [];
+	const selects: { readonly title: string; readonly options: string[] }[] = [];
+	let pick: (options: string[]) => string | undefined = () => undefined;
+	const commands = new Map<string, CommandStub>();
 	// Terminal ids are per activation in omp; distinct ids keep concurrent harnesses apart.
 	const prefix = `bg_${++nextActivation}_`;
 	let nextSpawnId = 1;
@@ -182,10 +197,18 @@ async function makeHarness(t: TestContext, hasUI = true) {
 			});
 			return promise;
 		},
+		async select(title: string, options: string[]): Promise<string | undefined> {
+			selects.push({ title, options });
+			return pick(options);
+		},
+		notify(message: string, type?: "info" | "warning" | "error"): void {
+			notices.push({ message, type });
+		},
 	};
+	const consoleUi = ui as unknown as ExtensionContext["ui"];
 	const pi = {
-		on(event: string, handler: Handler) {
-			handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+		registerCommand(name: string, command: CommandStub) {
+			commands.set(name, command);
 		},
 	} as unknown as ExtensionAPI;
 	mountTerminalHud(pi, () => store, async (id) => {
@@ -198,16 +221,11 @@ async function makeHarness(t: TestContext, hasUI = true) {
 		store.remove(id);
 		return true;
 	});
-
-	async function emit(event: string): Promise<void> {
-		const context = { hasUI, ui } as unknown as ExtensionContext;
-		for (const handler of handlers.get(event) ?? []) await handler({}, context);
-	}
-	await emit("session_start");
+	const command = commands.get(TERMINALS_COMMAND);
+	assert.ok(command, "the extension registers its terminals command");
 
 	t.after(async () => {
 		for (const call of calls) call.root.handlers.onAction?.(LEAVE_ACTION, actionEvent(LEAVE_ACTION));
-		await emit("session_shutdown");
 		// Keep removed sessions in this list: removing ownership does not kill the child.
 		for (const session of sessions) session.terminate("SIGKILL");
 		await Promise.all(sessions.map((session) => waitFor(
@@ -221,11 +239,21 @@ async function makeHarness(t: TestContext, hasUI = true) {
 		store,
 		calls,
 		killCalls,
+		notices,
+		selects,
+		command,
+		ui: consoleUi,
+		choose(choice: (options: string[]) => string | undefined) {
+			pick = choice;
+		},
+		run(args: string): Promise<void> {
+			return command.handler(args, { hasUI, ui: consoleUi } as unknown as ExtensionContext);
+		},
 		resize(columns: number, rows: number) {
 			terminal.set({ columns, rows });
 		},
 		open(id: string): CustomCall {
-			assert.equal(openTerminalConsole(id), true, "the terminal's Console opens");
+			assert.equal(openTerminalConsole(id, consoleUi), true, "the terminal's Console opens");
 			const call = calls.at(-1);
 			assert.ok(call, "the Console asked the UI to show its view");
 			assert.deepEqual(call.options, { overlay: true });
@@ -411,12 +439,12 @@ describe("Console with real terminals", () => {
 		h.open(second.id);
 	});
 
-	it("keeps one Console per session: a second terminal opens none while one is showing", async (t) => {
+	it("keeps one Console per UI: a second terminal opens none while one is showing", async (t) => {
 		const h = await makeHarness(t);
 		const shown = h.spawn();
 		const call = h.open(shown.id);
 		const later = h.spawn();
-		assert.equal(openTerminalConsole(later.id), false);
+		assert.equal(openTerminalConsole(later.id, h.ui), false);
 		assert.equal(h.calls.length, 1);
 
 		call.root.handlers.onAction?.(LEAVE_ACTION, actionEvent(LEAVE_ACTION));
@@ -424,24 +452,87 @@ describe("Console with real terminals", () => {
 		h.open(later.id);
 	});
 
-	it("opens a terminal only in its own session's UI, and none for a session without one", async (t) => {
-		const first = await makeHarness(t);
-		const second = await makeHarness(t);
-		const subagent = await makeHarness(t, false);
-
-		const own = second.spawn();
-		second.open(own.id);
-		assert.equal(first.calls.length, 0, "another session's UI shows nothing");
-
-		const headless = subagent.spawn();
-		assert.equal(openTerminalConsole(headless.id), false);
-		assert.deepEqual([first.calls.length, second.calls.length, subagent.calls.length], [0, 1, 0], "a session without a UI opens no Console");
-	});
-
 	it("opens nothing for an id no activation stores", async (t) => {
 		const h = await makeHarness(t);
-		assert.equal(openTerminalConsole("bg_missing"), false);
+		assert.equal(openTerminalConsole("bg_missing", h.ui), false);
 		assert.equal(h.calls.length, 0);
+	});
+});
+
+describe("terminals command", () => {
+	it("lists the stored terminals and opens the one a person picks", async (t) => {
+		const h = await makeHarness(t);
+		const first = h.spawn();
+		const second = h.spawn();
+		h.choose((options) => options.find((option) => option.startsWith(`${second.id} `)));
+
+		await h.run("");
+		assert.equal(h.selects.length, 1);
+		const listed = h.selects[0]!.options;
+		assert.ok(listed.some((option) => option.startsWith(`${first.id} `)), "the first terminal is listed");
+		assert.ok(listed.some((option) => option.startsWith(`${second.id} `) && option.includes("Test terminal") && option.includes("running")),
+			"a row names the job id, title and state");
+		assert.equal(h.calls.length, 1, "picking a terminal opens one Console");
+		assert.deepEqual(headSpans(h.calls[0]!.root), terminalPageFrame({ id: second.id, title: "Test terminal", state: { kind: "running" } }, second.id).head);
+	});
+
+	it("opens nothing when the person dismisses the list", async (t) => {
+		const h = await makeHarness(t);
+		h.spawn();
+		await h.run("");
+		assert.equal(h.selects.length, 1);
+		assert.equal(h.calls.length, 0);
+	});
+
+	it("opens a named job id without a list and completes job ids", async (t) => {
+		const h = await makeHarness(t);
+		const session = h.spawn();
+		assert.deepEqual(h.command.getArgumentCompletions?.(session.id)?.map((item) => item.value), [session.id]);
+
+		await h.run(` ${session.id} `);
+		assert.equal(h.selects.length, 0, "a named terminal needs no list");
+		assert.equal(h.calls.length, 1);
+	});
+
+	it("reports an unknown job id, an empty list and an open Console instead of opening", async (t) => {
+		const h = await makeHarness(t);
+		await h.run("bg_missing");
+		await h.run("");
+		const session = h.spawn();
+		h.open(session.id);
+		await h.run(session.id);
+		assert.equal(h.calls.length, 1, "only the direct open showed a Console");
+		assert.deepEqual(h.notices.map((notice) => notice.type), ["warning", "info", "warning"]);
+		assert.match(h.notices[0]!.message, /no terminal bg_missing/);
+		assert.match(h.notices[1]!.message, /no terminals to open/);
+		assert.match(h.notices[2]!.message, /already showing/);
+	});
+
+	it("lists another activation's terminals after its own and opens one in the calling UI", async (t) => {
+		const main = await makeHarness(t);
+		const subagent = await makeHarness(t, false);
+		const own = main.spawn();
+		const child = subagent.spawn();
+		main.choose((options) => options.find((option) => option.startsWith(`${child.id} `)));
+
+		await main.run("");
+		const listed = main.selects[0]!.options.map((option) => option.split(" ")[0]);
+		assert.ok(listed.indexOf(own.id) >= 0 && listed.indexOf(own.id) < listed.indexOf(child.id),
+			"the calling session's terminals come before another activation's");
+		assert.equal(main.calls.length, 1, "the picked subagent terminal opens in the calling UI");
+		assert.equal(subagent.calls.length, 0);
+
+		const other = await makeHarness(t);
+		await other.run(own.id);
+		assert.equal(other.calls.length, 1, "a second UI opens its own Console while the first shows one");
+	});
+
+	it("opens nothing in a session without a UI", async (t) => {
+		const h = await makeHarness(t, false);
+		const session = h.spawn();
+		await h.run(session.id);
+		assert.equal(h.calls.length, 0);
+		assert.match(h.notices[0]!.message, /needs the interactive UI/);
 	});
 });
 
