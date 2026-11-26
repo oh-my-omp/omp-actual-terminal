@@ -4,6 +4,8 @@ All notable changes to this project. **Newest entries go on top.**
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-26
+
 ### Breaking Changes
 
 - Replaced Open on omp's jobs page, which omp 19.2.0 no longer lets extensions add, with the Console opening when a session with a UI starts the terminal, as omp's own `pty: true` Console does; a subagent's terminal and one under `omp -p` open none
