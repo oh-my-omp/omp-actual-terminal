@@ -26,8 +26,10 @@ import type { LifecycleClock } from "./terminal-lifecycle.ts";
 import { scheduleLogArchive } from "./log-archive.ts";
 import { mountTerminalHud } from "./tern-terminal-hud.ts";
 import { initializeTerminalUrls } from "./terminal-url.ts";
+import type * as TernPluginInstall from "./tern-plugin-install.ts";
 import type * as TernPluginRemoval from "./tern-plugin-removal.ts";
 
+const TERN_PLUGIN_INSTALL_MODULE = "./tern-plugin-install.ts";
 const TERN_PLUGIN_REMOVAL_MODULE = "./tern-plugin-removal.ts";
 
 export interface ShellArgs {
@@ -508,6 +510,8 @@ export function withHostPresentation(
 			// host-admission checks above can reject a foreign host.
 			const removal: typeof TernPluginRemoval = await import(TERN_PLUGIN_REMOVAL_MODULE);
 			await removal.retireTernPlugin();
+			const install: typeof TernPluginInstall = await import(TERN_PLUGIN_INSTALL_MODULE);
+			await install.ensureTernPlugin();
 			await initializeTerminalUrls();
 			const activated = activate(pi, appearance, terminalHost, invalidateGithubCache, {}, stopHost, pluginSettings, agentHost, shellHost);
 			mountTerminalHud(pi, activated.store, activated.kill);

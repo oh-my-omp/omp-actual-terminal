@@ -40,5 +40,6 @@ requalification are in [docs/DEV.md](docs/DEV.md).
   `omp --no-extensions -e "$PWD/src/index.ts" --no-session`, or add
   `--mode json -p '…'` for one non-interactive call. A running omp keeps the
   old code until `/reload`, also when it drives its own tools.
-- A Console or jobs-page change needs a real Tern window, checked as
+- A Console, `/terminals` or Tern plugin change needs a real Tern window —
+  `tern serve` loads no Luau plugins — checked as
   [docs/DEV.md](docs/DEV.md#tern-console) describes.

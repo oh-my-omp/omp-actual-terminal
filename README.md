@@ -9,9 +9,10 @@ concurrent computation and dev-time daemons run in a PTY session of the
 session's own shell, which the model drives with input, reads and monitors
 instead of a single blocking call. Every other `bash` call stays omp's own.
 Sessions keep running between turns, with no deadline unless the call sets
-one, in main agents, subagents and `omp -p` alike. As with omp's own
-`pty: true`, a terminal a session with a UI starts opens its Console, where a
-human watches it and types into it.
+one, in main agents, subagents and `omp -p` alike. A terminal never interrupts
+the person when it starts: nothing opens on its own. A human watches it and
+types into it whenever they ask for its Console — `/terminals` in the ANSI TUI,
+or this package's Tern plugin entry in Tern.
 
 ## Install
 
@@ -29,9 +30,14 @@ Updates use the same command with `--force`:
 omp plugin install https://github.com/oh-my-omp/omp-actual-terminal#release --force
 ```
 
-The extension needs no Tern plugin. Versions up to 0.14.7 installed one
+The extension ships a Tern plugin of its own (`omp-actual-terminal`, in this
+package's `tern-plugin/`), which adds the `omp: Open terminal Console` entry to
+Tern's command palette. Versions up to 0.14.7 installed a different one
 (`omp-unified-exec`); when `tern` is on PATH, loading the extension (including
-install validation) removes that copy or link through Tern's own CLI.
+install validation) removes that copy or link through Tern's own CLI, then
+installs or updates its own plugin from the package. A copy linked with
+`tern plugin link` is left untouched. Without `tern` nothing runs; if Tern
+fails, loading fails with its diagnostics.
 
 This plugin supports only omp running on Bun 1.4+ (omp is a compiled Bun
 executable). Pi and other non-omp hosts fail immediately at the extension
@@ -41,8 +47,9 @@ that same factory before omp modules load or any tools register.
 
 ## UI language
 
-Human-facing notifications, widgets, the omp bash card annotations,
-and the Tern Console follow `OMOMP_LANG` (`en` or `zh`, case-insensitive).
+Human-facing notifications, widgets, the omp bash card annotations, the Tern
+Console and the Tern plugin's palette entry follow `OMOMP_LANG` (`en` or `zh`,
+case-insensitive).
 When it is unset or invalid, the plugin uses the first non-empty `LC_ALL`,
 `LC_MESSAGES`, or `LANG` value (`zh*` selects Chinese); otherwise it uses English.
 For language selection this plugin does not read an `omomp` file. Tool labels
@@ -132,9 +139,13 @@ results remain in English.
   a state line with the exit code, job id and wall time, error tone), in the
   ANSI TUI and in Tern alike; in Tern a `bash` call without `pty` keeps omp's
   own card.
-- **A Console for a human.** A terminal opens its Console when its call starts
-  it, as omp's own `pty: true` Console opens: scroll back through it, type
-  into it and leave it running, or end it, without a tool call.
+- **A Console for a human, on demand.** Starting a terminal opens nothing. In
+  the ANSI TUI `/terminals` lists the session's terminals — job id, title and
+  state, a subagent's included — and opens the Console of the one picked;
+  `/terminals bg_1` opens that id directly. Tern has the same command, and this
+  package's Tern plugin adds a palette entry that runs it in the focused omp
+  pane. In the Console, scroll back through the terminal, type into it and
+  leave it running, or end it, without a tool call.
 
 ## Tern Console
 
@@ -147,13 +158,18 @@ When omp renders natively in Tern:
   the tray and the jobs page show its last screen followed by how it
   returned. The tray card's Open goes to the jobs page with that terminal
   selected.
-- **The Console opens with its call.** As omp's own `bash` `pty: true` opens
-  its Console when the call starts, a terminal started by a session with a UI
-  opens its Console as soon as it is running; a subagent's terminal and one
-  under `omp -p` open none. A session shows one Console at a time: a terminal
-  started while one is showing opens none. A Console closes itself once its
-  terminal is no longer listed. Once left, nothing opens it again: omp
-  19.2.0's jobs page takes no actions from extensions.
+- **Opening the Console.** No terminal opens its Console when it starts. In
+  Tern, the palette entry `omp: Open terminal Console` (`omp：打开终端控制台`
+  when the UI language is Chinese) asks the focused omp pane to run
+  `/terminals`; with no omp agent pane focused it only raises the toast
+  `No omp pane is focused` (`没有聚焦的 omp 窗格`). `/terminals` lists this
+  session's terminals — job id, title and state, a subagent's included — and
+  opens the Console of the one picked; `/terminals bg_1` opens that id. Job ids
+  autocomplete as the argument. The command notifies instead of opening when
+  the UI cannot show a Console, the id is unknown, no terminal is stored, or a
+  Console is already showing in that UI: one Console per UI. A Console closes
+  itself once its terminal is no longer listed, and leaving it never stops the
+  terminal, so the same entries reopen it later.
 - **Console.** The Console shows a terminal full-pane in the frame of omp's
   own Console, headed by its job id, title and state: its
   retained history and current screen in colour, following new output and
@@ -166,19 +182,25 @@ When omp renders natively in Tern:
   which the model then reads as well; leaving gives the terminal back the
   `cols`/`rows` its call started it with.
 
-In omp's ANSI TUI the Console opens as a sheet at the foot of the screen, with
-the same head, keys, Leave and End. Tool results stay plain text; explicit
-`read term://…/screen.png` requests return images.
+In omp's ANSI TUI the Console opens, when `/terminals` asks for it, as a sheet
+at the foot of the screen, with the same head, keys, Leave and End. Tool
+results stay plain text; explicit `read term://…/screen.png` requests return
+images.
 
-**No Tern plugin.** The Console uses omp's own overlay role
+**Tern plugin.** The Console uses omp's own overlay role
 (`omp.overlay.console`), so Tern's built-in styles draw it. That role is a
-presentation contract of omp and Tern, requalified on upgrades. The extension
-removes the `omp-unified-exec` Tern plugin that earlier versions installed,
-because its stylesheet still moved omp's shared widget container: during
-omp's awaited factory it asks Tern's `plugin list`, then `plugin remove` (or
-`plugin unlink` when Tern answers that it is linked), and confirms Tern no
-longer lists it. Without `tern` nothing runs; if an available Tern fails,
-loading fails with its diagnostics.
+presentation contract of omp and Tern, requalified on upgrades. The package
+ships one Tern plugin of its own, `tern-plugin/` (`omp-actual-terminal`), only
+for the palette entry. When `tern` is on PATH, loading the extension installs
+it into Tern — `tern plugin install <the package's tern-plugin directory>
+--force` when the installed copy is missing or differs from the package's —
+and leaves a copy linked with `tern plugin link` as it is. It also removes the
+`omp-unified-exec` Tern plugin that earlier versions installed, because its
+stylesheet still moved omp's shared widget container: during omp's awaited
+factory it asks Tern's `plugin list`, then `plugin remove` (or `plugin unlink`
+when Tern answers that it is linked), and confirms Tern no longer lists it.
+Without `tern` nothing runs; if an available Tern fails, loading fails with
+its diagnostics.
 
 ## Tools
 
@@ -1089,7 +1111,7 @@ src/
 ├── shell-host.ts         # omp's cmd.exe test, loaded at factory time
 ├── agent-park.ts         # omp's agent registry/lifecycle reader; parked subagents' terminal runtimes
 ├── session-binding.ts    # activation-local AgentSession identity for bash settings, stop detectors and the terminals' job owner
-├── tern-terminal-hud.ts  # the full-pane Console over one terminal
+├── tern-terminal-hud.ts  # the full-pane Console over one terminal, the `/terminals` command
 ├── terminal-resource.ts  # process-global terminal keys, live/frozen projections
 ├── terminal-url.ts       # omp `term://` read handler; reports reads to the terminal's owner
 ├── terminal-image.ts     # terminal screenshots (SVG → PNG)
@@ -1108,7 +1130,11 @@ src/
 ├── input-wait.ts         # input prompt detection; input-wait alerts as terminal notices
 ├── log-archive.ts        # seven-day gzip compression of session logs
 ├── tern-plugin-removal.ts# removes the Tern plugin earlier versions installed
+├── tern-plugin-install.ts# installs or updates the package's Tern plugin at factory time
 └── omomp-shared/         # copies of oh-my-omp/shared files declared in omomp-shared.json
+tern-plugin/
+├── plugin.toml           # the Tern plugin's manifest: id, version, `window.luau`
+└── window.luau           # the palette entry that runs `/terminals` in the focused omp pane
 docs/
 └── DEV.md                # maintainer guide
 ```
@@ -1119,7 +1145,8 @@ docs/
 bun install
 bun run check                              # strict typecheck
 OMOMP_LANG=en bun run test                 # Bun unit/integration suites (they assert English UI text)
-bun test ./tests/tern-terminal-hud.test.ts ./tests/omp-presentation.test.ts
+bun test ./tests/tern-terminal-hud.test.ts ./tests/omp-presentation.test.ts \
+         ./tests/tern-plugin-install.test.ts
 ```
 
 The full suite runs with Bun's native `bun test` runner, including real PTY

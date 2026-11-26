@@ -26,6 +26,7 @@
 	},
 	"files": [
 		"src",
+		"tern-plugin",
 		"README.md",
 		"LICENSE",
 		"CHANGELOG.md"

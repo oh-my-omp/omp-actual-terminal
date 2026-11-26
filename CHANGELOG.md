@@ -6,6 +6,8 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Added
 
+- Installed or updated the bundled Tern plugin during host setup when its listed copy was missing or mismatched, while leaving linked copies unchanged
+- Added a localized Tern palette action that runs `/terminals` in the focused omp pane and shows an error toast when no pane can take the command
 - Added `/terminals` to choose a stored terminal or open one by job ID, with job ID completions and notices for unavailable cases
 
 ### Changed
