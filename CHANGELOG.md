@@ -4,6 +4,14 @@ All notable changes to this project. **Newest entries go on top.**
 
 ## [Unreleased]
 
+### Added
+
+- Added `/terminals` to choose a stored terminal or open one by job ID, with job ID completions and notices for unavailable cases
+
+### Changed
+
+- Opened terminal Consoles only on request instead of automatically when a terminal session was stored
+
 ## [0.18.0] - 2026-11-26
 
 ### Breaking Changes
