@@ -251,6 +251,7 @@ export function finalizeProcessResult(input: FinalizeProcessInput): ProcessResul
 	if (input.yieldTimeMs) shape.yield_time_ms = input.yieldTimeMs;
 	if (input.extra) {
 		for (const [key, value] of Object.entries(input.extra)) {
+			// SAFETY: extra is Partial<ProcessResultDetails>, so each key names a ProcessResultDetails field and each defined value has that field's type.
 			if (value !== undefined) (shape as unknown as Record<string, unknown>)[key] = value;
 		}
 	}
