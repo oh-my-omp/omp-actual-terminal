@@ -619,8 +619,9 @@ shows a demo's GIF and links its MP4.
 Nothing is published to npm. The `release` branch is the published channel,
 moved daily at 02:00 GMT+9 by the `omomp-release` workflow, while `main` is
 development. A run promotes `## [Unreleased]` of `CHANGELOG.md` to a version
-section, bumps `package.json`, and moves `main`, the tag and the `release`
-branch together; a run with no top-level item under `## [Unreleased]` pushes
+section, bumps `package.json` and `tern-plugin/plugin.toml` to the same
+version (it fails when the two disagree), and moves `main`, the tag and the
+`release` branch together; a run with no top-level item under `## [Unreleased]` pushes
 nothing. Users install the Git source with:
 
 ```bash

@@ -508,6 +508,25 @@ describe("terminals command", () => {
 		assert.match(h.notices[2]!.message, /already showing/);
 	});
 
+	it("lists another activation's terminals after its own and opens one in the calling UI", async (t) => {
+		const main = await makeHarness(t);
+		const subagent = await makeHarness(t, false);
+		const own = main.spawn();
+		const child = subagent.spawn();
+		main.choose((options) => options.find((option) => option.startsWith(`${child.id} `)));
+
+		await main.run("");
+		const listed = main.selects[0]!.options.map((option) => option.split(" ")[0]);
+		assert.ok(listed.indexOf(own.id) >= 0 && listed.indexOf(own.id) < listed.indexOf(child.id),
+			"the calling session's terminals come before another activation's");
+		assert.equal(main.calls.length, 1, "the picked subagent terminal opens in the calling UI");
+		assert.equal(subagent.calls.length, 0);
+
+		const other = await makeHarness(t);
+		await other.run(own.id);
+		assert.equal(other.calls.length, 1, "a second UI opens its own Console while the first shows one");
+	});
+
 	it("opens nothing in a session without a UI", async (t) => {
 		const h = await makeHarness(t, false);
 		const session = h.spawn();

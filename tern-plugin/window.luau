@@ -24,13 +24,18 @@ end
 
 local chinese = language() == "zh"
 
+local function runs_omp(cx, pane)
+	local tree = cx.session:surface(pane, { depth = 0, nodes = 1 })
+	return type(tree) == "table" and tree.surface ~= nil and tree.surface.role == "omp.session"
+end
+
 local function focused_omp_agent(cx)
 	local focused = cx.session:focused()
 	if not focused then
 		return nil
 	end
 	for _, agent in ipairs(cx.agents:list()) do
-		if agent.pane == focused then
+		if agent.pane == focused and runs_omp(cx, focused) then
 			return focused
 		end
 	end

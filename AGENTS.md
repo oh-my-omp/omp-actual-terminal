@@ -13,7 +13,8 @@ requalification are in [docs/DEV.md](docs/DEV.md).
   a hand-written item in the same commit is kept. Keep that heading as the
   file's first section and leave versions alone: merging to `main` publishes
   nothing, and the daily `omomp-release` run at 02:00 GMT+9 promotes the
-  section to a new version, bumps `package.json`, and moves `main`, the tag
+  section to a new version, bumps `package.json` and
+  `tern-plugin/plugin.toml` together, and moves `main`, the tag
   and the `release` branch together. Users install from
   `https://github.com/oh-my-omp/omp-actual-terminal#release`.
 - Change `README.md` and `README.zh-CN.md` together, section for section.
