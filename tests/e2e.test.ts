@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { describe, it } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-tui/tools/streaming-output";
+import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-coding-agent/tools/streaming-output";
 import { activate, EmptyPollRemovedError } from "../src/index.ts";
 import { readTerminal } from "../src/terminal-resource.ts";
 import { IS_WINDOWS } from "../src/shell.ts";
@@ -700,20 +700,31 @@ describe("omp-actual-terminal e2e", () => {
 
 	it("a session in the grace window at shutdown never reaches the next session period", { skip: IS_WINDOWS }, async () => {
 		const marker = `30.${process.pid}${Date.now() % 1000}`;
-		const h = makeHarness();
-		await h.emit("session_start");
-		const inflight = h.call("bash", { pty: true, title: "Test command", command: `trap '' TERM HUP; sleep ${marker}`, shell: "/bin/bash", yield_time_ms: 500 });
-		await new Promise((r) => setTimeout(r, 40)); // inside the grace window
-		await h.emit("session_shutdown");
-		const r = await inflight;
-		assert.equal(r.details.job_id, undefined, JSON.stringify(r.details));
-		assert.equal(r.details.signal, "SIGKILL", JSON.stringify(r.details));
-		assert.equal(r.details.shell, "/bin/bash", JSON.stringify(r.details));
-		await h.emit("session_start");
-		const l = await h.call("list_sessions", {});
-		assert.deepEqual(l.details.sessions, [], JSON.stringify(l.details));
-		assert.throws(() => execFileSync("pgrep", ["-f", `slee[p] ${marker}`]), "trapping child must be dead");
-		await h.emit("session_shutdown");
+		const readyDir = mkdtempSync(join(tmpdir(), "oat-trap-ready-"));
+		const ready = join(readyDir, "ready");
+		try {
+			const h = makeHarness();
+			await h.emit("session_start");
+			let returned = false;
+			const inflight = h.call("bash", { pty: true, title: "Test command", command: `trap '' TERM HUP; : > '${ready}'; sleep ${marker}`, shell: "/bin/bash", yield_time_ms: 500 });
+			inflight.then(() => { returned = true; }, () => { returned = true; });
+			while (!existsSync(ready) && !returned) await delay(5);
+			const pending = await h.call("list_sessions", {});
+			const inGraceWindow = !returned && pending.details.sessions.length === 0;
+			await h.emit("session_shutdown");
+			const r = await inflight;
+			assert.ok(inGraceWindow, "the session left its grace window before the shell ignored SIGTERM");
+			assert.equal(r.details.job_id, undefined, JSON.stringify(r.details));
+			assert.equal(r.details.signal, "SIGKILL", JSON.stringify(r.details));
+			assert.equal(r.details.shell, "/bin/bash", JSON.stringify(r.details));
+			await h.emit("session_start");
+			const l = await h.call("list_sessions", {});
+			assert.deepEqual(l.details.sessions, [], JSON.stringify(l.details));
+			assert.throws(() => execFileSync("pgrep", ["-f", `slee[p] ${marker}`]), "trapping child must be dead");
+			await h.emit("session_shutdown");
+		} finally {
+			rmSync(readyDir, { recursive: true, force: true });
+		}
 	});
 
 	it("an in-flight write_stdin whose terminal shutdown released before the child died returns empty output", { skip: IS_WINDOWS }, async () => {

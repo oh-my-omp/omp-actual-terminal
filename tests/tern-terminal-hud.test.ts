@@ -1,18 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, it, type TestContext } from "node:test";
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui";
-import { getKeybindings, KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
-import { JobsSheet, type JobsPanelJob, type JobsSheetSource } from "@oh-my-pi/pi-tui/overlays/jobs-panel";
+import type { ExtensionAPI, ExtensionContext, ExtensionRender, ExtensionUiHost } from "@oh-my-pi/pi-coding-agent";
+import { isUiNode, type KeyEvent, setNativeRenderingForTest, signal, type UiNode } from "@oh-my-pi/pi-tui";
+
 import {
-	decorateJobsPage,
-	describeTerminalPage,
+	consoleGrid,
+	consoleKeyBytes,
 	KILL_ACTION,
 	LEAVE_ACTION,
-	loadTernHudHost,
 	mountTerminalHud,
-	OPEN_TERMINAL_ACTION,
-	parseTernHudHost,
+	openTerminalConsole,
 	terminalPageFrame,
 	type TerminalEntry,
 	type TerminalState,
@@ -20,53 +17,47 @@ import {
 import { ExecSession } from "../src/session.ts";
 import { SessionStore } from "../src/session-store.ts";
 
-function isNode(child: NativeChild): child is NativeNode {
-	return "k" in child;
+function properties(node: UiNode): Readonly<Record<string, unknown>> {
+	return { ...node.props() };
 }
 
-function nodes(node: NativeNode): NativeNode[] {
-	return [node, ...(node.c ?? []).filter(isNode).flatMap(nodes)];
+function children(node: UiNode): UiNode[] {
+	return [...node.children()];
 }
 
-function withRole(node: NativeNode, role: string): NativeNode | undefined {
-	return nodes(node).find((candidate) => candidate.p?.role === role);
+function walk(node: UiNode): UiNode[] {
+	return [node, ...children(node).flatMap(walk)];
 }
 
-function onlyNode<K extends NativeNode["k"]>(node: NativeNode, kind: K): Extract<NativeNode, { readonly k: K }> {
-	const matches = nodes(node).filter((candidate): candidate is Extract<NativeNode, { readonly k: K }> => candidate.k === kind);
-	assert.equal(matches.length, 1, `expected one ${kind} node`);
-	return matches[0]!;
-}
-
-/** The click actions of the buttons under `node`, in order. */
-function buttons(node: NativeNode | undefined): string[] {
-	if (node === undefined) return [];
-	return nodes(node)
-		.filter((candidate) => candidate.p?.role === "omp.btn")
-		.map((candidate) => {
-			const actions: unknown = candidate.p && "actions" in candidate.p ? candidate.p.actions : undefined;
-			const click = typeof actions === "object" && actions !== null && "click" in actions ? actions.click : undefined;
-			assert.equal(typeof click, "string", "a button carries its click action");
-			return String(click);
+function buttons(node: UiNode): string[] {
+	return walk(node)
+		.filter((child) => child.kind === "button")
+		.map((button) => {
+			const actions = properties(button).actions;
+			assert.ok(typeof actions === "object" && actions !== null && "click" in actions, "a button carries its click action");
+			return String(actions.click);
 		});
 }
 
-function ansiText(node: NativeNode): string {
-	const text = onlyNode(node, "ansi").p?.text;
-	assert.ok(typeof text === "string");
+function headSpans(node: UiNode): unknown {
+	const head = properties(node).head;
+	if (head !== undefined) return head;
+	const first = children(node)[0];
+	assert.ok(first, "the ANSI Console draws its head first");
+	assert.equal(first.kind, "text");
+	return properties(first).spans;
+}
+
+function screen(node: UiNode): UiNode {
+	const found = walk(node).find((child) => child.kind === "ansi");
+	assert.ok(found, "the Console shows the terminal's screen");
+	return found;
+}
+
+function screenText(node: UiNode): string {
+	const text = properties(screen(node)).text;
+	assert.ok(typeof text === "string", "the screen is drawn as text");
 	return text;
-}
-
-function cx(cols: number): DescribeContext {
-	return { cols, reduceMotion: true, dark: true, supports: () => false, feature: () => false };
-}
-
-function action(act: string): NativeUiEvent {
-	return { type: "action", key: "", act, mods: [] };
-}
-
-function job(id: string): JobsPanelJob {
-	return { id, type: "bash", status: "running", label: `job ${id}`, startTime: Date.now() };
 }
 
 function entry(state: TerminalState): TerminalEntry {
@@ -80,29 +71,43 @@ function entry(state: TerminalState): TerminalEntry {
 
 const exited = (exitCode: number | null): TerminalState => ({ kind: "exited", exitCode, signal: null, failure: null });
 
+function actionEvent(act: string) {
+	return { type: "action", key: "", act, mods: [] } as const;
+}
+
+function keyEvent(id: string, text?: string): KeyEvent {
+	return text === undefined ? { id, kind: "press", raw: id } : { id, text, kind: "press", raw: text };
+}
+
+function typeKeys(root: UiNode, text: string): void {
+	for (const char of text) {
+		const key = char === "\r" ? keyEvent("enter") : char === " " ? keyEvent("space") : keyEvent(char, char);
+		assert.equal(root.handlers.onKey?.(key), true, "the Console takes the key");
+	}
+}
+
 function waitFor(
 	condition: () => boolean,
 	subscribe: (listener: () => void) => () => void,
 	message: string | (() => string),
 ): Promise<void> {
 	if (condition()) return Promise.resolve();
-	return new Promise<void>((resolve, reject) => {
-		// Real PTY IO cannot use fake time; this deadline only bounds a missing event.
-		const timeout = AbortSignal.timeout(8000);
-		const failed = () => {
-			unsubscribe();
-			reject(new Error(typeof message === "string" ? message : message()));
-		};
-		const changed = () => {
-			if (!condition()) return;
-			unsubscribe();
-			timeout.removeEventListener("abort", failed);
-			resolve();
-		};
-		const unsubscribe = subscribe(changed);
-		timeout.addEventListener("abort", failed, { once: true });
-		changed();
-	});
+	const { promise, resolve, reject } = Promise.withResolvers<void>();
+	const timeout = AbortSignal.timeout(8000);
+	const failed = () => {
+		unsubscribe();
+		reject(new Error(typeof message === "string" ? message : message()));
+	};
+	const changed = () => {
+		if (!condition()) return;
+		unsubscribe();
+		timeout.removeEventListener("abort", failed);
+		resolve();
+	};
+	const unsubscribe = subscribe(changed);
+	timeout.addEventListener("abort", failed, { once: true });
+	changed();
+	return promise;
 }
 
 function screenShows(session: ExecSession, needle: string): Promise<void> {
@@ -110,54 +115,71 @@ function screenShows(session: ExecSession, needle: string): Promise<void> {
 		() => `screen shows ${needle}; screen is ${JSON.stringify(session.styledScreen()?.text)}`);
 }
 
-interface PageComponent {
-	readonly nativeOverlay?: Readonly<Record<string, unknown>>;
-	describe(cx: DescribeContext): NativeNode;
-	handleInput(data: string): void;
-	handleNativeEvent(event: NativeUiEvent): void;
-	dispose(): void;
+type CustomFactory<T> = (
+	host: ExtensionUiHost,
+	theme: unknown,
+	keybindings: unknown,
+	done: (result: T) => void,
+) => ExtensionRender | Promise<ExtensionRender>;
+
+interface CustomOptions {
+	readonly overlay: boolean;
 }
 
-type StubTui = { readonly terminal: { readonly rows: number }; requestRender(): void };
-type CustomFactory = (tui: StubTui, theme: unknown, keybindings: unknown, done: (result?: unknown) => void) => PageComponent;
-type CustomCall = {
-	readonly component: PageComponent;
-	readonly options: { readonly overlay: boolean };
+interface CustomUi {
+	custom<T>(factory: CustomFactory<T>, options?: CustomOptions): Promise<T>;
+}
+
+interface CustomCall {
+	readonly root: UiNode;
 	readonly promise: Promise<unknown>;
-	readonly disposed: boolean;
-};
+	readonly options: CustomOptions;
+	readonly resolved: boolean;
+}
+
 type Handler = (event: unknown, context: ExtensionContext) => Promise<void> | void;
 
 let nextActivation = 0;
 
-/** A plugin activation with a real store and real PTY sessions, mounted on omp's real jobs page. */
 async function makeHarness(t: TestContext, hasUI = true) {
-	const host = await loadTernHudHost();
 	const store = new SessionStore({ maxSessions: 20, lruProtectedCount: 0 });
 	const handlers = new Map<string, Handler[]>();
-	const customCalls: CustomCall[] = [];
+	const calls: CustomCall[] = [];
 	const killCalls: string[] = [];
 	const sessions: ExecSession[] = [];
 	// Terminal ids are per activation in omp; distinct ids keep concurrent harnesses apart.
 	const prefix = `bg_${++nextActivation}_`;
 	let nextSpawnId = 1;
-	let terminalRows = 50;
-	const tui: StubTui = { terminal: { get rows() { return terminalRows; } }, requestRender() {} };
-	const ui = {
-		custom(factory: CustomFactory, options: { overlay: boolean }): Promise<unknown> {
-			const { promise, resolve } = Promise.withResolvers<unknown>();
-			let disposed = false;
-			const done = (result?: unknown) => {
-				if (disposed) return;
-				disposed = true;
-				try {
-					component.dispose();
-				} finally {
-					resolve(result);
-				}
+	const terminal = signal({ columns: 100, rows: 50 });
+	const host: ExtensionUiHost = {
+		requestRender() {},
+		size: () => terminal(),
+		suspend: (run) => run(),
+	};
+	const ui: CustomUi = {
+		custom<T>(factory: CustomFactory<T>, options?: CustomOptions): Promise<T> {
+			const { promise, resolve } = Promise.withResolvers<T>();
+			let root: UiNode | undefined;
+			let resolved = false;
+			const done = (result: T): void => {
+				resolved = true;
+				resolve(result);
 			};
-			const component = factory(tui, {}, {}, done);
-			customCalls.push({ component, options, promise, get disposed() { return disposed; } });
+			const output = factory(host, undefined, undefined, done);
+			assert.equal(output instanceof Promise, false, "the Console builds its view synchronously");
+			assert.ok(isUiNode(output), "the Console builds one root node");
+			root = output;
+			calls.push({
+				get root(): UiNode {
+					if (root === undefined) throw new Error("the Console builds its view before it is read");
+					return root;
+				},
+				promise,
+				options: options ?? { overlay: false },
+				get resolved(): boolean {
+					return resolved;
+				},
+			});
 			return promise;
 		},
 	};
@@ -166,7 +188,7 @@ async function makeHarness(t: TestContext, hasUI = true) {
 			handlers.set(event, [...(handlers.get(event) ?? []), handler]);
 		},
 	} as unknown as ExtensionAPI;
-	mountTerminalHud(pi, () => store, host, async (id) => {
+	mountTerminalHud(pi, () => store, async (id) => {
 		killCalls.push(id);
 		const session = store.get(id);
 		assert.ok(session, "kill targets a stored real session");
@@ -184,8 +206,8 @@ async function makeHarness(t: TestContext, hasUI = true) {
 	await emit("session_start");
 
 	t.after(async () => {
+		for (const call of calls) call.root.handlers.onAction?.(LEAVE_ACTION, actionEvent(LEAVE_ACTION));
 		await emit("session_shutdown");
-		for (const call of customCalls) call.component.handleNativeEvent(action(LEAVE_ACTION));
 		// Keep removed sessions in this list: removing ownership does not kill the child.
 		for (const session of sessions) session.terminate("SIGKILL");
 		await Promise.all(sessions.map((session) => waitFor(
@@ -197,13 +219,17 @@ async function makeHarness(t: TestContext, hasUI = true) {
 
 	return {
 		store,
-		customCalls,
+		calls,
 		killCalls,
-		set terminalRows(rows: number) { terminalRows = rows; },
-		get page(): PageComponent {
-			const page = customCalls.at(-1)?.component;
-			assert.equal(page?.nativeOverlay?.role, "omp.overlay.console", "the Console is open");
-			return page!;
+		resize(columns: number, rows: number) {
+			terminal.set({ columns, rows });
+		},
+		open(id: string): CustomCall {
+			assert.equal(openTerminalConsole(id), true, "the terminal's Console opens");
+			const call = calls.at(-1);
+			assert.ok(call, "the Console asked the UI to show its view");
+			assert.deepEqual(call.options, { overlay: true });
+			return call;
 		},
 		spawn(command = [process.execPath, "-e", "process.stdin.resume()"]): ExecSession {
 			const session = ExecSession.spawn(`${prefix}${nextSpawnId++}`, {
@@ -214,26 +240,29 @@ async function makeHarness(t: TestContext, hasUI = true) {
 			store.insert(session);
 			return session;
 		},
-		sheet(jobs: readonly JobsPanelJob[], selected: string) {
-			const calls = { closed: 0, cancelled: [] as string[] };
-			const source: JobsSheetSource = {
-				load: () => ({ running: jobs, recent: [] }),
-				inspect: () => ({ pids: [] }),
-				cancel: (id) => { calls.cancelled.push(id); },
-				close: () => { calls.closed++; },
-			};
-			const sheet = new JobsSheet(source, { selected });
-			sheet.describe(cx(120));
-			return { sheet, calls };
-		},
 	};
 }
 
-/** `sh` reading lines and answering each with the terminal's own size as the kernel reports it. */
-const SIZER = ["/bin/sh", "-c", "stty -echo; echo ready; while read line; do echo \"got $line size $(stty size)\"; done"];
+const SIZER = [process.execPath, "-e", [
+	"process.stdin.setRawMode(true)",
+	"const size = () => `${process.stdout.rows} ${process.stdout.columns}`",
+	"process.stdout.on('resize', () => process.stdout.write(`resized ${size()}\\n`))",
+	"let pending = ''",
+	"process.stdin.on('data', (data) => { const lines = (pending + data).split('\\r'); pending = lines.pop(); for (const line of lines) process.stdout.write(`got ${line} size ${size()}\\n`) })",
+	"process.stdout.write('ready\\n')",
+].join("; ")];
 
-describe("Console page description", () => {
-	it("frames a full Console overlay with the terminal id, title, and state in the head", () => {
+const KEYS = [process.execPath, "-e", [
+	"process.stdin.setRawMode(true)",
+	"let received = 0",
+	"process.stdin.on('data', (data) => process.stdout.write(`keys:${(received += data.length)}\\n`))",
+	"process.stdout.write('keys-ready\\n')",
+].join("; ")];
+
+const encoder = new TextEncoder();
+
+describe("Console head", () => {
+	it("names the terminal's id, title and state, and says removed once it is no longer stored", () => {
 		for (const [state, label, tone] of [
 			[{ kind: "running" }, "running", "accent"],
 			[exited(0), "exit 0", "success"],
@@ -243,196 +272,234 @@ describe("Console page description", () => {
 			const value = entry(state);
 			assert.deepEqual(terminalPageFrame(value, value.id), {
 				role: "omp.overlay.console",
+				anchor: "bottom",
 				size: "full",
 				head: [{ t: "Console · ", s: "muted" }, { t: "bg_7 " }, { t: value.title }, { t: "  " }, { t: label, s: tone }],
 			});
 		}
 		assert.deepEqual(terminalPageFrame(undefined, "bg_7").head, [{ t: "Console · ", s: "muted" }, { t: "bg_7 " }, { t: "removed", s: "muted" }]);
 	});
-
-	it("describes a following screen keeping its colors, End only while running, and Leave on esc", async () => {
-		const host = await loadTernHudHost();
-		for (const state of [{ kind: "running" }, exited(0)] satisfies TerminalState[]) {
-			const value = entry(state);
-			const view = describeTerminalPage(value, host);
-			const screen = onlyNode(view, "ansi");
-			assert.equal(screen.key, "page-sbg_7");
-			assert.equal(screen.p?.follow, true);
-			assert.equal(screen.p?.cols, 100);
-			assert.equal(ansiText(view), value.screen.text);
-			assert.deepEqual(buttons(withRole(view, "omp.actions")), [...(state.kind === "running" ? [KILL_ACTION] : []), LEAVE_ACTION]);
-		}
-		const gone = describeTerminalPage(undefined, host);
-		assert.equal(nodes(gone).some((node) => node.k === "ansi"), false);
-		assert.deepEqual(buttons(withRole(gone, "omp.actions")), [LEAVE_ACTION], "a removed terminal can only be left");
-	});
 });
 
-describe("Open on omp's jobs page", () => {
-	it("names the omp change when the host modules or the selected terminal's status row are reshaped", () => {
-		const requalify = { message: /requalify src\/tern-terminal-hud\.ts/ };
-		const overlay = { actionButton: () => ({ k: "spacer" }) as NativeNode, actionBar: () => ({ k: "spacer" }) as NativeNode };
-		const interactive = { normalizeInputForPty: (data: string) => data };
-		class Sheet {
-			describe() {}
-			handleInput() {}
-			handleNativeEvent() {}
-		}
-		for (const [panel, over, input] of [
-			[{}, overlay, interactive],
-			[{ JobsSheet: class { describe() {} } }, overlay, interactive],
-			[{ JobsSheet: Sheet }, {}, interactive],
-			[{ JobsSheet: Sheet }, overlay, {}],
-		] as const) {
-			assert.throws(() => parseTernHudHost(panel as never, over, input), requalify);
-		}
-		assert.strictEqual(parseTernHudHost({ JobsSheet: Sheet } as never, overlay, interactive).sheet, Sheet.prototype);
-
-		const detail: NativeNode = { k: "col", p: { role: "omp.jobs.detail" }, key: "k1", c: [{ k: "row", p: { role: "omp.jobs.status" }, c: [] }] };
-		assert.throws(() => decorateJobsPage({ k: "col", c: [detail] }, () => "bg_1", () => ({ k: "spacer" })), requalify);
-		const untouched: NativeNode = { k: "col", c: [detail] };
-		assert.equal(decorateJobsPage(untouched, () => undefined, () => ({ k: "spacer" })).node, untouched, "another job's page is returned as omp built it");
-	});
-
-	it("offers Open only on a selected terminal job, before Cancel job, and opens with o or the button", async (t) => {
+describe("Console node structure", () => {
+	it("takes the head as Tern's sheet head, and as the first row of the ANSI terminal", async (t) => {
 		const h = await makeHarness(t);
-		const terminal = h.spawn();
-		const jobs = [job(terminal.id), job("bg_other")];
+		const session = h.spawn();
 
-		const other = h.sheet(jobs, "bg_other");
-		assert.deepEqual(buttons(withRole(other.sheet.describe(cx(120)), "omp.jobs.status")), ["cancel"]);
-		other.sheet.handleInput("o");
-		assert.equal(h.customCalls.length, 0, "o on another job opens nothing");
-		assert.equal(other.calls.closed, 0);
-		other.sheet.handleInput("x");
-		assert.deepEqual(other.calls.cancelled, ["bg_other"], "the page's own Cancel job still runs");
+		const head = [
+			{ t: "Console · ", s: "muted" },
+			{ t: `${session.id} ` },
+			{ t: "Test terminal" },
+			{ t: "  " },
+			{ t: "running", s: "accent" },
+		];
+		const ansi = h.open(session.id);
+		assert.equal(ansi.root.kind, "col");
+		assert.deepEqual(headSpans(ansi.root), head);
+		ansi.root.handlers.onAction?.(LEAVE_ACTION, actionEvent(LEAVE_ACTION));
+		await ansi.promise;
 
-		const byKey = h.sheet(jobs, terminal.id);
-		assert.deepEqual(buttons(withRole(byKey.sheet.describe(cx(120)), "omp.jobs.status")), [OPEN_TERMINAL_ACTION, "cancel"]);
-		byKey.sheet.handleInput("o");
-		assert.equal(byKey.calls.closed, 1, "opening closes the jobs page");
-		assert.equal(h.customCalls.length, 1);
-		assert.deepEqual(h.customCalls[0]!.options, { overlay: true });
-		assert.equal(h.page.nativeOverlay?.size, "full");
-		h.page.handleInput("\x1b");
-		await h.customCalls[0]!.promise;
-		assert.equal(h.customCalls[0]!.disposed, true);
-
-		const byButton = h.sheet(jobs, terminal.id);
-		byButton.sheet.handleNativeEvent(action(OPEN_TERMINAL_ACTION));
-		assert.equal(byButton.calls.closed, 1);
-		assert.equal(h.customCalls.length, 2);
-		h.page.handleNativeEvent(action(LEAVE_ACTION));
-		await h.customCalls[1]!.promise;
-		assert.equal(terminal.hasExited, false, "leaving does not end the terminal");
-		assert.deepEqual(h.killCalls, []);
-	});
-
-	it("closes the jobs page through its own Close action when the person rebound its close key", async (t) => {
-		const previous = getKeybindings();
-		setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, { "tui.select.cancel": "q" }));
-		t.after(() => setKeybindings(previous));
-		const h = await makeHarness(t);
-		const terminal = h.spawn();
-		const rebound = h.sheet([job(terminal.id)], terminal.id);
-		rebound.sheet.handleInput("o");
-		assert.equal(h.customCalls.length, 1, "the Console opens");
-		assert.equal(rebound.calls.closed, 1, "the jobs page closes although Esc no longer closes it");
-		h.page.handleNativeEvent(action(LEAVE_ACTION));
-		await h.customCalls[0]!.promise;
-	});
-
-	it("opens a subagent's terminal in the session that has a UI and ends it through its own activation", async (t) => {
-		const main = await makeHarness(t);
-		const subagent = await makeHarness(t, false);
-		const terminal = subagent.spawn();
-		const page = main.sheet([job(terminal.id)], terminal.id);
-		page.sheet.handleInput("o");
-		assert.equal(subagent.customCalls.length, 0, "a headless activation has no UI to open in");
-		assert.equal(main.customCalls.length, 1);
-		main.page.handleNativeEvent(action(KILL_ACTION));
-		await waitFor(() => subagent.store.get(terminal.id) === undefined, (listener) => subagent.store.subscribe(listener), "End removes the ended terminal");
-		assert.deepEqual(subagent.killCalls, [terminal.id]);
-		assert.deepEqual(main.killCalls, []);
+		setNativeRenderingForTest(true);
+		t.after(() => setNativeRenderingForTest(false));
+		const native = h.open(session.id);
+		assert.equal(native.root.kind, "overlay");
+		const props = properties(native.root);
+		assert.equal(props.role, "omp.overlay.console");
+		assert.equal(props.anchor, "bottom");
+		assert.equal(props.size, "full");
+		assert.deepEqual(props.head, head);
+		native.root.handlers.onAction?.(LEAVE_ACTION, actionEvent(LEAVE_ACTION));
+		await native.promise;
+		assert.equal(session.hasExited, false);
 	});
 });
 
 describe("Console with real terminals", () => {
-	it("types into the terminal at the Console's size, shows the model's writes, and gives the size back on Esc", { skip: process.platform === "win32" }, async (t) => {
+	it("sends typed keys and pastes to the running terminal", async (t) => {
 		const h = await makeHarness(t);
-		const terminal = h.spawn(SIZER);
-		await screenShows(terminal, "ready");
-		h.sheet([job(terminal.id)], terminal.id).sheet.handleInput("o");
-		const page = h.page;
+		const session = h.spawn(KEYS);
+		await screenShows(session, "keys-ready");
+		const root = h.open(session.id).root;
 
-		page.describe(cx(100));
-		page.handleInput("first\r");
-		// 100 columns less omp's 8-column inset; 80% of 50 rows less the head and actions.
-		await screenShows(terminal, "got first size 36 92");
-
-		terminal.write(new TextEncoder().encode("model\r"));
-		await screenShows(terminal, "got model size 36 92");
-		assert.match(ansiText(page.describe(cx(100))), /got model size 36 92/, "the Console shows what the model wrote");
-
-		page.handleInput("\x1b");
-		await h.customCalls[0]!.promise;
-		terminal.write(new TextEncoder().encode("after\r"));
-		await screenShows(terminal, "got after size 24 80");
-		assert.equal(terminal.hasExited, false, "Esc leaves the terminal running");
+		typeKeys(root, "hi\r");
+		assert.equal(root.handlers.onPaste?.({ text: "p" }), true, "the Console takes the paste");
+		await screenShows(session, "keys:4");
+		assert.match(screenText(root), /keys:4/);
 	});
 
-	it("writes typed input to a real stdin terminal verbatim while Esc leaves without being written", async (t) => {
+	it("shows output written after opening and re-grids the terminal when the screen resizes", async (t) => {
 		const h = await makeHarness(t);
-		const session = h.spawn([process.execPath, "-e", [
-			"process.stdin.setRawMode(true)",
-			"process.stdin.on('data', (data) => process.stdout.write(data))",
-			"process.stdout.write('input-ready\\n')",
-		].join("; ")]);
-		await screenShows(session, "input-ready");
-		h.sheet([job(session.id)], session.id).sheet.handleInput("o");
-		const page = h.page;
+		const session = h.spawn(SIZER);
+		await screenShows(session, "ready");
+		const root = h.open(session.id).root;
+		await screenShows(session, "resized 36 98");
+
+		typeKeys(root, "first\r");
+		await screenShows(session, "got first size 36 98");
+		assert.match(screenText(root), /got first size 36 98/);
+
+		session.write(encoder.encode("model\r"));
+		await screenShows(session, "got model size 36 98");
+		assert.match(screenText(root), /got model size 36 98/, "the Console shows what the process wrote after it opened");
+
+		h.resize(120, 60);
+		await waitFor(() => session.styledScreen()?.view.cols === 118, (listener) => session.onScreenChange(listener),
+			() => `the grid follows the screen size; grid is ${session.styledScreen()?.view.cols}`);
+		await screenShows(session, "resized 44 118");
+		typeKeys(root, "after\r");
+		await screenShows(session, "got after size 44 118");
+	});
+
+	it("leaves the terminal running on Esc and gives it back the size its call started it with", async (t) => {
+		const h = await makeHarness(t);
+		const session = h.spawn(SIZER);
+		await screenShows(session, "ready");
+		const call = h.open(session.id);
 		const writes = t.mock.method(session, "write");
-		page.handleInput("typed-through-page\r");
-		await screenShows(session, "typed-through-page");
-		assert.match(ansiText(page.describe(cx(100))), /typed-through-page/);
-		assert.equal(writes.mock.callCount(), 1);
-		assert.equal(Buffer.from(writes.mock.calls[0]!.arguments[0]!).toString(), "typed-through-page\r");
-		page.handleInput("\x1b");
-		await h.customCalls[0]!.promise;
-		assert.equal(writes.mock.callCount(), 1, "Esc is navigation, not terminal input");
-		assert.equal(session.hasExited, false);
+		await waitFor(() => session.styledScreen()?.view.cols === 98, (listener) => session.onScreenChange(listener), "the Console grids the terminal");
+		await screenShows(session, "resized 36 98");
+
+		assert.equal(call.root.handlers.onKey?.(keyEvent("escape")), true);
+		await call.promise;
+		assert.equal(call.resolved, true, "leaving resolves the custom view");
+		assert.equal(writes.mock.callCount(), 0, "Esc is navigation, not terminal input");
+		assert.equal(session.hasExited, false, "Esc leaves the terminal running");
+		await screenShows(session, "resized 24 80");
+
+		session.write(encoder.encode("after\r"));
+		await screenShows(session, "got after size 24 80");
 	});
 
-	it("stops forwarding input after its real child exits and removes End", async (t) => {
+	it("stops forwarding keys once its child exits and drops End", async (t) => {
 		const h = await makeHarness(t);
 		const session = h.spawn([process.execPath, "-e", "process.stdout.write('ready\\n'); process.stdin.once('data', () => process.exit(0))"]);
 		await screenShows(session, "ready");
-		h.sheet([job(session.id)], session.id).sheet.handleInput("o");
-		const page = h.page;
+		const call = h.open(session.id);
+		typeKeys(call.root, "exit\r");
+		await waitFor(() => session.hasExited, (listener) => session.onExit(listener), "the child exits");
 		const writes = t.mock.method(session, "write");
-		page.handleInput("exit\r");
-		await waitFor(() => session.hasExited, (listener) => session.onExit(listener), "child exits on input");
-		const writeCount = writes.mock.callCount();
-		page.handleInput("ignored-after-exit");
-		assert.equal(writes.mock.callCount(), writeCount, "the Console gates writes rather than relying on ExecSession to reject them");
-		assert.deepEqual(buttons(withRole(page.describe(cx(100)), "omp.actions")), [LEAVE_ACTION]);
+
+		typeKeys(call.root, "ignored-after-exit");
+		assert.equal(writes.mock.callCount(), 0, "the Console gates writes rather than relying on ExecSession to reject them");
+		assert.deepEqual(buttons(call.root), [LEAVE_ACTION]);
 		assert.deepEqual(h.killCalls, []);
 	});
 
-	it("ends the running terminal as a person through End and then shows it is no longer stored", async (t) => {
+	it("ends the terminal as a person through End and closes once the terminal leaves the store", async (t) => {
 		const h = await makeHarness(t);
 		const session = h.spawn();
-		h.sheet([job(session.id)], session.id).sheet.handleInput("o");
-		const page = h.page;
-		assert.deepEqual(buttons(withRole(page.describe(cx(100)), "omp.actions")), [KILL_ACTION, LEAVE_ACTION]);
-		page.handleNativeEvent(action(KILL_ACTION));
-		await waitFor(() => h.store.get(session.id) === undefined, (listener) => h.store.subscribe(listener), "End removes the exited terminal");
+		const call = h.open(session.id);
+		assert.deepEqual(buttons(call.root), [KILL_ACTION, LEAVE_ACTION], "End only while running");
+
+		call.root.handlers.onAction?.(KILL_ACTION, actionEvent(KILL_ACTION));
+		await waitFor(() => h.store.get(session.id) === undefined, (listener) => h.store.subscribe(listener), "End removes the ended terminal");
 		assert.deepEqual(h.killCalls, [session.id]);
 		assert.equal(session.hasExited, true);
-		const gone = page.describe(cx(100));
-		assert.equal(nodes(gone).some((node) => node.k === "ansi"), false);
-		assert.deepEqual(buttons(withRole(gone, "omp.actions")), [LEAVE_ACTION]);
-		page.handleNativeEvent(action(LEAVE_ACTION));
-		assert.equal(await h.customCalls[0]!.promise, undefined);
+		assert.equal(await call.promise, undefined);
+		assert.equal(call.resolved, true, "a terminal that left the store closes its Console");
+	});
+
+	it("closes when its terminal leaves the store by any other path, and then opens again", async (t) => {
+		const h = await makeHarness(t);
+		const first = h.spawn();
+		const call = h.open(first.id);
+		h.store.remove(first.id);
+		await call.promise;
+		assert.equal(call.resolved, true);
+
+		const second = h.spawn();
+		h.open(second.id);
+	});
+
+	it("keeps one Console per session: a second terminal opens none while one is showing", async (t) => {
+		const h = await makeHarness(t);
+		const shown = h.spawn();
+		const call = h.open(shown.id);
+		const later = h.spawn();
+		assert.equal(openTerminalConsole(later.id), false);
+		assert.equal(h.calls.length, 1);
+
+		call.root.handlers.onAction?.(LEAVE_ACTION, actionEvent(LEAVE_ACTION));
+		await call.promise;
+		h.open(later.id);
+	});
+
+	it("opens a terminal only in its own session's UI, and none for a session without one", async (t) => {
+		const first = await makeHarness(t);
+		const second = await makeHarness(t);
+		const subagent = await makeHarness(t, false);
+
+		const own = second.spawn();
+		second.open(own.id);
+		assert.equal(first.calls.length, 0, "another session's UI shows nothing");
+
+		const headless = subagent.spawn();
+		assert.equal(openTerminalConsole(headless.id), false);
+		assert.deepEqual([first.calls.length, second.calls.length, subagent.calls.length], [0, 1, 0], "a session without a UI opens no Console");
+	});
+
+	it("opens nothing for an id no activation stores", async (t) => {
+		const h = await makeHarness(t);
+		assert.equal(openTerminalConsole("bg_missing"), false);
+		assert.equal(h.calls.length, 0);
+	});
+});
+
+const PTY_CONSOLE = new URL("../node_modules/@oh-my-pi/pi-coding-agent/src/ui/overlays/panels/pty-console.tsx", import.meta.url).href;
+
+async function ompConsole(): Promise<{ readonly keyBytes: Function; readonly model: object; readonly gridFor: Function }> {
+	const module: unknown = await import(PTY_CONSOLE);
+	assert.ok(typeof module === "object" && module !== null, "omp's pty-console module loads");
+	assert.ok("ptyKeyBytes" in module && typeof module.ptyKeyBytes === "function", "omp still exports ptyKeyBytes");
+	assert.ok("PtyConsoleModel" in module && typeof module.PtyConsoleModel === "function", "omp still exports PtyConsoleModel");
+	const model = module.PtyConsoleModel;
+	assert.ok("gridFor" in model && typeof model.gridFor === "function", "PtyConsoleModel still has gridFor");
+	return { keyBytes: module.ptyKeyBytes, model, gridFor: model.gridFor };
+}
+
+describe("Console bytes and grid against omp's own Console", () => {
+	const keys: KeyEvent[] = [
+		keyEvent("up"),
+		keyEvent("left"),
+		keyEvent("home"),
+		keyEvent("end"),
+		keyEvent("pageup"),
+		keyEvent("delete"),
+		keyEvent("shift+tab"),
+		keyEvent("enter"),
+		keyEvent("tab"),
+		keyEvent("space", " "),
+		keyEvent("backspace"),
+		keyEvent("escape"),
+		keyEvent("ctrl+c"),
+		keyEvent("alt+x", "x"),
+		keyEvent("é", "é"),
+		{ id: "f5", kind: "press", raw: "\x1b[15~" },
+		{ id: "ctrl+shift+a", kind: "press", raw: "\x1b[97;6u" },
+		{ id: "a", text: "a", kind: "release", raw: "a" },
+	];
+
+	it("sends every key as omp's ptyKeyBytes does, in both cursor modes", async () => {
+		const omp = await ompConsole();
+		for (const applicationCursorKeys of [false, true]) {
+			for (const key of keys) {
+				assert.equal(
+					consoleKeyBytes(key, applicationCursorKeys),
+					Reflect.apply(omp.keyBytes, undefined, [key, applicationCursorKeys]),
+					`${key.id} application=${applicationCursorKeys}`,
+				);
+			}
+		}
+	});
+
+	it("sizes the grid as PtyConsoleModel.gridFor does in Tern and in the ANSI TUI", async (t) => {
+		const omp = await ompConsole();
+		t.after(() => setNativeRenderingForTest(false));
+		for (const native of [false, true]) {
+			setNativeRenderingForTest(native);
+			for (const [columns, rows] of [[10, 3], [80, 24], [100, 50], [233, 61]] as const) {
+				assert.deepEqual(consoleGrid(columns, rows), Reflect.apply(omp.gridFor, omp.model, [columns, rows]), `${columns}x${rows} native=${native}`);
+			}
+		}
 	});
 });

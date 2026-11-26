@@ -5,7 +5,6 @@ import { rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { type AgentToolResult, type AgentToolUpdateCallback, type CustomTool, type ExtensionAPI, type ExtensionContext, type ImageAttachmentEntry, type SessionStopEvent, type SessionSwitchEvent, type Settings, type Skill, type ToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import type { ResolveContext } from "@oh-my-pi/pi-coding-agent/internal-urls/types";
-import { Box, Text } from "@oh-my-pi/pi-tui";
 import { Type } from "@oh-my-pi/omptype/typebox";
 
 import { type AgentHost, type AgentIdentity, type ParkedRuntime, parkedRuntimes } from "./agent-park.ts";
@@ -48,6 +47,7 @@ import type { MonitorScriptResult } from "./script-result.ts";
 import { ExecSession } from "./session.ts";
 import { SessionStore } from "./session-store.ts";
 import { type JobHost, TerminalJob } from "./terminal-job.ts";
+import { openTerminalConsole } from "./tern-terminal-hud.ts";
 import { buildShellCommand, chooseShell, IS_WINDOWS, resolveBinary, resolveWindowsShell, type TerminalShell } from "./shell.ts";
 import type { TerminalAppearance } from "./terminal-screen.ts";
 import {
@@ -506,6 +506,7 @@ async function runTerminal(
 		// doesn't let the session be GC'd / lose its place.
 		const { pruned, count } = ctx.store.insert(session);
 		watchSessionExit(ctx, session);
+		openTerminalConsole(session.id);
 		if (pruned) {
 			unwatchSessionExit(ctx, pruned.id);
 			ctx.coordinator.handleEviction(pruned);
@@ -1364,11 +1365,7 @@ export function activate(
 	registerActualTerminalCompactHandoff(pi, () => ctx.store);
 	const urlRuntime = createTerminalUrlRuntime(currentRuntime);
 	setTerminalUrlRuntime(urlRuntime);
-	pi.registerMessageRenderer("omp-actual-terminal-notice", (message) => {
-		const box = new Box(1, 1);
-		box.addChild(new Text(buildNoticeDisplayMessage(message.details), 0, 0));
-		return box;
-	});
+	pi.registerMessageRenderer("omp-actual-terminal-notice", (message) => buildNoticeDisplayMessage(message.details));
 
 	pi.on("tool_execution_end", async (event) => {
 		ctx.lifecycle.commitToolReads(event.toolCallId, event.isError === true);

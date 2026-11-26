@@ -2,7 +2,7 @@ import type { FinalScreenOutput } from "../src/collect.ts";
 
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@oh-my-pi/pi-tui/tools/streaming-output";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@oh-my-pi/pi-coding-agent/tools/streaming-output";
 
 import {
 	finalizeKillResult,
