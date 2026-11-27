@@ -3,7 +3,7 @@
 [English](README.md) | 简体中文
 
 为 [oh-my-pi](https://github.com/can1357/oh-my-pi)（omp）提供长时间运行的终端
-会话。插件接管 omp 的 `bash` 中带 `pty: true` 的调用：长命令、交互程序（REPL、TUI、`ssh`、`sudo`）、并发计算和开发期 daemon 在本会话自己 shell 的 PTY 会话里运行，由模型通过写入、读取和 monitor 来驱动，而不是一次阻塞到底的调用。其余 `bash` 调用仍是 omp 自己的。会话在多轮对话之间持续运行，调用不设 `timeout` 就没有截止时间；主 agent、子 agent 和 `omp -p` 里都一样。与 omp 自己的 `pty: true` 一样，带 UI 的会话启动的终端会打开它的 Console，人在其中查看它、向它输入。
+会话。插件接管 omp 的 `bash` 中带 `pty: true` 的调用：长命令、交互程序（REPL、TUI、`ssh`、`sudo`）、并发计算和开发期 daemon 在本会话自己 shell 的 PTY 会话里运行，由模型通过写入、读取和 monitor 来驱动，而不是一次阻塞到底的调用。其余 `bash` 调用仍是 omp 自己的。会话在多轮对话之间持续运行，调用不设 `timeout` 就没有截止时间；主 agent、子 agent 和 `omp -p` 里都一样。终端启动时不会打断人：不会有任何东西自动打开。人需要它的 Console 时，在 ANSI TUI 里执行 `/terminals`，或在 Tern 里用本包的 Tern 插件入口，就能查看它、向它输入。
 
 ## 安装
 
@@ -19,14 +19,14 @@ omp plugin install https://github.com/oh-my-omp/omp-actual-terminal#release
 omp plugin install https://github.com/oh-my-omp/omp-actual-terminal#release --force
 ```
 
-本扩展不需要 Tern 插件。0.14.7 及以前的版本会安装一个 Tern 插件（`omp-unified-exec`）；PATH 中存在 `tern` 时，加载本扩展（包括安装校验）会通过 Tern 自己的 CLI 移除那份副本或链接。
+本扩展自带一个 Tern 插件（`omp-actual-terminal`，位于本包的 `tern-plugin/`），它在 Tern 的命令面板里加入 `omp：打开终端控制台`。0.14.7 及以前的版本会安装另一个 Tern 插件（`omp-unified-exec`）；PATH 中存在 `tern` 时，加载本扩展（包括安装校验）会通过 Tern 自己的 CLI 移除那份副本或链接，然后从本包安装或更新自己的插件。用 `tern plugin link` 链接的副本保持原样。没有 `tern` 时什么也不做；Tern 失败时，加载失败并给出它的诊断信息。
 
 本插件只支持运行于 Bun 1.4+ 的 omp（omp 是编译后的 Bun 可执行文件）。Pi 等非 omp 宿主会在扩展 factory 阶段立即收到明确的“only supports omp”错误。每个会话都使用 Bun 原生的 `Bun.Terminal`；宿主缺少 `Bun.spawn` 或 `Bun.Terminal` 时，也在同一 factory 阶段被拒绝，早于 omp 模块加载和任何工具注册。
 
 ## 界面语言
 
-面向人的通知、widget、omp bash 卡片中的附加说明以及 Tern
-Console 都遵循 `OMOMP_LANG`（不区分大小写的 `en` 或 `zh`）。未设置或无效时，
+面向人的通知、widget、omp bash 卡片中的附加说明、Tern Console 以及 Tern
+插件的命令面板条目都遵循 `OMOMP_LANG`（不区分大小写的 `en` 或 `zh`）。未设置或无效时，
 插件使用第一个非空的 `LC_ALL`、`LC_MESSAGES` 或 `LANG`（以 `zh` 开头则使用中文）；
 否则使用英文。选择界面语言时，本插件不读取 `omomp` 文件。工具标签在每个会话
 注册时解析一次环境变量；通知、widget、渲染器和 Console 在生成显示文字时解析。
@@ -47,7 +47,7 @@ Console 都遵循 `OMOMP_LANG`（不区分大小写的 `en` 或 `zh`）。未设
 - **等待匹配输出。** `monitor` 不消费输出地观察已有会话，在匹配批次、judge 模型判定满足所述意图的新屏幕或结束时唤醒模型；默认最多成功返回十次。monitor 20 分钟没有返回时，会提醒 agent 一次去检查会话。
 - **等待输入提醒。** 无论有没有 monitor，会话屏幕停在 agent 还没看过的提示上（`apt upgrade` 询问 sshd_config 这类 debconf/whiptail 对话框、`[Y/n]`、密码、分页器）时，都会唤醒 agent。
 - **omp 原生呈现。** `bash`、`write_stdin` 和 `kill_session` 渲染为用 omp 自己的 UI 节点搭成的 bash 卡片（命令行、输出、带退出码、job id 和耗时的状态行、错误配色），在 ANSI TUI 和 Tern 里都是如此；在 Tern 里，不带 `pty` 的 `bash` 调用保留 omp 自己的卡片。
-- **给人用的 Console。** 终端在其调用启动它时打开 Console，与 omp 自己的 `pty: true` Console 的打开方式相同：不用调用工具就能回滚查看、向它输入、离开后让它继续运行，或结束它。
+- **按需打开、给人用的 Console。** 启动终端不会打开任何东西。在 ANSI TUI 里，`/terminals` 列出本会话的终端——job id、标题和状态，子 agent 的也在内——并打开所选终端的 Console；`/terminals bg_1` 直接打开该 id。Tern 里同样有这条命令，本包的 Tern 插件还提供一个命令面板入口，让聚焦的 omp 窗格执行它。在 Console 里可以回滚查看、向终端输入、离开后让它继续运行，或结束它，都不需要调用工具。
 
 <a id="tern-console"></a>
 
@@ -56,13 +56,13 @@ Console 都遵循 `OMOMP_LANG`（不区分大小写的 `en` 或 `zh`）。未设
 当 omp 在 Tern 里原生渲染时：
 
 - **tray 与 jobs 页面上的屏幕。** 每个终端的 job 都带着它的当前屏幕，屏幕变化后半秒内更新：tray 卡片显示最后几行，卡片的展开预览显示更多行，jobs 页面的输出区显示整屏。终端返回后，tray 和 jobs 页面显示它的最后一屏，后接它的返回方式。tray 卡片的 Open 进入 jobs 页面并选中这个终端。
-- **Console 随调用打开。** 与 omp 自己的 `bash` `pty: true` 在调用开始时打开 Console 一样，带 UI 的会话启动的终端一运行就打开它的 Console；子 agent 的终端和 `omp -p` 下的终端不打开。一个会话同一时间只显示一个 Console：已有 Console 显示时启动的终端不打开。终端不再出现在列表里时，它的 Console 自动关闭。离开之后没有入口能再次打开它：omp 19.2.0 的 jobs 页面不接受扩展提供的动作。
+- **打开 Console。** 终端启动时不打开任何 Console。在 Tern 里，命令面板中的 `omp：打开终端控制台`（界面语言为英文时显示 `omp: Open terminal Console`）让聚焦的 omp 窗格执行 `/terminals`；没有聚焦的 omp agent 窗格时只弹出提示 `没有聚焦的 omp 窗格`（`No omp pane is focused`）。`/terminals` 列出本会话的终端——job id、标题和状态，子 agent 的也在内——并打开所选终端的 Console；`/terminals bg_1` 打开该 id。job id 可作为参数补全。界面无法显示 Console、id 不存在、没有终端，或该界面已有 Console 在显示时，命令只发出通知而不打开：每个界面同时只有一个 Console。终端不再出现在列表里时，它的 Console 自动关闭；离开 Console 从不停止终端，所以之后还能用同样的入口再次打开。
 - **Console。** Console 把终端显示为全屏页，框架与 omp 自己的 Console 相同，题头是 job id、标题和状态：显示保留的历史和当前屏幕，带颜色，跟随新输出，并可向上回滚。键入的按键按 omp 的 Console 的方式发给终端，模型能看到效果；模型用 `write_stdin` 写入的内容也立即显示在这里。Esc /「离开」关闭 Console，终端继续运行；「结束」按人工结束处理这个终端，它的 job 显示为已取消。
 - **尺寸。** Console 打开期间，终端采用 Console 的网格，模型此时读到的也是这个网格；离开后，终端恢复为其调用启动它时的 `cols`/`rows`。
 
-在 omp 的 ANSI TUI 里，Console 显示为屏幕底部的 sheet，题头、按键、「离开」和「结束」都相同。工具结果仍是纯文本；显式 `read term://…/screen.png` 请求返回图像。
+在 omp 的 ANSI TUI 里，`/terminals` 打开 Console 时，它显示为屏幕底部的 sheet，题头、按键、「离开」和「结束」都相同。工具结果仍是纯文本；显式 `read term://…/screen.png` 请求返回图像。
 
-**不需要 Tern 插件。** Console 使用 omp 自己的 overlay role（`omp.overlay.console`），所以由 Tern 的自带样式绘制。这个 role 是 omp 与 Tern 的展示层契约，升级时需重新验证。本扩展会移除早期版本安装的 `omp-unified-exec` Tern 插件，因为它的样式表仍会移动 omp 共享的 widget 容器：在 omp 等待的扩展 factory 中，先执行 Tern 的 `plugin list`，再执行 `plugin remove`（Tern 回答它是链接时改用 `plugin unlink`），然后确认 Tern 不再列出它。没有 `tern` 时什么也不做；Tern 可用但失败时，加载失败并给出它的诊断信息。
+**Tern 插件。** Console 使用 omp 自己的 overlay role（`omp.overlay.console`），所以由 Tern 的自带样式绘制。这个 role 是 omp 与 Tern 的展示层契约，升级时需重新验证。本包自带一个 Tern 插件（`tern-plugin/`，id 为 `omp-actual-terminal`），只为提供这个命令面板入口。PATH 中存在 `tern` 时，加载本扩展会把它安装进 Tern：已安装的副本缺失或与包内不一致时执行 `tern plugin install <包内的 tern-plugin 目录> --force`。用 `tern plugin link` 链接的副本保持原样。本扩展还会移除早期版本安装的 `omp-unified-exec` Tern 插件，因为它的样式表仍会移动 omp 共享的 widget 容器：在 omp 等待的扩展 factory 中，先执行 Tern 的 `plugin list`，再执行 `plugin remove`（Tern 回答它是链接时改用 `plugin unlink`），然后确认 Tern 不再列出它。没有 `tern` 时什么也不做；Tern 可用但失败时，加载失败并给出它的诊断信息。
 
 ## 工具
 
@@ -634,7 +634,7 @@ src/
 ├── shell-host.ts         # omp's cmd.exe test, loaded at factory time
 ├── agent-park.ts         # omp's agent registry/lifecycle reader; parked subagents' terminal runtimes
 ├── session-binding.ts    # activation-local AgentSession identity for bash settings, stop detectors and the terminals' job owner
-├── tern-terminal-hud.ts  # the full-pane Console over one terminal
+├── tern-terminal-hud.ts  # the full-pane Console over one terminal, the `/terminals` command
 ├── terminal-resource.ts  # process-global terminal keys, live/frozen projections
 ├── terminal-url.ts       # omp `term://` read handler; reports reads to the terminal's owner
 ├── terminal-image.ts     # terminal screenshots (SVG → PNG)
@@ -653,7 +653,11 @@ src/
 ├── input-wait.ts         # input prompt detection; input-wait alerts as terminal notices
 ├── log-archive.ts        # seven-day gzip compression of session logs
 ├── tern-plugin-removal.ts# removes the Tern plugin earlier versions installed
+├── tern-plugin-install.ts# installs or updates the package's Tern plugin at factory time
 └── omomp-shared/         # copies of oh-my-omp/shared files declared in omomp-shared.json
+tern-plugin/
+├── plugin.toml           # the Tern plugin's manifest: id, version, `window.luau`
+└── window.luau           # the palette entry that runs `/terminals` in the focused omp pane
 docs/
 └── DEV.md                # maintainer guide
 ```
@@ -664,7 +668,8 @@ docs/
 bun install
 bun run check                              # 严格类型检查
 OMOMP_LANG=en bun run test                 # Bun 单元/集成测试（断言的是英文界面文字）
-bun test ./tests/tern-terminal-hud.test.ts ./tests/omp-presentation.test.ts
+bun test ./tests/tern-terminal-hud.test.ts ./tests/omp-presentation.test.ts \
+         ./tests/tern-plugin-install.test.ts
 ```
 
 完整套件使用 Bun 原生的 `bun test` 运行器，包括真实 PTY 会话和 Console 测试；PTY 是必备条件，不是跳过条件。Node 仍是测试前提，因为独立的 `tests/bun-pty-runtime.mjs` fixture 把 `node` 作为普通子程序启动，而不是插件宿主。CI 在 Linux、macOS、Windows 上运行完整套件和源码/编译版 fixture。Tern 上的行为在真实的 Tern 窗口里验证，做法见 [docs/DEV.md](docs/DEV.md)。

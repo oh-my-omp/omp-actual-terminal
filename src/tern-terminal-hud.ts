@@ -1,4 +1,6 @@
 import type { ExtensionAPI, ExtensionContext, ExtensionUiHost } from "@oh-my-pi/pi-coding-agent";
+import type { AutocompleteItem } from "@oh-my-pi/pi-coding-agent/autocomplete/autocomplete";
+import type { ExtensionCommandContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import {
 	createRoot,
 	effect,
@@ -396,22 +398,26 @@ class TerminalPage {
 	}
 }
 
-/** One plugin activation: its terminals, how a person ends one, and its UI when it has one. */
+/** One plugin activation: its terminals and how a person ends one. */
 interface HudActivation {
 	readonly store: () => SessionStore;
 	readonly kill: KillSession;
-	ui: ExtensionContext["ui"] | undefined;
-	consoleOpen: boolean;
 }
+
+type ConsoleUi = ExtensionContext["ui"];
 
 interface HudRegistry {
-	/** Weak: a session that ends drops its activation with it (the handlers it registered hold it). */
+	/** Weak: a session that ends drops its activation with it (the command it registered holds it). */
 	readonly activations: Set<WeakRef<HudActivation>>;
+	/** The UIs showing a Console now: one Console per UI. */
+	readonly showing: WeakSet<ConsoleUi>;
 }
 
-const registrySymbol = Symbol.for("omp-actual-terminal.tern-hud");
+export const TERMINALS_COMMAND = "terminals";
+
+const registrySymbol = Symbol.for("omp-actual-terminal.console-registry");
 const processGlobal = globalThis as typeof globalThis & { [registrySymbol]?: HudRegistry };
-const registry: HudRegistry = processGlobal[registrySymbol] ??= { activations: new Set() };
+const registry: HudRegistry = processGlobal[registrySymbol] ??= { activations: new Set(), showing: new WeakSet() };
 
 function liveActivations(): HudActivation[] {
 	const live: HudActivation[] = [];
@@ -427,13 +433,29 @@ function ownerOf(id: string): HudActivation | undefined {
 	return liveActivations().find((activation) => activation.store().get(id) !== undefined);
 }
 
-export function openTerminalConsole(id: string): boolean {
+/** The process's stored terminals, `first`'s before the rest, each once. */
+function listTerminals(first?: HudActivation): TerminalSummary[] {
+	const activations = liveActivations();
+	const ordered = first === undefined ? activations : [first, ...activations.filter((activation) => activation !== first)];
+	const seen = new Set<string>();
+	const terminals: TerminalSummary[] = [];
+	for (const activation of ordered) {
+		for (const session of activation.store().values()) {
+			if (seen.has(session.id)) continue;
+			seen.add(session.id);
+			terminals.push(terminalSummary(session));
+		}
+	}
+	return terminals;
+}
+
+/** Shows terminal `id`'s Console in `ui`; false when no activation stores it or `ui` already shows one. */
+export function openTerminalConsole(id: string, ui: ConsoleUi): boolean {
 	const owner = ownerOf(id);
-	const ui = owner?.ui;
-	if (owner === undefined || ui === undefined || owner.consoleOpen) return false;
-	owner.consoleOpen = true;
+	if (owner === undefined || registry.showing.has(ui)) return false;
+	registry.showing.add(ui);
 	const closed = (): void => {
-		owner.consoleOpen = false;
+		registry.showing.delete(ui);
 	};
 	void ui.custom<void>(
 		(host, _theme, _keybindings, done) =>
@@ -446,13 +468,57 @@ export function openTerminalConsole(id: string): boolean {
 	return true;
 }
 
+function terminalLabel(terminal: TerminalSummary): string {
+	return `${terminal.id}  ${terminal.title}  ${stateText(terminal.state)}`;
+}
+
+function terminalCompletions(activation: HudActivation, prefix: string): AutocompleteItem[] | null {
+	const wanted = prefix.trim();
+	const items = listTerminals(activation)
+		.filter((terminal) => terminal.id.startsWith(wanted))
+		.map((terminal) => ({ value: terminal.id, label: terminal.id, description: `${terminal.title}  ${stateText(terminal.state)}` }));
+	return items.length === 0 ? null : items;
+}
+
+async function runTerminalsCommand(activation: HudActivation, args: string, ctx: ExtensionCommandContext): Promise<void> {
+	if (!ctx.hasUI) {
+		ctx.ui.notify(tr("omp-actual-terminal: a terminal's Console needs the interactive UI", "omp-actual-terminal：终端控制台需要交互界面"), "warning");
+		return;
+	}
+	const terminals = listTerminals(activation);
+	const named = args.trim();
+	let id: string;
+	if (named !== "") {
+		if (!terminals.some((terminal) => terminal.id === named)) {
+			ctx.ui.notify(tr(`omp-actual-terminal: no terminal ${named}`, `omp-actual-terminal：没有终端 ${named}`), "warning");
+			return;
+		}
+		id = named;
+	} else {
+		if (terminals.length === 0) {
+			ctx.ui.notify(tr("omp-actual-terminal: no terminals to open", "omp-actual-terminal：没有可打开的终端"), "info");
+			return;
+		}
+		const labels = new Map(terminals.map((terminal) => [terminalLabel(terminal), terminal.id]));
+		const choice = await ctx.ui.select(tr("Open a terminal's Console", "打开终端的控制台"), [...labels.keys()]);
+		const chosen = choice === undefined ? undefined : labels.get(choice);
+		if (chosen === undefined) return;
+		id = chosen;
+	}
+	if (!openTerminalConsole(id, ctx.ui)) {
+		ctx.ui.notify(tr(`omp-actual-terminal: ${id}'s Console did not open; a Console is already showing or the terminal is gone`, `omp-actual-terminal：${id} 的控制台没有打开：已有控制台在显示，或终端已不在`), "warning");
+	}
+}
+
 export function mountTerminalHud(pi: ExtensionAPI, store: () => SessionStore, kill: KillSession): void {
-	const activation: HudActivation = { store, kill, ui: undefined, consoleOpen: false };
+	const activation: HudActivation = { store, kill };
 	registry.activations.add(new WeakRef(activation));
-	pi.on("session_start", async (_event, eventCtx) => {
-		activation.ui = eventCtx.hasUI ? eventCtx.ui : undefined;
-	});
-	pi.on("session_shutdown", async () => {
-		activation.ui = undefined;
+	pi.registerCommand(TERMINALS_COMMAND, {
+		description: tr(
+			"Open a terminal's Console: pick one, or name its job id (/terminals bg_1)",
+			"打开终端的控制台：从列表中选一个，或写出它的 job id（/terminals bg_1）",
+		),
+		getArgumentCompletions: (prefix) => terminalCompletions(activation, prefix),
+		handler: (args, ctx) => runTerminalsCommand(activation, args, ctx),
 	});
 }

@@ -113,6 +113,9 @@ export function registerActualTerminalCompactHandoff(pi: CompactExtensionAPI, st
 		pi,
 		defineStatefulHarnessHandoff<PtySessionsSnapshot>({
 			pluginId: COMPACT_HANDOFF_PLUGIN_ID,
+			inactiveClaim:
+				`Zero live PTY terminals exist at compaction (\`omp-actual-terminal\`, \`source="${COMPACT_HANDOFF_SOURCE}"\`) — ` +
+				`NEVER list historical prefix terminal \`job_id\`s, PIDs, \`term://\` URLs, or log paths as active state in the summary.`,
 			captureState() {
 				return capturePtySessionsSnapshot(store());
 			},
