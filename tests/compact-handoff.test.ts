@@ -6,6 +6,7 @@ import type {
 	BeforeAgentStartEventResult,
 	CompactionEntry,
 	ExtensionContext,
+	SessionBeforeCompactEvent,
 	SessionCompactingEvent,
 	SessionCompactingResult,
 	SessionCompactEvent,
@@ -46,6 +47,9 @@ function createMockHost() {
 		pi,
 		async emitAutoStart(event: AutoCompactionStartEvent, ctx: ExtensionContext) {
 			for (const h of handlers.get("auto_compaction_start") ?? []) await h(event, ctx);
+		},
+		async emitBeforeCompact(event: SessionBeforeCompactEvent, ctx: ExtensionContext) {
+			for (const h of handlers.get("session_before_compact") ?? []) await h(event, ctx);
 		},
 		async emitCompacting(event: SessionCompactingEvent, ctx: ExtensionContext): Promise<SessionCompactingResult | undefined> {
 			let result: SessionCompactingResult | undefined;
@@ -147,14 +151,36 @@ describe("omp-actual-terminal compact handoff", () => {
 		expect(sent).toEqual(["notice:idle-1", "notice:exit_wake", "notice:monitor_match"]);
 	});
 
-	test("Plane 2B silently gates out when SessionStore is empty and emits claim + delta-stream PTY table when active", async () => {
+	test("Plane 2B emits inactiveClaim when SessionStore is empty and emits claim + delta-stream PTY table when active", async () => {
 		const store = new SessionStore({ maxSessions: 8, lruProtectedCount: 2 });
 		const host = createMockHost();
 		registerActualTerminalCompactHandoff(host.pi, () => store);
 
 		const emptyCtx = makeCtx();
 		const emptyCompacting = await host.emitCompacting({ type: "session.compacting", sessionId: "s-empty", messages: [] }, emptyCtx);
-		expect(emptyCompacting?.context?.join("\n") ?? "").not.toContain("[omp-actual-terminal]");
+		const emptyPrepared = getSharedCompactCoordinator().getLastPrepared(emptyCtx.sessionManager);
+		expect(emptyPrepared?.inactiveStatefulPluginIds).toContain("omp-actual-terminal");
+		const emptyClaimLine = emptyCompacting?.context?.find((line) => line.startsWith("harness-provided [omp-actual-terminal]"));
+		expect(emptyClaimLine).toBeDefined();
+		expect(emptyClaimLine).not.toContain("\n");
+		expect(emptyClaimLine).toContain("Zero live PTY terminals exist at compaction");
+		expect(emptyClaimLine).toContain(`source="${COMPACT_HANDOFF_SOURCE}"`);
+		expect(emptyClaimLine).toContain("NEVER list historical prefix terminal");
+		const emptyCmpEntry: CompactionEntry = {
+			type: "compaction",
+			id: "cmp_pty_empty",
+			parentId: null,
+			timestamp: "2026-11-23T00:00:30.000Z",
+			summary: "summary",
+			firstKeptEntryId: "u0",
+			tokensBefore: 100000,
+		};
+		await host.emitCompact({ type: "session_compact", compactionEntry: emptyCmpEntry, fromExtension: false }, emptyCtx);
+		const emptyStartResults = await host.emitBeforeAgentStart(
+			{ type: "before_agent_start", reason: "prompt", prompt: "continue", systemPrompt: [] },
+			emptyCtx,
+		);
+		expect(emptyStartResults).toEqual([]);
 
 		store.insert(
 			fakeSession({
@@ -243,5 +269,82 @@ describe("omp-actual-terminal compact handoff", () => {
 			],
 		});
 		expect(formatted).toContain("[Authoritative PTY Terminal Table — omp-actual-terminal]");
+	});
+
+	test("Plane 2B before_agent_start reads live SessionStore state when PTY exits during compaction", async () => {
+		const store = new SessionStore({ maxSessions: 8, lruProtectedCount: 2 });
+		const host = createMockHost();
+		registerActualTerminalCompactHandoff(host.pi, () => store);
+
+		const bg1 = {
+			id: "bg_1",
+			title: "astro preview 4391",
+			displayCommand: "node_modules/.bin/astro preview --port 4391",
+			cwd: "/repo/site",
+			hasExited: false,
+			exitCode: null as number | null,
+			pid: 4242,
+			terminalUrl: "term://bg_1-astro",
+			logPath: "/tmp/omp-actual-terminal-1.log",
+			lastUsed: Date.now(),
+			terminate() {},
+			release: async () => {},
+			releaseForShutdown: async () => {},
+		};
+		store.insert(bg1 as unknown as ExecSession);
+
+		const keptUser: SessionEntry = {
+			type: "message",
+			id: "u1",
+			parentId: null,
+			timestamp: "2026-11-23T00:00:00.000Z",
+			message: { role: "user", content: "continue", timestamp: 1 },
+		};
+		const cmpEntry: CompactionEntry = {
+			type: "compaction",
+			id: "cmp_pty_transition",
+			parentId: "u1",
+			timestamp: "2026-11-23T00:01:00.000Z",
+			summary: "summary",
+			firstKeptEntryId: "u1",
+			tokensBefore: 450000,
+		};
+		const ctx = makeCtx([keptUser, cmpEntry]);
+		const preparation = {
+			firstKeptEntryId: "u1",
+			messagesToSummarize: [],
+			turnPrefixMessages: [],
+			recentMessages: [],
+			isSplitTurn: false,
+			tokensBefore: 450000,
+			fileOps: { read: new Set<string>(), edited: new Set<string>(), written: new Set<string>() },
+			settings: { enabled: true, keepRecentTokens: 20000, reserveTokens: 16384 },
+		} as unknown as SessionBeforeCompactEvent["preparation"];
+
+		await host.emitBeforeCompact(
+			{
+				type: "session_before_compact",
+				preparation,
+				branchEntries: [],
+				signal: new AbortController().signal,
+			},
+			ctx,
+		);
+		const compacting = await host.emitCompacting({ type: "session.compacting", sessionId: "s-transition", messages: [] }, ctx);
+		expect(compacting?.context?.join("\n") ?? "").toContain("1 terminal(s): 1 running, 0 exited");
+
+		bg1.hasExited = true;
+		bg1.exitCode = 0;
+
+		await host.emitCompact({ type: "session_compact", compactionEntry: cmpEntry, fromExtension: false }, ctx);
+		const startResults = await host.emitBeforeAgentStart(
+			{ type: "before_agent_start", reason: "prompt", prompt: "continue", systemPrompt: [] },
+			ctx,
+		);
+		expect(startResults.length).toBe(1);
+		const content = typeof startResults[0]?.message === "object" ? String(startResults[0].message.content) : "";
+		expect(content).toContain(`<system-reminder source="${COMPACT_HANDOFF_SOURCE}">`);
+		expect(content).toContain("bg_1 [exited(0)]");
+		expect(content).not.toContain("bg_1 [running]");
 	});
 });
