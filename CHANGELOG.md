@@ -4,6 +4,8 @@ All notable changes to this project. **Newest entries go on top.**
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-27
+
 ### Added
 
 - Installed or updated the bundled Tern plugin during host setup when its listed copy was missing or mismatched, while leaving linked copies unchanged
