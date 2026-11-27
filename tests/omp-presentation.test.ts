@@ -604,6 +604,7 @@ describe("host presentation activation", () => {
 		assert.equal(parameterGets, 0);
 		assert.equal(typeof Object.getOwnPropertyDescriptor(registered[0], "description")?.get, "function");
 		assert.equal(typeof Object.getOwnPropertyDescriptor(registered[0], "parameters")?.get, "function");
+		assert.equal(Object.getOwnPropertyDescriptor(registered[0], "lenientArgValidation")?.value, true);
 		assert.equal(registered[0].description, "Lazy bash description");
 		assert.equal(registered[0].parameters, parameters);
 		assert.equal(descriptionGets, 1);

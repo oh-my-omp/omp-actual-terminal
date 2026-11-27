@@ -62,7 +62,7 @@ export function stubTerminalHost(overrides: Partial<TerminalHost> = {}, jobs: As
 			formatApprovalDetails: () => [],
 			description: "stub bash",
 		}),
-		servicesEnabled: () => false,
+		servicesEnabled: () => true,
 		seed: async () => ({ env: processEnv(), script: "" }),
 		mounts: async () => "",
 		// A line break, not `;`: bash parses a line whole, so aliases the prelude defines reach only later lines.
