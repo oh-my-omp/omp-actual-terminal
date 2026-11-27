@@ -167,6 +167,13 @@ describe("write_stdin chars encoding", () => {
 		assert.deepEqual([...buf], [0x1b, 0x3a, 0x77, 0x71, 0x0a], `bytes=${[...buf].map((b) => b.toString(16))}`);
 	});
 
+	it("whitespace-only chars are written verbatim byte for byte", async () => {
+		const c = await spawnCapture();
+		await c.send(" \t\n");
+		const buf = await c.finish();
+		assert.deepEqual([...buf], [0x20, 0x09, 0x0a], `bytes=${[...buf].map((b) => b.toString(16))}`);
+	});
+
 	it("UTF-8 multi-byte chars are passed through verbatim", async () => {
 		const c = await spawnCapture();
 		await c.send("é"); // U+00E9 → 0xC3 0xA9 in UTF-8

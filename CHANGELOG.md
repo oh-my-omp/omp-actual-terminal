@@ -6,6 +6,7 @@ All notable changes to this project. **Newest entries go on top.**
 
 ### Changed
 
+- Treat empty values on every registered tool as not passed — `""` or whitespace-only strings, `[]`, `{}` and `null` — so a blank `title` or `shell` no longer refuses a `bash` call without `pty`, a blank `condition` or `judge` no longer matches every batch or fails with `invalid_judge`, and a blank `signal` terminates with the default `SIGTERM`; `write_stdin`'s `chars` stays verbatim, writing whitespace byte for byte
 - Emitted an empty-state `omp-actual-terminal` compaction exclusion claim when `SessionStore` holds no terminals so summaries do not treat closed prefix terminals as active, and synced `src/omomp-shared/compact-handoff.ts` (`COMPACT_HANDOFF_REVISION = 3`) so post-compaction `before_agent_start` injects live `SessionStore` terminal state ([#56](https://github.com/oh-my-omp/omp-actual-terminal/issues/56))
 
 ## [0.19.0] - 2026-11-27

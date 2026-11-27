@@ -94,16 +94,12 @@ export type BashCall =
 	| { readonly kind: "native"; readonly params: BashParams }
 	| { readonly kind: "terminal"; readonly request: TerminalRequest };
 
-function blankToUndefined(value: string | undefined): string | undefined {
-	return value === undefined || value.trim() === "" ? undefined : value;
-}
-
 /** Splits a validated `bash` call into omp's own bash and the plugin's terminal; throws for a call neither accepts. */
 export function parseBashCall(input: unknown): BashCall {
 	const parsed = BASH_PARAMETERS.safeParse(input);
 	if (!parsed.success) throw new Error(`bash: ${parsed.error.message}`);
 	const params = parsed.data;
-	const service = blankToUndefined(params.name);
+	const service = params.name;
 	if (params.pty !== true || service !== undefined) {
 		const stray = TERMINAL_FIELDS.filter((field) => params[field] !== undefined);
 		if (stray.length > 0) {
@@ -122,7 +118,7 @@ export function parseBashCall(input: unknown): BashCall {
 	if (title === undefined) {
 		throw new Error(`bash: \`title\` is required with \`pty: true\` — a short nonblank name for this terminal (at most ${MAX_TITLE_CHARS} characters shown); notices and list_sessions identify the terminal by it.`);
 	}
-	const notify = blankToUndefined(params.notify);
+	const notify = params.notify;
 	if (notify !== undefined) {
 		try {
 			new RegExp(notify);
@@ -135,9 +131,9 @@ export function parseBashCall(input: unknown): BashCall {
 		kind: "terminal",
 		request: {
 			command: params.command,
-			cwd: blankToUndefined(params.cwd),
+			cwd: params.cwd,
 			title,
-			shell: blankToUndefined(params.shell),
+			shell: params.shell,
 			cols: params.cols,
 			rows: params.rows,
 			yieldTimeMs: params.yield_time_ms,

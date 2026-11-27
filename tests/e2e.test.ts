@@ -386,6 +386,22 @@ describe("omp-actual-terminal e2e", () => {
 		await h.emit("session_shutdown");
 	});
 
+	it("blank monitor fields count as omitted and a blank signal terminates with the default", async () => {
+		const h = makeHarness();
+		await h.emit("session_start");
+		const r1 = await h.call("bash", { pty: true, title: "Test command", command: "sleep 0.4; echo done", yield_time_ms: 300 });
+		const sid = r1.details.job_id;
+		const blanked = await h.call("monitor", { job_id: sid, condition: " ", judge: "" });
+		assert.equal(blanked.details.status, "started", JSON.stringify(blanked.details));
+		assert.deepEqual(blanked.details.monitor.watch, { kind: "end" });
+		const r2 = await h.call("bash", { pty: true, title: "Kill target", command: "sleep 30", yield_time_ms: 300, async: true });
+		const killed = await h.call("kill_session", { job_id: r2.details.job_id, signal: " " });
+		assert.equal(killed.details.killed, true);
+		assert.equal(killed.details.requested_signal, "SIGTERM");
+		assert.ok(await waitFor(() => h.sentMessages.some((m) => m.customType === "omp-actual-terminal-notice" && m.content.includes("monitor ended:"))));
+		await h.emit("session_shutdown");
+	});
+
 	it("write_stdin sends input and terminal EOF to cat", async () => {
 		const h = makeHarness();
 		await h.emit("session_start");
@@ -1090,6 +1106,12 @@ describe("bash without a terminal", () => {
 				assert.equal(await h.call("bash", params), native);
 				assert.deepEqual(invoked, [params]);
 			}
+			invoked.length = 0;
+			assert.equal(await h.call("bash", { command: "echo blank", title: " ", shell: null, notify: "", ready: {} }), native);
+			assert.deepEqual(invoked, [{ command: "echo blank" }]);
+			invoked.length = 0;
+			assert.equal(await h.call("bash", { command: "echo x", workdir: "/" }), native);
+			assert.deepEqual(invoked, [{ command: "echo x" }]);
 			const listed = await h.call("list_sessions", {});
 			assert.equal(listed.details.running_count, 0);
 		} finally {
@@ -1105,7 +1127,6 @@ describe("bash without a terminal", () => {
 			await assert.rejects(h.call("bash", { command: "echo x", title: "t", yield_time_ms: 10 }), /`title`, `yield_time_ms` only apply with `pty: true`/);
 			await assert.rejects(h.call("bash", { command: "echo x", title: "t" }), /`title` only applies with `pty: true`; drop it,/);
 			await assert.rejects(h.call("bash", { command: "x", pty: true, name: "svc", shell: "/bin/sh" }), /`shell` only applies to a terminal/);
-			await assert.rejects(h.call("bash", { command: "echo x", workdir: "/" }), /bash: /);
 			await assert.rejects(h.call("bash", { command: "echo x", pty: true, title: "t", on_exit: "always" }), /on_exit/);
 			await assert.rejects(h.call("bash", { command: "echo x", pty: true, title: "t", ready: { port: 1 } }), /`ready` only applies to a named service/);
 		} finally {

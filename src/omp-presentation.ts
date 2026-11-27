@@ -13,6 +13,7 @@ import type * as ThemeRuntime from "@oh-my-pi/pi-tui/theme/runtime";
 
 import { sanitizeOutputText } from "./output-safety.ts";
 import { tr } from "./omomp-shared/i18n.ts";
+import { omompTool } from "./omomp-shared/tool-entry.ts";
 import { requireBunRuntime } from "./pty.ts";
 import type { SessionStore } from "./session-store.ts";
 import type { TerminalAppearance } from "./terminal-screen.ts";
@@ -453,7 +454,7 @@ export async function presentOnOmp(pi: ExtensionAPI): Promise<ExtensionAPI> {
 			{},
 			{ ...Object.getOwnPropertyDescriptors(definition), ...Object.getOwnPropertyDescriptors(overrides) },
 		) as typeof definition & typeof overrides;
-		pi.registerTool(presented);
+		pi.registerTool(omompTool(presented));
 	};
 	const wrapped: ExtensionAPI = Object.create(pi, { registerTool: { value: registerTool } });
 	return wrapped;
