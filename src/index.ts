@@ -11,7 +11,7 @@ import { type AgentHost, type AgentIdentity, type ParkedRuntime, parkedRuntimes 
 import { createCompactNoticeSender, registerActualTerminalCompactHandoff } from "./compact-handoff-wiring.ts";
 import { type ActivatedExtension, withHostPresentation } from "./omp-presentation.ts";
 import {
-	bashParameters, type BashSchema, DEFAULT_TERMINAL_YIELD_MS, MAX_PTY_COLS, MAX_PTY_ROWS, MAX_YIELD_TIME_MS, MIN_PTY_COLS, MIN_PTY_ROWS, MIN_YIELD_TIME_MS,
+	BASH_PARAMETERS, bashParameters, type BashSchema, DEFAULT_TERMINAL_YIELD_MS, MAX_PTY_COLS, MAX_PTY_ROWS, MAX_YIELD_TIME_MS, MIN_PTY_COLS, MIN_PTY_ROWS, MIN_YIELD_TIME_MS,
 	parseBashCall, type TerminalRequest,
 } from "./bash-tool.ts";
 import type { NativeBash, SessionSeed, TerminalHost } from "./terminal-host.ts";
@@ -40,6 +40,7 @@ import { CompletionCoordinator, type OnExitPolicy, sanitizeMeta } from "./comple
 import { formatElapsed, formatElapsedUi, nowUtcIso } from "./format-time.ts";
 import { language, tr } from "./omomp-shared/i18n.ts";
 import { readTodos } from "./omomp-shared/todo-read.ts";
+import { omompTool, verbatim } from "./omomp-shared/tool-entry.ts";
 import { waitForExitOrDeadline } from "./long-wait.ts";
 import { sleep } from "./notify.ts";
 import { sanitizeOutputText } from "./output-safety.ts";
@@ -172,8 +173,8 @@ export class EmptyPollRemovedError extends Error {
 }
 
 function resolveWriteInput(args: WriteStdinArgs): Uint8Array | undefined {
-	const hasChars = typeof args.chars === "string" && args.chars.length > 0;
-	const hasB64 = typeof args.chars_b64 === "string" && args.chars_b64.length > 0;
+	const hasChars = args.chars !== undefined;
+	const hasB64 = args.chars_b64 !== undefined;
 	if (hasChars && hasB64) {
 		throw new Error("write_stdin: pass either `chars` or `chars_b64`, not both.");
 	}
@@ -1466,10 +1467,20 @@ export function activate(
 		...bashDocumentation,
 		label: "Bash",
 		get description(): string {
-			return terminalHost.bash(sessionSettings()).description + bashTerminalSection + bashTopicPointers;
+			try {
+				return terminalHost.bash(sessionSettings()).description + bashTerminalSection + bashTopicPointers;
+			} catch (error) {
+				if (!(error instanceof Error) || !error.message.includes("Settings not initialized")) throw error;
+				return bashTerminalSection + bashTopicPointers;
+			}
 		},
 		get parameters(): BashSchema {
-			return bashParameters(terminalHost.servicesEnabled(sessionSettings()));
+			try {
+				return bashParameters(terminalHost.servicesEnabled(sessionSettings()));
+			} catch (error) {
+				if (!(error instanceof Error) || !error.message.includes("Settings not initialized")) throw error;
+				return BASH_PARAMETERS;
+			}
 		},
 		// omp's own bash judges every call, terminal or not: the same patterns, env allowlist and interceptor.
 		approval: (args, context) => terminalHost.bash(sessionSettings()).approval(args, context),
@@ -1510,13 +1521,13 @@ export function activate(
 			}
 		},
 	} satisfies ToolDefinition<BashSchema> & Pick<CustomTool, "formatApprovalDetails"> & { docTopics(): Readonly<Record<string, string>> };
-	pi.registerTool(bashTool);
+	pi.registerTool(omompTool(bashTool));
 
 	const writeStdinParameters = Type.Object({
 		job_id: Type.String({ description: JOB_ID_DESCRIPTION }),
-		chars: Type.Optional(Type.String({
+		chars: verbatim(Type.Optional(Type.String({
 			description: "Text with C-style escapes: \\xHH, \\uHHHH, \\u{H\u2026}, \\n \\r \\t \\0 \\a \\e \\b \\f \\v \\\\ \\\". Unknown \\X preserved literally. Mutually exclusive with chars_b64.",
-		})),
+		}))),
 		chars_b64: Type.Optional(Type.String({
 			description: "Raw bytes (base64) to write. Mutually exclusive with chars.",
 		})),
@@ -1524,7 +1535,7 @@ export function activate(
 			description: `Attachment window in ms, not a process timeout. Default ${DEFAULT_WRITE_STDIN_YIELD_MS}, clamped to [${MIN_YIELD_TIME_MS}, ${MAX_YIELD_TIME_MS}].`,
 		})),
 	}, { additionalProperties: false });
-	pi.registerTool({
+	pi.registerTool(omompTool({
 		name: "write_stdin",
 		...writeStdinDocumentation,
 		label: tr("Send input", "发送输入"),
@@ -1541,7 +1552,7 @@ export function activate(
 				details: shape,
 			};
 		},
-	} satisfies ToolDefinition<typeof writeStdinParameters> & { docTopics(): Readonly<Record<string, string>> });
+	} satisfies ToolDefinition<typeof writeStdinParameters> & { docTopics(): Readonly<Record<string, string>> }));
 
 	const setOnExitParameters = Type.Object({
 		job_id: Type.String({ description: JOB_ID_DESCRIPTION }),
@@ -1549,7 +1560,7 @@ export function activate(
 			description: '"none": disarm (also after eviction) as soon as auto-resume is unwanted. "wake": arm auto-resume while running, only when the human explicitly asked.',
 		}),
 	});
-	pi.registerTool({
+	pi.registerTool(omompTool({
 		name: "set_on_exit",
 		...setOnExitDocumentation,
 		label: tr("Set exit wake", "设置退出唤醒"),
@@ -1594,7 +1605,7 @@ export function activate(
 				},
 			};
 		},
-	} satisfies ToolDefinition<typeof setOnExitParameters> & { docTopics(): Readonly<Record<string, string>> });
+	} satisfies ToolDefinition<typeof setOnExitParameters> & { docTopics(): Readonly<Record<string, string>> }));
 
 	const monitorParameters = Type.Object({
 		job_id: Type.String({ description: JOB_ID_DESCRIPTION }),
@@ -1605,7 +1616,7 @@ export function activate(
 		max_returns: Type.Optional(Type.Number({ description: "Positive safe integer; default 10 returns (matched batches or met screens). End does not count; the last return ends the monitor, not the process." })),
 		remind_after_ms: Type.Optional(Type.Number({ description: "Silence before one reminder quoting the current screen; default 1200000 (20 minutes), integer 1–2147483647. A return restarts it; the reminder neither counts toward max_returns nor ends the monitor." })),
 	});
-	pi.registerTool({
+	pi.registerTool(omompTool({
 		name: "monitor",
 		...monitorDocumentation,
 		label: tr("Monitor", "监视"),
@@ -1637,7 +1648,7 @@ export function activate(
 				...(details.status === "error" ? { isError: true } : {}),
 			};
 		},
-	} satisfies ToolDefinition<typeof monitorParameters> & { docTopics(): Readonly<Record<string, string>> });
+	} satisfies ToolDefinition<typeof monitorParameters> & { docTopics(): Readonly<Record<string, string>> }));
 
 	const killSessionParameters = Type.Object({
 		job_id: Type.String({ description: JOB_ID_DESCRIPTION }),
@@ -1645,7 +1656,7 @@ export function activate(
 			description: 'Initial signal (default "SIGTERM"). Examples: SIGINT, SIGHUP, SIGKILL.',
 		})),
 	});
-	pi.registerTool({
+	pi.registerTool(omompTool({
 		name: "kill_session",
 		...killSessionDocumentation,
 		label: tr("Terminate session", "结束会话"),
@@ -1704,10 +1715,10 @@ export function activate(
 				details,
 			};
 		},
-	} satisfies ToolDefinition<typeof killSessionParameters> & { docTopics(): Readonly<Record<string, string>> });
+	} satisfies ToolDefinition<typeof killSessionParameters> & { docTopics(): Readonly<Record<string, string>> }));
 
 	const listSessionsParameters = Type.Object({});
-	pi.registerTool({
+	pi.registerTool(omompTool({
 		name: "list_sessions",
 		...listSessionsDocumentation,
 		label: tr("List sessions", "列出会话"),
@@ -1764,7 +1775,7 @@ export function activate(
 				details: { sessions, running_count: runningCount, returned_count: returnedCount, tool_time_utc: toolTimeUtc },
 			};
 		},
-	} satisfies ToolDefinition<typeof listSessionsParameters> & { docTopics(): Readonly<Record<string, string>> });
+	} satisfies ToolDefinition<typeof listSessionsParameters> & { docTopics(): Readonly<Record<string, string>> }));
 
 	return {
 		store: () => ctx.store,

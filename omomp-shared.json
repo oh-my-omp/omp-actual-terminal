@@ -1,4 +1,4 @@
 {
 	"directory": "src/omomp-shared",
-	"files": ["compact-handoff.ts", "context-delta.ts", "i18n.ts", "internal-url.ts", "tern-plugin.ts", "todo-read.ts"]
+	"files": ["compact-handoff.ts", "context-delta.ts", "i18n.ts", "internal-url.ts", "tern-plugin.ts", "todo-read.ts", "tool-entry.ts"]
 }

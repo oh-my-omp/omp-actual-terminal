@@ -4,6 +4,10 @@ All notable changes to this project. **Newest entries go on top.**
 
 ## [Unreleased]
 
+### Changed
+
+- Treat empty values on every registered tool as not passed — `""` or whitespace-only strings, `[]`, `{}` and `null` — so a blank `title` or `shell` no longer refuses a `bash` call without `pty`, a blank `condition` or `judge` no longer matches every batch or fails with `invalid_judge`, and a blank `signal` terminates with the default `SIGTERM`; `write_stdin`'s `chars` stays verbatim, writing whitespace byte for byte
+
 ## [0.18.0] - 2026-11-26
 
 ### Breaking Changes

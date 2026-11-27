@@ -235,6 +235,13 @@ terminal: a call carrying any of them without `pty: true`, or together with
 terminal call carrying it fails the same way. `async`, `notify` and `timeout` keep
 omp's meaning on calls without `pty: true` and on named services.
 
+On every tool this plugin registers, an empty value is the same as omitting the
+field: `""` or whitespace-only strings, `[]`, `{}` and `null` all count as not
+passed, so a blank `title` or `shell` on a call without `pty: true` executes
+instead of failing. One exception: `write_stdin`'s `chars` is written verbatim,
+so whitespace reaches the terminal byte for byte and only `""` counts as not
+passed.
+
 Response body (running, short output, no truncation):
 
 ```

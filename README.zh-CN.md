@@ -105,6 +105,8 @@ Markdown 文件随包放在 `src/topics/`；读取 topic 不依赖外部配置�
 
 `title`、`shell`、`cols`、`rows`、`yield_time_ms` 和 `on_exit` 只适用于终端：不带 `pty: true`、或同时带 `name` 的调用带了其中任何一个，都在运行任何内容之前失败。`ready` 只适用于命名服务，终端调用带了它同样失败。`async`、`notify` 和 `timeout` 在不带 `pty: true` 的调用和命名服务里保持 omp 的含义。
 
+本插件注册的每个工具里，空值与不传该字段相同：`""` 或全空白字符串、`[]`、`{}` 和 `null` 都算没传，所以不带 `pty: true` 的调用里写空白 `title` 或 `shell` 时照常执行，不再失败。一个例外：`write_stdin` 的 `chars` 逐字写入，空白原样到达终端，只有 `""` 算没传。
+
 响应体（运行中、输出较短、未截断时）：
 
 ```
