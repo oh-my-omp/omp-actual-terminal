@@ -570,7 +570,9 @@ focused must list that session's terminals and open the picked one's Console,
 and with no omp pane focused it must only show the `No omp pane is focused`
 toast. `/terminals` typed into omp in Tern must do the same, and a Console
 already showing must make both entries notify instead of opening a second
-one. A Tern config holding the old `omp-unified-exec`
+one. The Console of a terminal whose history outgrows it must show the newest
+line and End and Leave, with the earlier lines folded under their count, in Tern
+and in the ANSI TUI. A Tern config holding the old `omp-unified-exec`
 plugin must list no `omp-unified-exec` after loading.
 
 ## Recording README demos

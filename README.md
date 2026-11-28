@@ -144,7 +144,7 @@ results remain in English.
   state, a subagent's included — and opens the Console of the one picked;
   `/terminals bg_1` opens that id directly. Tern has the same command, and this
   package's Tern plugin adds a palette entry that runs it in the focused omp
-  pane. In the Console, scroll back through the terminal, type into it and
+  pane. In the Console, watch the terminal's newest output, type into it and
   leave it running, or end it, without a tool call.
 
 ## Tern Console
@@ -171,9 +171,12 @@ When omp renders natively in Tern:
   itself once its terminal is no longer listed, and leaving it never stops the
   terminal, so the same entries reopen it later.
 - **Console.** The Console shows a terminal full-pane in the frame of omp's
-  own Console, headed by its job id, title and state: its
-  retained history and current screen in colour, following new output and
-  scrollable back. Typed keys go to the terminal as omp's Console sends them,
+  own Console, headed by its job id, title and state: the newest rows of its
+  retained history and current screen in colour, as many as the Console's grid
+  has rows, following new output. Earlier rows fold under a count of them
+  (`… N more lines` in the ANSI TUI; in Tern a `N earlier lines` row that
+  expands them), so the newest output, End and Leave stay in view however long
+  the history grows. Typed keys go to the terminal as omp's Console sends them,
   so the model sees their effect, and what the model writes with
   `write_stdin` shows here at once. Esc / Leave closes the Console and leaves
   the terminal running; End ends it as a person's kill, and its job shows as

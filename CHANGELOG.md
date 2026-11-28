@@ -4,6 +4,10 @@ All notable changes to this project. **Newest entries go on top.**
 
 ## [Unreleased]
 
+### Changed
+
+- Kept the newest terminal output and End and Leave visible, folding earlier lines under a count even when a finished terminal was taller than the Console
+
 ## [0.19.1] - 2026-11-28
 
 ### Changed

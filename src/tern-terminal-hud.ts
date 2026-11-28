@@ -141,7 +141,7 @@ function consoleFooter(entry: () => TerminalEntry | undefined): JSXNode {
 	});
 }
 
-export function describeTerminalPage(entry: () => TerminalEntry | undefined): JSXNode {
+export function describeTerminalPage(entry: () => TerminalEntry | undefined, rows: () => number): JSXNode {
 	return el("col", {
 		key: "body",
 		gap: "sm",
@@ -156,6 +156,7 @@ export function describeTerminalPage(entry: () => TerminalEntry | undefined): JS
 				key: "screen",
 				hidden: () => entry() === undefined,
 				follow: true,
+				preview: () => ({ lines: rows() }),
 				grow: 1,
 				min: { h: 1 },
 				text: () => entry()?.screen.text ?? "",
@@ -315,7 +316,10 @@ class TerminalPage {
 			onPaste: (paste: PasteEvent): boolean => this.paste(paste),
 			onAction: (act: string): void => this.action(act),
 		};
-		const body = describeTerminalPage(() => this.entry());
+		const body = describeTerminalPage(() => this.entry(), () => {
+			const size = this.ui.size();
+			return consoleGrid(size.columns, size.rows).rows;
+		});
 		return nativeRendering()
 			? el("overlay", {
 					role: PAGE_ROLE,
