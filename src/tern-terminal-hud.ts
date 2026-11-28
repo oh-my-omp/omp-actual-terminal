@@ -156,6 +156,7 @@ export function describeTerminalPage(entry: () => TerminalEntry | undefined): JS
 				key: "screen",
 				hidden: () => entry() === undefined,
 				follow: true,
+				preview: () => ({ lines: entry()?.screen.view.rows ?? 1 }),
 				grow: 1,
 				min: { h: 1 },
 				text: () => entry()?.screen.text ?? "",

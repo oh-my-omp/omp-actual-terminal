@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it, type TestContext } from "node:test";
 import type { ExtensionAPI, ExtensionContext, ExtensionRender, ExtensionUiHost } from "@oh-my-pi/pi-coding-agent";
 import { isUiNode, type KeyEvent, setNativeRenderingForTest, signal, type UiNode } from "@oh-my-pi/pi-tui";
+import { renderBlock } from "@oh-my-pi/pi-tui/term/render";
+import { loadThemeSync } from "@oh-my-pi/pi-tui/theme/loader";
 
 import {
 	consoleGrid,
@@ -376,6 +378,27 @@ describe("Console with real terminals", () => {
 		await screenShows(session, "resized 44 118");
 		typeKeys(root, "after\r");
 		await screenShows(session, "got after size 44 118");
+	});
+
+	it("shows the newest lines above End and Leave once the history outgrows the ANSI screen", async (t) => {
+		const h = await makeHarness(t);
+		const session = h.spawn([process.execPath, "-e", [
+			"for (let i = 1; i <= 200; i++) process.stdout.write(`line ${i}\\n`)",
+			"process.stdin.resume()",
+		].join("; ")]);
+		await screenShows(session, "line 200");
+		const { root } = h.open(session.id);
+		const grid = consoleGrid(100, 50);
+		await waitFor(() => session.styledScreen()?.view.rows === grid.rows, (listener) => session.onScreenChange(listener),
+			() => `the terminal takes the Console grid; rows are ${session.styledScreen()?.view.rows}`);
+
+		const rows = renderBlock(root, 100, { theme: loadThemeSync("dark") }).rows.map((row) => row.replace(/\x1b\[[\d;]*m/g, "").trimEnd());
+		assert.ok(rows.length <= 50, `the Console fits the 50-row screen; it paints ${rows.length} rows`);
+		assert.ok(rows.includes("line 200"), "the newest line is on screen");
+		assert.equal(rows.includes("line 1"), false, "the oldest line gives way to the newest");
+		assert.ok(rows.some((row) => /more lines/.test(row)), "a row says how many earlier lines are hidden");
+		assert.ok(rows.some((row) => row.includes("Keys go to the terminal") && row.includes("End") && row.includes("Leave")),
+			"End and Leave stay on screen");
 	});
 
 	it("leaves the terminal running on Esc and gives it back the size its call started it with", async (t) => {

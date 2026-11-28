@@ -57,7 +57,7 @@ omp plugin install https://github.com/oh-my-omp/omp-actual-terminal#release --fo
 
 - **tray 与 jobs 页面上的屏幕。** 每个终端的 job 都带着它的当前屏幕，屏幕变化后半秒内更新：tray 卡片显示最后几行，卡片的展开预览显示更多行，jobs 页面的输出区显示整屏。终端返回后，tray 和 jobs 页面显示它的最后一屏，后接它的返回方式。tray 卡片的 Open 进入 jobs 页面并选中这个终端。
 - **打开 Console。** 终端启动时不打开任何 Console。在 Tern 里，命令面板中的 `omp：打开终端控制台`（界面语言为英文时显示 `omp: Open terminal Console`）让聚焦的 omp 窗格执行 `/terminals`；没有聚焦的 omp agent 窗格时只弹出提示 `没有聚焦的 omp 窗格`（`No omp pane is focused`）。`/terminals` 列出本会话的终端——job id、标题和状态，子 agent 的也在内——并打开所选终端的 Console；`/terminals bg_1` 打开该 id。job id 可作为参数补全。界面无法显示 Console、id 不存在、没有终端，或该界面已有 Console 在显示时，命令只发出通知而不打开：每个界面同时只有一个 Console。终端不再出现在列表里时，它的 Console 自动关闭；离开 Console 从不停止终端，所以之后还能用同样的入口再次打开。
-- **Console。** Console 把终端显示为全屏页，框架与 omp 自己的 Console 相同，题头是 job id、标题和状态：显示保留的历史和当前屏幕，带颜色，跟随新输出，并可向上回滚。键入的按键按 omp 的 Console 的方式发给终端，模型能看到效果；模型用 `write_stdin` 写入的内容也立即显示在这里。Esc /「离开」关闭 Console，终端继续运行；「结束」按人工结束处理这个终端，它的 job 显示为已取消。
+- **Console。** Console 把终端显示为全屏页，框架与 omp 自己的 Console 相同，题头是 job id、标题和状态：显示保留的历史和当前屏幕中最新的若干行（行数与 Console 网格相同），带颜色，跟随新输出。更早的行收起为一行计数（ANSI TUI 里是 `… N more lines`，Tern 里是可展开的 `N earlier lines`），所以无论历史多长，最新输出和「结束」「离开」都留在视野里。键入的按键按 omp 的 Console 的方式发给终端，模型能看到效果；模型用 `write_stdin` 写入的内容也立即显示在这里。Esc /「离开」关闭 Console，终端继续运行；「结束」按人工结束处理这个终端，它的 job 显示为已取消。
 - **尺寸。** Console 打开期间，终端采用 Console 的网格，模型此时读到的也是这个网格；离开后，终端恢复为其调用启动它时的 `cols`/`rows`。
 
 在 omp 的 ANSI TUI 里，`/terminals` 打开 Console 时，它显示为屏幕底部的 sheet，题头、按键、「离开」和「结束」都相同。工具结果仍是纯文本；显式 `read term://…/screen.png` 请求返回图像。
