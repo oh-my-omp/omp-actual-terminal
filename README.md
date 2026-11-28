@@ -144,7 +144,7 @@ results remain in English.
   state, a subagent's included — and opens the Console of the one picked;
   `/terminals bg_1` opens that id directly. Tern has the same command, and this
   package's Tern plugin adds a palette entry that runs it in the focused omp
-  pane. In the Console, scroll back through the terminal, type into it and
+  pane. In the Console, watch the terminal's newest output, type into it and
   leave it running, or end it, without a tool call.
 
 ## Tern Console

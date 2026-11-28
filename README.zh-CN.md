@@ -47,7 +47,7 @@ omp plugin install https://github.com/oh-my-omp/omp-actual-terminal#release --fo
 - **等待匹配输出。** `monitor` 不消费输出地观察已有会话，在匹配批次、judge 模型判定满足所述意图的新屏幕或结束时唤醒模型；默认最多成功返回十次。monitor 20 分钟没有返回时，会提醒 agent 一次去检查会话。
 - **等待输入提醒。** 无论有没有 monitor，会话屏幕停在 agent 还没看过的提示上（`apt upgrade` 询问 sshd_config 这类 debconf/whiptail 对话框、`[Y/n]`、密码、分页器）时，都会唤醒 agent。
 - **omp 原生呈现。** `bash`、`write_stdin` 和 `kill_session` 渲染为用 omp 自己的 UI 节点搭成的 bash 卡片（命令行、输出、带退出码、job id 和耗时的状态行、错误配色），在 ANSI TUI 和 Tern 里都是如此；在 Tern 里，不带 `pty` 的 `bash` 调用保留 omp 自己的卡片。
-- **按需打开、给人用的 Console。** 启动终端不会打开任何东西。在 ANSI TUI 里，`/terminals` 列出本会话的终端——job id、标题和状态，子 agent 的也在内——并打开所选终端的 Console；`/terminals bg_1` 直接打开该 id。Tern 里同样有这条命令，本包的 Tern 插件还提供一个命令面板入口，让聚焦的 omp 窗格执行它。在 Console 里可以回滚查看、向终端输入、离开后让它继续运行，或结束它，都不需要调用工具。
+- **按需打开、给人用的 Console。** 启动终端不会打开任何东西。在 ANSI TUI 里，`/terminals` 列出本会话的终端——job id、标题和状态，子 agent 的也在内——并打开所选终端的 Console；`/terminals bg_1` 直接打开该 id。Tern 里同样有这条命令，本包的 Tern 插件还提供一个命令面板入口，让聚焦的 omp 窗格执行它。在 Console 里可以看到终端最新的输出、向终端输入、离开后让它继续运行，或结束它，都不需要调用工具。
 
 <a id="tern-console"></a>
 

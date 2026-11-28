@@ -261,9 +261,9 @@ async function makeHarness(t: TestContext, hasUI = true) {
 			assert.deepEqual(call.options, { overlay: true });
 			return call;
 		},
-		spawn(command = [process.execPath, "-e", "process.stdin.resume()"]): ExecSession {
+		spawn(command = [process.execPath, "-e", "process.stdin.resume()"], size = { cols: 80, rows: 24 }): ExecSession {
 			const session = ExecSession.spawn(`${prefix}${nextSpawnId++}`, {
-				title: "Test terminal", shell: "test", command, cwd: process.cwd(), env: process.env, cols: 80, rows: 24,
+				title: "Test terminal", shell: "test", command, cwd: process.cwd(), env: process.env, ...size,
 			});
 			sessions.push(session);
 			assert.equal(session.failureMessage, null, "child spawn succeeds");
@@ -290,6 +290,20 @@ const KEYS = [process.execPath, "-e", [
 ].join("; ")];
 
 const encoder = new TextEncoder();
+
+function paintedRows(root: UiNode): string[] {
+	return renderBlock(root, 100, { theme: loadThemeSync("dark") }).rows.map((row) => row.replace(/\x1b\[[\d;]*m/g, "").trimEnd());
+}
+
+function assertTailInView(rows: readonly string[], note: string): void {
+	assert.ok(rows.length <= 50, `the Console fits the 50-row screen; it paints ${rows.length} rows`);
+	const newest = rows.indexOf("line 200");
+	assert.ok(newest >= 0, "the newest line is on screen");
+	assert.equal(rows.includes("line 1"), false, "the oldest line gives way to the newest");
+	const count = rows.findIndex((row) => /^… \d+ more lines$/.test(row));
+	assert.ok(count >= 0 && count < newest, "a row above the newest lines says how many earlier lines are hidden");
+	assert.ok(rows.some((row) => row.includes(note) && row.includes("Leave")), `${note} and Leave stay on screen`);
+}
 
 describe("Console head", () => {
 	it("names the terminal's id, title and state, and says removed once it is no longer stored", () => {
@@ -380,7 +394,7 @@ describe("Console with real terminals", () => {
 		await screenShows(session, "got after size 44 118");
 	});
 
-	it("shows the newest lines above End and Leave once the history outgrows the ANSI screen", async (t) => {
+	it("shows the newest lines above End and Leave once a running terminal's history outgrows the ANSI screen", async (t) => {
 		const h = await makeHarness(t);
 		const session = h.spawn([process.execPath, "-e", [
 			"for (let i = 1; i <= 200; i++) process.stdout.write(`line ${i}\\n`)",
@@ -392,13 +406,18 @@ describe("Console with real terminals", () => {
 		await waitFor(() => session.styledScreen()?.view.rows === grid.rows, (listener) => session.onScreenChange(listener),
 			() => `the terminal takes the Console grid; rows are ${session.styledScreen()?.view.rows}`);
 
-		const rows = renderBlock(root, 100, { theme: loadThemeSync("dark") }).rows.map((row) => row.replace(/\x1b\[[\d;]*m/g, "").trimEnd());
-		assert.ok(rows.length <= 50, `the Console fits the 50-row screen; it paints ${rows.length} rows`);
-		assert.ok(rows.includes("line 200"), "the newest line is on screen");
-		assert.equal(rows.includes("line 1"), false, "the oldest line gives way to the newest");
-		assert.ok(rows.some((row) => /more lines/.test(row)), "a row says how many earlier lines are hidden");
-		assert.ok(rows.some((row) => row.includes("Keys go to the terminal") && row.includes("End") && row.includes("Leave")),
-			"End and Leave stay on screen");
+		assertTailInView(paintedRows(root), "Keys go to the terminal");
+	});
+
+	it("shows the newest lines above Leave for a finished terminal taller than the Console", async (t) => {
+		const h = await makeHarness(t);
+		const session = h.spawn([process.execPath, "-e", "for (let i = 1; i <= 200; i++) process.stdout.write(`line ${i}\\n`)"],
+			{ cols: 80, rows: 80 });
+		await waitFor(() => session.hasExited, (listener) => session.onExit(listener), "the child exits");
+		await screenShows(session, "line 200");
+		const { root } = h.open(session.id);
+
+		assertTailInView(paintedRows(root), "Terminal finished");
 	});
 
 	it("leaves the terminal running on Esc and gives it back the size its call started it with", async (t) => {
